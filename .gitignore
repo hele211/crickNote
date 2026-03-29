@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.env
+.superpowers/
+data/
+obsidian-plugin/main.js
+obsidian-plugin/styles.css.map
+coverage/
+.DS_Store

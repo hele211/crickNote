@@ -1,0 +1,6 @@
+- name: western-blot
+  aliases: ["Western Blot", "WB", "western blotting"]
+- name: pcr
+  aliases: ["PCR", "polymerase chain reaction", "qPCR", "RT-PCR"]
+- name: cell-culture
+  aliases: ["cell culture", "passage", "plating"]
