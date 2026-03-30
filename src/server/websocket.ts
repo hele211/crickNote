@@ -34,18 +34,28 @@ export function createWebSocketServer(config: CrickNoteConfig): WebSocketServer 
     }, 5000);
 
     ws.on('message', async (data) => {
-      const msg = JSON.parse(data.toString());
+      let msg: Record<string, unknown>;
+      try {
+        msg = JSON.parse(data.toString());
+      } catch {
+        ws.send(JSON.stringify({ type: 'error', message: 'Invalid JSON' }));
+        return;
+      }
+      if (typeof msg !== 'object' || msg === null) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Message must be a JSON object' }));
+        return;
+      }
 
       // Handle auth
       if (msg.type === 'auth' && !clients.has(ws)) {
         clearTimeout(authTimeout);
-        const result = validateAuthMessage(msg as AuthMessage, '0.1.0');
+        const result = validateAuthMessage(msg as unknown as AuthMessage, '0.1.0');
 
         if (result.type === 'auth_ok') {
           const sessionId = `obsidian-${Date.now()}`;
           clients.set(ws, {
             ws,
-            pluginVersion: (msg as AuthMessage).pluginVersion,
+            pluginVersion: (msg as unknown as AuthMessage).pluginVersion,
             sessionId,
           });
           ws.send(JSON.stringify(result));
@@ -66,7 +76,7 @@ export function createWebSocketServer(config: CrickNoteConfig): WebSocketServer 
       // Handle chat messages
       if (msg.type === 'chat') {
         try {
-          const response = await runtime.processMessage(msg.content, client.sessionId);
+          const response = await runtime.processMessage(msg.content as string, client.sessionId);
           // Flatten EditProposal into a shape the plugin can render directly.
           // Strip newContent (large, not needed by UI) and normalize filePath → path.
           const pendingEdits = response.pendingEdits.map(pe => ({
@@ -94,7 +104,10 @@ export function createWebSocketServer(config: CrickNoteConfig): WebSocketServer 
       // Handle edit confirmations
       if (msg.type === 'edit_confirm') {
         try {
-          const result = await runtime.confirmEdit(msg.editId, msg.action);
+          const result = await runtime.confirmEdit(
+            msg.editId as string,
+            msg.action as 'apply' | 'force' | 'cancel',
+          );
           ws.send(JSON.stringify({
             type: 'edit_result',
             editId: msg.editId,

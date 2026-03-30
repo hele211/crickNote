@@ -1,4 +1,5 @@
 import matter from 'gray-matter';
+import { utcDateString } from '../utils/date.js';
 
 /** Note type classifications based on vault folder structure. */
 export type NoteType = 'experiment' | 'protocol' | 'reading' | 'diary' | 'agent' | 'unknown';
@@ -133,15 +134,16 @@ export function parseNote(filePath: string, content: string): ParsedNote {
     // gray-matter handles Date objects in YAML — normalize them back to strings
   }
 
-  // Normalize date values (gray-matter converts YAML dates to Date objects)
+  // Normalize date values (gray-matter converts YAML dates to Date objects at midnight UTC).
+  // Use UTC getters so the calendar date is preserved in all timezones.
   if (frontmatter['date'] instanceof Date) {
-    frontmatter['date'] = frontmatter['date'].toISOString().split('T')[0];
+    frontmatter['date'] = utcDateString(frontmatter['date'] as Date);
   }
   if (frontmatter['last_updated'] instanceof Date) {
-    frontmatter['last_updated'] = frontmatter['last_updated'].toISOString().split('T')[0];
+    frontmatter['last_updated'] = utcDateString(frontmatter['last_updated'] as Date);
   }
   if (frontmatter['read_date'] instanceof Date) {
-    frontmatter['read_date'] = frontmatter['read_date'].toISOString().split('T')[0];
+    frontmatter['read_date'] = utcDateString(frontmatter['read_date'] as Date);
   }
 
   const warnings = validateFrontmatter(frontmatter, noteType);

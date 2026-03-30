@@ -1,6 +1,6 @@
 import type { ToolHandler } from './registry.js';
 import { parseQuery, type ParserContext } from '../../retrieval/query-parser.js';
-import { buildFilter, parsedQueryToFilterInput, type StructuredFilterInput } from '../../retrieval/structured-filter.js';
+import { buildNoteQuery, buildFilter, parsedQueryToFilterInput } from '../../retrieval/structured-filter.js';
 import { semanticRank } from '../../retrieval/semantic-ranker.js';
 import { assembleContext } from '../../retrieval/context-assembler.js';
 import { embedText } from '../../ingestion/embedder.js';
@@ -52,35 +52,23 @@ export function createSearchTools(vaultPath: string): ToolHandler[] {
         const filterInput = parsedQueryToFilterInput(parsed);
         if (args.folder) filterInput.folder = args.folder as string;
 
-        const filter = buildFilter(filterInput);
-
-        const selectSql = filter.sql
-          ? `SELECT path, note_type, date, project, experiment_type, result_summary FROM note_metadata WHERE ${filter.sql}`
-          : `SELECT path, note_type, date, project, experiment_type, result_summary FROM note_metadata`;
-
-        let candidates = db.prepare(selectSql).all(...filter.params) as Array<{
-          path: string; note_type: string; date: string; project: string;
-          experiment_type: string; result_summary: string;
-        }>;
+        // buildNoteQuery uses "FROM note_metadata nm" so nm. aliases in WHERE clauses are valid.
+        const mainQuery = buildNoteQuery(filterInput);
+        type Candidate = { path: string; note_type: string; date: string; project: string; experiment_type: string; result_summary: string };
+        let candidates = db.prepare(mainQuery.sql).all(...mainQuery.params) as Candidate[];
 
         // Fallback chain if no results
         if (candidates.length === 0 && parsed.experimentType) {
-          const broader = buildFilter({ experimentType: parsed.experimentType, project: parsed.project });
-          const broaderSql = broader.sql
-            ? `SELECT path, note_type, date, project, experiment_type, result_summary FROM note_metadata WHERE ${broader.sql}`
-            : selectSql;
-          candidates = db.prepare(broaderSql).all(...broader.params) as typeof candidates;
+          const q = buildNoteQuery({ experimentType: parsed.experimentType, project: parsed.project });
+          candidates = db.prepare(q.sql).all(...q.params) as Candidate[];
         }
 
         if (candidates.length === 0 && parsed.date) {
           const dateObj = new Date(parsed.date);
           const start = new Date(dateObj.getTime() - 7 * 86400000).toISOString().split('T')[0];
           const end = new Date(dateObj.getTime() + 7 * 86400000).toISOString().split('T')[0];
-          const broader = buildFilter({ dateRange: { start, end } });
-          const broaderSql = broader.sql
-            ? `SELECT path, note_type, date, project, experiment_type, result_summary FROM note_metadata WHERE ${broader.sql}`
-            : selectSql;
-          candidates = db.prepare(broaderSql).all(...broader.params) as typeof candidates;
+          const q = buildNoteQuery({ dateRange: { start, end } });
+          candidates = db.prepare(q.sql).all(...q.params) as Candidate[];
         }
 
         // Step 3: Fall back to BM25 full-text search

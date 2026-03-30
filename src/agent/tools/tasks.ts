@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ToolHandler } from './registry.js';
+import { localDateString } from '../../utils/date.js';
 
 export function createTaskTools(vaultPath: string): ToolHandler[] {
   return [
@@ -59,7 +60,7 @@ export function createTaskTools(vaultPath: string): ToolHandler[] {
         },
       },
       execute: async (args) => {
-        const today = new Date().toISOString().split('T')[0];
+        const today = localDateString();
         const diaryPath = `Memory/Daily/${today}.md`;
         const fullPath = path.join(vaultPath, diaryPath);
 

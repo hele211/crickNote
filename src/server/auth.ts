@@ -27,10 +27,12 @@ export function readToken(): string {
 
 export function validateToken(provided: string): boolean {
   const stored = readToken();
-  return crypto.timingSafeEqual(
-    Buffer.from(provided),
-    Buffer.from(stored)
-  );
+  const a = Buffer.from(provided);
+  const b = Buffer.from(stored);
+  // timingSafeEqual requires equal-length buffers; length mismatch is itself
+  // not secret, so we can short-circuit false without a timing leak concern.
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
 }
 
 export function rotateToken(): string {

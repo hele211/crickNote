@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ToolHandler } from './registry.js';
+import { localDateString } from '../../utils/date.js';
 
 export function createTemplateTools(vaultPath: string): ToolHandler[] {
   return [
@@ -33,7 +34,7 @@ export function createTemplateTools(vaultPath: string): ToolHandler[] {
         },
       },
       execute: async (args) => {
-        const today = new Date().toISOString().split('T')[0];
+        const today = localDateString();
         const slug = (args.title as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
         const fileName = `${today}-${slug}.md`;
         const notePath = `Projects/${args.project}/${fileName}`;
@@ -107,7 +108,7 @@ TODO: Additional observations.
         },
       },
       execute: async (args) => {
-        const today = new Date().toISOString().split('T')[0];
+        const today = localDateString();
         const firstAuthor = (args.authors as string[])[0].split(' ').pop()?.toLowerCase() ?? 'unknown';
         const slug = `${firstAuthor}-${args.year}-${(args.title as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`;
         const notePath = `Reading/${slug}.md`;

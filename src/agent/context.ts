@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadAgentConfig } from '../config/config.js';
 import type { ToolDefinition } from './providers/base.js';
+import { localDateString } from '../utils/date.js';
 
 export function assembleSystemPrompt(
   vaultPath: string,
@@ -39,7 +40,7 @@ IMPORTANT RULES:
   }
 
   // Layer 5: Today's diary
-  const today = new Date().toISOString().split('T')[0];
+  const today = localDateString();
   const diaryPath = path.join(vaultPath, 'Memory', 'Daily', `${today}.md`);
   if (fs.existsSync(diaryPath)) {
     const diary = fs.readFileSync(diaryPath, 'utf-8');

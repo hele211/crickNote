@@ -1,5 +1,5 @@
-import path from 'node:path';
 import type { CrickNoteConfig } from '../config/config.js';
+import { resolveVaultPath } from '../utils/paths.js';
 import type { LLMProvider, Message, ToolCall, StreamChunk } from './providers/base.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAIProvider } from './providers/openai.js';
@@ -160,8 +160,14 @@ export class AgentRuntime {
         try {
           const parsed = JSON.parse(result);
           if (parsed.type === 'pending_edit') {
-            // Resolve vault-relative path to absolute so SafeWriter writes inside the vault.
-            const absolutePath = path.resolve(this.config.vaultPath, parsed.path as string);
+            let absolutePath: string;
+            try {
+              // Resolve vault-relative path to absolute, rejecting any traversal attempts.
+              absolutePath = resolveVaultPath(this.config.vaultPath, parsed.path as string);
+            } catch (pathErr) {
+              history.push({ role: 'tool', content: JSON.stringify({ error: (pathErr as Error).message }), toolCallId: tc.id });
+              continue;
+            }
             const proposal = this.safeWriter.proposeEdit(
               absolutePath,
               parsed.newContent,

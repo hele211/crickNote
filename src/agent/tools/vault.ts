@@ -4,6 +4,7 @@ import matter from 'gray-matter';
 import type { ToolHandler } from './registry.js';
 import { getDatabase } from '../../storage/database.js';
 import type { ConflictDetector } from '../../editing/conflict-detector.js';
+import { resolveVaultPath } from '../../utils/paths.js';
 
 export function createVaultTools(vaultPath: string, conflictDetector?: ConflictDetector): ToolHandler[] {
   return [
@@ -20,7 +21,12 @@ export function createVaultTools(vaultPath: string, conflictDetector?: ConflictD
         },
       },
       execute: async (args) => {
-        const notePath = path.join(vaultPath, args.path as string);
+        let notePath: string;
+        try {
+          notePath = resolveVaultPath(vaultPath, args.path as string);
+        } catch {
+          return JSON.stringify({ error: `Invalid path: "${args.path}"` });
+        }
         if (!fs.existsSync(notePath)) {
           return JSON.stringify({ error: `File not found: ${args.path}` });
         }
@@ -82,7 +88,12 @@ export function createVaultTools(vaultPath: string, conflictDetector?: ConflictD
         },
       },
       execute: async (args) => {
-        const notePath = path.join(vaultPath, args.path as string);
+        let notePath: string;
+        try {
+          notePath = resolveVaultPath(vaultPath, args.path as string);
+        } catch {
+          return JSON.stringify({ error: `Invalid path: "${args.path}"` });
+        }
         if (!fs.existsSync(notePath)) {
           return JSON.stringify({ error: `File not found: ${args.path}` });
         }
@@ -113,11 +124,17 @@ export function createVaultTools(vaultPath: string, conflictDetector?: ConflictD
         },
       },
       execute: async (args) => {
+        let notePath: string;
+        try {
+          notePath = resolveVaultPath(vaultPath, args.path as string);
+        } catch {
+          return JSON.stringify({ error: `Invalid path: "${args.path}"` });
+        }
         return JSON.stringify({
           type: 'pending_edit',
           path: args.path,
           newContent: args.content,
-          operation: fs.existsSync(path.join(vaultPath, args.path as string)) ? 'update' : 'create',
+          operation: fs.existsSync(notePath) ? 'update' : 'create',
         });
       },
     },

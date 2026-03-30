@@ -88,16 +88,19 @@ export async function setup(): Promise<void> {
   const manifest = path.join(pluginSourceDir, 'manifest.json');
   const styles = path.join(pluginSourceDir, 'styles.css');
 
-  if (fs.existsSync(mainJs)) {
+  if (!fs.existsSync(mainJs)) {
+    console.warn('\u26a0  Plugin bundle not found. Run "npm run build:plugin" first, then re-run setup.');
+    console.warn(`  Expected: ${mainJs}`);
+  } else {
     fs.copyFileSync(mainJs, path.join(pluginDir, 'main.js'));
+    if (fs.existsSync(manifest)) {
+      fs.copyFileSync(manifest, path.join(pluginDir, 'manifest.json'));
+    }
+    if (fs.existsSync(styles)) {
+      fs.copyFileSync(styles, path.join(pluginDir, 'styles.css'));
+    }
+    console.log(`\u2713 Obsidian plugin installed to ${pluginDir}`);
   }
-  if (fs.existsSync(manifest)) {
-    fs.copyFileSync(manifest, path.join(pluginDir, 'manifest.json'));
-  }
-  if (fs.existsSync(styles)) {
-    fs.copyFileSync(styles, path.join(pluginDir, 'styles.css'));
-  }
-  console.log(`\u2713 Obsidian plugin installed to ${pluginDir}`);
 
   console.log('\nSetup complete! Start the agent: cricknote start');
   console.log('Then enable CrickNote in Obsidian → Settings → Community Plugins.\n');
