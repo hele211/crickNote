@@ -48,9 +48,10 @@ IMPORTANT RULES:
   }
 
   // Layer 6: Current week's plan
-  const weekNum = getISOWeekNumber(new Date());
-  const year = new Date().getFullYear();
-  const weekPath = path.join(vaultPath, 'Memory', 'Weekly', `${year}-W${String(weekNum).padStart(2, '0')}.md`);
+  // Use ISO week year (not calendar year) so late-December dates like 29 Dec 2025
+  // (= ISO week 1 of 2026) map to the correct weekly file.
+  const { week: weekNum, isoYear } = getISOWeekInfo(new Date());
+  const weekPath = path.join(vaultPath, 'Memory', 'Weekly', `${isoYear}-W${String(weekNum).padStart(2, '0')}.md`);
   if (fs.existsSync(weekPath)) {
     const weekPlan = fs.readFileSync(weekPath, 'utf-8');
     sections.push(`## This Week's Plan\n\n${weekPlan}`);
@@ -63,10 +64,16 @@ IMPORTANT RULES:
   return sections.join('\n\n---\n\n');
 }
 
-function getISOWeekNumber(date: Date): number {
+function getISOWeekInfo(date: Date): { week: number; isoYear: number } {
+  // Construct UTC midnight from local date components so the week boundary
+  // is based on the user's local date, not UTC date.
   const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
   const dayNum = d.getUTCDay() || 7;
+  // Shift to the Thursday of the same ISO week (ISO weeks run Mon–Sun).
   d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  return Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  // The ISO week year is the year that contains this Thursday.
+  const isoYear = d.getUTCFullYear();
+  const yearStart = new Date(Date.UTC(isoYear, 0, 1));
+  const week = Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return { week, isoYear };
 }

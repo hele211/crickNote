@@ -103,14 +103,17 @@ export function createWebSocketServer(config: CrickNoteConfig): WebSocketServer 
 
       // Handle edit confirmations
       if (msg.type === 'edit_confirm') {
+        const action = msg.action;
+        if (action !== 'apply' && action !== 'force' && action !== 'cancel') {
+          ws.send(JSON.stringify({ type: 'error', message: `Invalid action: "${action}". Must be apply, force, or cancel.` }));
+          return;
+        }
+        const editId = typeof msg.editId === 'string' ? msg.editId : '';
         try {
-          const result = await runtime.confirmEdit(
-            msg.editId as string,
-            msg.action as 'apply' | 'force' | 'cancel',
-          );
+          const result = await runtime.confirmEdit(editId, action);
           ws.send(JSON.stringify({
             type: 'edit_result',
-            editId: msg.editId,
+            editId,
             success: result.success,
             message: result.message,
           }));

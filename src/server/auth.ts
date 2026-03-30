@@ -66,12 +66,21 @@ export function validateAuthMessage(
   msg: AuthMessage,
   serviceVersion: string
 ): AuthOkMessage | AuthErrorMessage {
+  // Validate required fields are present and the right types before using them.
+  // These checks guard against malformed payloads that were cast rather than validated.
+  if (typeof msg.protocolVersion !== 'number') {
+    return { type: 'auth_error', reason: 'version_mismatch', required: PROTOCOL_VERSION };
+  }
   if (msg.protocolVersion !== PROTOCOL_VERSION) {
     return {
       type: 'auth_error',
       reason: 'version_mismatch',
       required: PROTOCOL_VERSION,
     };
+  }
+
+  if (typeof msg.token !== 'string' || msg.token.length === 0) {
+    return { type: 'auth_error', reason: 'invalid_token' };
   }
 
   if (!validateToken(msg.token)) {
