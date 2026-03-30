@@ -1,4 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { resolveVaultPath } from '../../src/utils/paths.js';
 
@@ -36,5 +38,51 @@ describe('resolveVaultPath', () => {
   it('accepts a path that resolves exactly to the vault root', () => {
     // Edge case: resolves to root itself — allowed (mkdir scenario)
     expect(() => resolveVaultPath(vault, '.')).not.toThrow();
+  });
+});
+
+describe('resolveVaultPath — symlink escape', () => {
+  let tmpVault: string;
+  let tmpOutside: string;
+
+  beforeEach(() => {
+    tmpVault = fs.mkdtempSync(path.join(os.tmpdir(), 'cricknote-vault-'));
+    tmpOutside = fs.mkdtempSync(path.join(os.tmpdir(), 'cricknote-outside-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpVault, { recursive: true, force: true });
+    fs.rmSync(tmpOutside, { recursive: true, force: true });
+  });
+
+  it('rejects a symlink inside the vault that points outside', () => {
+    // Create vault/escape -> tmpOutside
+    const symlinkPath = path.join(tmpVault, 'escape');
+    fs.symlinkSync(tmpOutside, symlinkPath);
+
+    expect(() => resolveVaultPath(tmpVault, 'escape')).toThrow(
+      'Path traversal rejected',
+    );
+  });
+
+  it('rejects a nested path through an escaping symlink', () => {
+    // Create vault/escape -> tmpOutside, then reference vault/escape/secret.md
+    const symlinkPath = path.join(tmpVault, 'escape');
+    fs.symlinkSync(tmpOutside, symlinkPath);
+
+    expect(() => resolveVaultPath(tmpVault, 'escape/secret.md')).toThrow(
+      'Path traversal rejected',
+    );
+  });
+
+  it('accepts a normal file inside the vault', () => {
+    const notePath = path.join(tmpVault, 'note.md');
+    fs.writeFileSync(notePath, '# Test');
+    expect(() => resolveVaultPath(tmpVault, 'note.md')).not.toThrow();
+  });
+
+  it('accepts a non-existent write target whose parent is inside the vault', () => {
+    // Writing a new file that does not exist yet should be allowed
+    expect(() => resolveVaultPath(tmpVault, 'Projects/new-note.md')).not.toThrow();
   });
 });
