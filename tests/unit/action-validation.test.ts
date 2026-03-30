@@ -53,18 +53,25 @@ describe('SafeWriter confirmEdit — known actions', () => {
 });
 
 describe('WebSocket action guard — invalid action strings', () => {
-  it('documents that the websocket layer must reject unknown actions before they reach SafeWriter', () => {
-    // This test asserts that the websocket validation guard (added in websocket.ts)
-    // is the line of defence. SafeWriter's confirmEdit accepts ConfirmAction by type,
-    // but a runtime cast bypass would behave like 'apply' (fall-through write).
-    // The guard in websocket.ts must reject values other than apply/force/cancel.
-    const validActions = ['apply', 'force', 'cancel'];
-    const invalidActions = ['delete', 'hack', '', 'APPLY', '1'];
-    for (const action of validActions) {
-      expect(validActions.includes(action)).toBe(true);
-    }
-    for (const action of invalidActions) {
-      expect(['apply', 'force', 'cancel'].includes(action)).toBe(false);
-    }
-  });
+  // SafeWriter.confirmEdit treats any non-cancel, non-force action as an implicit
+  // apply (it falls through to the write path). This means the WebSocket guard in
+  // websocket.ts is the sole defence against invalid actions. These tests document
+  // that SafeWriter WILL WRITE when given an unknown action string, proving the
+  // WebSocket guard is critical.
+  const invalidActions = ['delete', 'hack', '', 'APPLY', '1'];
+
+  for (const action of invalidActions) {
+    it(`SafeWriter writes the file when given unknown action "${action}" (guard must be in websocket layer)`, () => {
+      const proposal = writer.proposeEdit(testFile, '# Hacked content\n', 'test', 'session-1');
+      // Force-cast to bypass TypeScript type checking, simulating a runtime bypass.
+      const result = writer.confirmEdit(proposal.editId, action as 'apply');
+      // SafeWriter treats unknown actions as implicit apply — the file IS modified.
+      // This proves the WebSocket guard (websocket.ts) is the essential line of defence.
+      expect(result.success).toBe(true);
+      expect(fs.readFileSync(testFile, 'utf-8')).toBe('# Hacked content\n');
+      // Reset file for next iteration.
+      fs.writeFileSync(testFile, '# Original content\n');
+      writer.getConflictDetector().recordFileRead(testFile, '# Original content\n');
+    });
+  }
 });

@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { CrickNoteConfig } from '../config/config.js';
 import { validateAuthMessage, getProtocolVersion, type AuthMessage } from './auth.js';
@@ -75,15 +76,17 @@ export function createWebSocketServer(config: CrickNoteConfig): WebSocketServer 
 
       // Handle chat messages
       if (msg.type === 'chat') {
+        if (typeof msg.content !== 'string' || msg.content.length === 0) {
+          ws.send(JSON.stringify({ type: 'error', message: 'content must be a non-empty string' }));
+          return;
+        }
         try {
-          const response = await runtime.processMessage(msg.content as string, client.sessionId);
+          const response = await runtime.processMessage(msg.content, client.sessionId);
           // Flatten EditProposal into a shape the plugin can render directly.
           // Strip newContent (large, not needed by UI) and normalize filePath → path.
           const pendingEdits = response.pendingEdits.map(pe => ({
             editId: pe.editId,
-            path: pe.proposal.filePath.startsWith(config.vaultPath)
-              ? pe.proposal.filePath.slice(config.vaultPath.length + 1)
-              : pe.proposal.filePath,
+            path: path.relative(config.vaultPath, pe.proposal.filePath),
             diff: pe.proposal.diff,
             hasConflict: pe.proposal.hasConflict,
           }));
@@ -99,6 +102,7 @@ export function createWebSocketServer(config: CrickNoteConfig): WebSocketServer 
             message: err instanceof Error ? err.message : 'Unknown error',
           }));
         }
+        return;
       }
 
       // Handle edit confirmations
@@ -123,6 +127,7 @@ export function createWebSocketServer(config: CrickNoteConfig): WebSocketServer 
             message: err instanceof Error ? err.message : 'Unknown error',
           }));
         }
+        return;
       }
 
       // Handle status requests

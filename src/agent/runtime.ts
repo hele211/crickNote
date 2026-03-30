@@ -1,5 +1,5 @@
+import path from 'node:path';
 import type { CrickNoteConfig } from '../config/config.js';
-import { resolveVaultPath } from '../utils/paths.js';
 import type { LLMProvider, Message, ToolCall, StreamChunk } from './providers/base.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAIProvider } from './providers/openai.js';
@@ -160,12 +160,10 @@ export class AgentRuntime {
         try {
           const parsed = JSON.parse(result);
           if (parsed.type === 'pending_edit') {
-            let absolutePath: string;
-            try {
-              // Resolve vault-relative path to absolute, rejecting any traversal attempts.
-              absolutePath = resolveVaultPath(this.config.vaultPath, parsed.path as string);
-            } catch (pathErr) {
-              history.push({ role: 'tool', content: JSON.stringify({ error: (pathErr as Error).message }), toolCallId: tc.id });
+            // Vault tools now embed the resolved absolute path; validate it stays within the vault.
+            const absolutePath = parsed.path as string;
+            if (!path.isAbsolute(absolutePath) || !absolutePath.startsWith(path.resolve(this.config.vaultPath))) {
+              history.push({ role: 'tool', content: JSON.stringify({ error: 'Path escapes vault boundary' }), toolCallId: tc.id });
               continue;
             }
             const proposal = this.safeWriter.proposeEdit(

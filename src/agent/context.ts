@@ -64,7 +64,7 @@ IMPORTANT RULES:
   return sections.join('\n\n---\n\n');
 }
 
-function getISOWeekInfo(date: Date): { week: number; isoYear: number } {
+export function getISOWeekInfo(date: Date): { week: number; isoYear: number } {
   // Construct UTC midnight from local date components so the week boundary
   // is based on the user's local date, not UTC date.
   const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
