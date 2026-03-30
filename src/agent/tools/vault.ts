@@ -58,9 +58,13 @@ export function createVaultTools(vaultPath: string, conflictDetector?: ConflictD
         },
       },
       execute: async (args) => {
+        const folder = args.folder as string;
+        if (!folder || folder.includes('..')) {
+          return JSON.stringify({ error: 'folder must be a non-empty string without path traversal' });
+        }
         const db = getDatabase();
         const conditions: string[] = ['folder LIKE ?'];
-        const params: unknown[] = [`${args.folder}%`];
+        const params: unknown[] = [`${folder}%`];
 
         if (args.date) { conditions.push('date = ?'); params.push(args.date); }
         if (args.experiment_type) { conditions.push('experiment_type = ?'); params.push(args.experiment_type); }
@@ -101,10 +105,11 @@ export function createVaultTools(vaultPath: string, conflictDetector?: ConflictD
         // Record snapshot before modification so conflict detection is active.
         conflictDetector?.recordFileRead(notePath, existing);
         const newContent = existing + '\n' + (args.content as string);
-        // Return proposed edit — actual writing handled by safe-writer via runtime
+        // Return proposed edit — actual writing handled by safe-writer via runtime.
+        // Use the resolved absolute path so runtime doesn't need to re-resolve.
         return JSON.stringify({
           type: 'pending_edit',
-          path: args.path,
+          path: notePath,
           newContent,
           operation: 'append',
         });
@@ -130,9 +135,10 @@ export function createVaultTools(vaultPath: string, conflictDetector?: ConflictD
         } catch {
           return JSON.stringify({ error: `Invalid path: "${args.path}"` });
         }
+        // Use the resolved absolute path so runtime doesn't need to re-resolve.
         return JSON.stringify({
           type: 'pending_edit',
-          path: args.path,
+          path: notePath,
           newContent: args.content,
           operation: fs.existsSync(notePath) ? 'update' : 'create',
         });
