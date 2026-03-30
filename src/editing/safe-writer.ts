@@ -170,17 +170,23 @@ export class SafeWriter {
     }
 
     // --- Audit log ---------------------------------------------------------
-    logEdit({
-      timestamp: Date.now(),
-      file_path: pending.filePath,
-      operation: operation as 'create' | 'update',
-      before_content: beforeContent || null,
-      after_content: pending.newContent,
-      before_hash: beforeContent ? beforeHash : null,
-      after_hash: afterHash,
-      trigger_query: pending.triggerQuery,
-      session_id: pending.sessionId,
-    });
+    // Audit failure is non-fatal: the file was already written successfully.
+    // Catch separately so a DB problem never surfaces as a write failure.
+    try {
+      logEdit({
+        timestamp: Date.now(),
+        file_path: pending.filePath,
+        operation: operation as 'create' | 'update',
+        before_content: beforeContent || null,
+        after_content: pending.newContent,
+        before_hash: beforeContent ? beforeHash : null,
+        after_hash: afterHash,
+        trigger_query: pending.triggerQuery,
+        session_id: pending.sessionId,
+      });
+    } catch (auditErr) {
+      console.error(`[SafeWriter] Audit log failed for ${pending.filePath}:`, auditErr);
+    }
 
     // --- Update snapshot so future checks work -----------------------------
     this.conflictDetector.recordFileRead(pending.filePath, pending.newContent);

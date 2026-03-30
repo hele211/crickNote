@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ToolHandler } from './registry.js';
+import { localDateString } from '../../utils/date.js';
 
 export function createContextTools(vaultPath: string): ToolHandler[] {
   return [
@@ -11,7 +12,7 @@ export function createContextTools(vaultPath: string): ToolHandler[] {
         parameters: { type: 'object', properties: {} },
       },
       execute: async () => {
-        const today = new Date().toISOString().split('T')[0];
+        const today = localDateString();
         const diaryPath = path.join(vaultPath, 'Memory', 'Daily', `${today}.md`);
 
         if (!fs.existsSync(diaryPath)) {

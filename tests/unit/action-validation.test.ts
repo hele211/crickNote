@@ -1,8 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { SafeWriter } from '../../src/editing/safe-writer.js';
+
+// audit.js uses the global DB singleton which is not initialised in unit tests.
+vi.mock('../../src/storage/audit.js', () => ({
+  logEdit: vi.fn().mockReturnValue(1),
+  getLastEdit: vi.fn().mockReturnValue(undefined),
+}));
 
 // SafeWriter.confirmEdit receives a typed ConfirmAction, but the WebSocket
 // layer was previously casting without validating. These tests document the
