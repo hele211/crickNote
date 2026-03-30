@@ -9,6 +9,10 @@ npx esbuild obsidian-plugin/main.ts \
   --bundle \
   --external:obsidian \
   --external:electron \
+  --external:node:* \
+  --external:events \
+  --external:fs \
+  --external:path \
   --external:@codemirror/autocomplete \
   --external:@codemirror/collab \
   --external:@codemirror/commands \

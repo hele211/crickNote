@@ -3,8 +3,9 @@ import path from 'node:path';
 import matter from 'gray-matter';
 import type { ToolHandler } from './registry.js';
 import { getDatabase } from '../../storage/database.js';
+import type { ConflictDetector } from '../../editing/conflict-detector.js';
 
-export function createVaultTools(vaultPath: string): ToolHandler[] {
+export function createVaultTools(vaultPath: string, conflictDetector?: ConflictDetector): ToolHandler[] {
   return [
     {
       definition: {
@@ -24,6 +25,8 @@ export function createVaultTools(vaultPath: string): ToolHandler[] {
           return JSON.stringify({ error: `File not found: ${args.path}` });
         }
         const content = fs.readFileSync(notePath, 'utf-8');
+        // Record snapshot so conflict detection works when the agent later writes this file.
+        conflictDetector?.recordFileRead(notePath, content);
         const parsed = matter(content);
         return JSON.stringify({
           path: args.path,
@@ -84,6 +87,8 @@ export function createVaultTools(vaultPath: string): ToolHandler[] {
           return JSON.stringify({ error: `File not found: ${args.path}` });
         }
         const existing = fs.readFileSync(notePath, 'utf-8');
+        // Record snapshot before modification so conflict detection is active.
+        conflictDetector?.recordFileRead(notePath, existing);
         const newContent = existing + '\n' + (args.content as string);
         // Return proposed edit — actual writing handled by safe-writer via runtime
         return JSON.stringify({

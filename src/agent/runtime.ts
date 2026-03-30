@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { CrickNoteConfig } from '../config/config.js';
 import type { LLMProvider, Message, ToolCall, StreamChunk } from './providers/base.js';
 import { AnthropicProvider } from './providers/anthropic.js';
@@ -42,9 +43,9 @@ export class AgentRuntime {
     // Initialize safe writer
     this.safeWriter = new SafeWriter();
 
-    // Register tools
+    // Register tools — pass conflict detector so vault_read/vault_append record snapshots
     this.registry = new ToolRegistry();
-    for (const tool of createVaultTools(config.vaultPath)) {
+    for (const tool of createVaultTools(config.vaultPath, this.safeWriter.getConflictDetector())) {
       this.registry.register(tool);
     }
     for (const tool of createSearchTools(config.vaultPath)) {
@@ -159,8 +160,10 @@ export class AgentRuntime {
         try {
           const parsed = JSON.parse(result);
           if (parsed.type === 'pending_edit') {
-            const proposal = await this.safeWriter.proposeEdit(
-              parsed.path,
+            // Resolve vault-relative path to absolute so SafeWriter writes inside the vault.
+            const absolutePath = path.resolve(this.config.vaultPath, parsed.path as string);
+            const proposal = this.safeWriter.proposeEdit(
+              absolutePath,
               parsed.newContent,
               userMessage,
               sessionId

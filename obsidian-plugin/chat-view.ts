@@ -15,6 +15,8 @@ export class ChatView extends ItemView {
   private messages: ChatMessage[] = [];
   private inputEl: HTMLTextAreaElement | null = null;
   private messagesEl: HTMLElement | null = null;
+  private chatResponseHandler: ((msg: Record<string, unknown>) => void) | null = null;
+  private errorHandler: ((msg: Record<string, unknown>) => void) | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: CrickNotePlugin) {
     super(leaf);
@@ -67,8 +69,10 @@ export class ChatView extends ItemView {
 
     sendBtn.addEventListener('click', () => this.sendMessage());
 
-    // Listen for responses
-    this.plugin.ws?.on('chat_response', (msg: Record<string, unknown>) => {
+    // Remove any leftover listeners from a previous open before registering new ones.
+    this.detachListeners();
+
+    this.chatResponseHandler = (msg: Record<string, unknown>) => {
       const assistantMsg: ChatMessage = {
         role: 'assistant',
         content: msg.content as string,
@@ -80,19 +84,33 @@ export class ChatView extends ItemView {
       }
 
       this.addMessage(assistantMsg);
-    });
+    };
 
-    this.plugin.ws?.on('error', (msg: Record<string, unknown>) => {
+    this.errorHandler = (msg: Record<string, unknown>) => {
       this.addMessage({
         role: 'system',
         content: `Error: ${msg.message}`,
         timestamp: Date.now(),
       });
-    });
+    };
+
+    this.plugin.ws?.on('chat_response', this.chatResponseHandler);
+    this.plugin.ws?.on('error', this.errorHandler);
   }
 
   async onClose(): Promise<void> {
-    // Cleanup
+    this.detachListeners();
+  }
+
+  private detachListeners(): void {
+    if (this.chatResponseHandler) {
+      this.plugin.ws?.off('chat_response', this.chatResponseHandler);
+      this.chatResponseHandler = null;
+    }
+    if (this.errorHandler) {
+      this.plugin.ws?.off('error', this.errorHandler);
+      this.errorHandler = null;
+    }
   }
 
   private sendMessage(): void {

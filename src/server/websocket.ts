@@ -67,11 +67,21 @@ export function createWebSocketServer(config: CrickNoteConfig): WebSocketServer 
       if (msg.type === 'chat') {
         try {
           const response = await runtime.processMessage(msg.content, client.sessionId);
+          // Flatten EditProposal into a shape the plugin can render directly.
+          // Strip newContent (large, not needed by UI) and normalize filePath → path.
+          const pendingEdits = response.pendingEdits.map(pe => ({
+            editId: pe.editId,
+            path: pe.proposal.filePath.startsWith(config.vaultPath)
+              ? pe.proposal.filePath.slice(config.vaultPath.length + 1)
+              : pe.proposal.filePath,
+            diff: pe.proposal.diff,
+            hasConflict: pe.proposal.hasConflict,
+          }));
           ws.send(JSON.stringify({
             type: 'chat_response',
             content: response.content,
             toolCalls: response.toolCalls,
-            pendingEdits: response.pendingEdits,
+            pendingEdits,
           }));
         } catch (err) {
           ws.send(JSON.stringify({

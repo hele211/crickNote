@@ -82,7 +82,8 @@ export async function setup(): Promise<void> {
   const pluginDir = path.join(resolvedVaultPath, '.obsidian', 'plugins', 'cricknote');
   fs.mkdirSync(pluginDir, { recursive: true });
 
-  const pluginSourceDir = path.join(import.meta.dirname, '..', 'obsidian-plugin');
+  // dist/cli/setup.js → dist/ → project root → obsidian-plugin/
+  const pluginSourceDir = path.join(import.meta.dirname, '..', '..', 'obsidian-plugin');
   const mainJs = path.join(pluginSourceDir, 'main.js');
   const manifest = path.join(pluginSourceDir, 'manifest.json');
   const styles = path.join(pluginSourceDir, 'styles.css');
