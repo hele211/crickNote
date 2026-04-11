@@ -111,40 +111,53 @@ function resolveWikilinkPath(
   ref: string,
   vaultPath: string,
 ): string | null {
-  // Strip any .md extension that might be in the ref
+  // Path-safety: reject refs containing traversal or separator characters
+  if (ref.includes('/') || ref.includes('\\') || ref.includes('..')) {
+    console.warn(`[context-assembler] Wikilink [[${ref}]] contains unsafe path characters — skipping`);
+    return null;
+  }
   const baseName = ref.replace(/\.md$/, '');
 
-  // Try Protocols/ folder first (most likely for protocol links)
+  // Try Protocols/ folder first
   const protocolPath = path.join(vaultPath, 'Protocols', `${baseName}.md`);
   if (fs.existsSync(protocolPath)) return protocolPath;
+
+  // Try Knowledge/ subfolders
+  const kbCandidates: string[] = [];
+  for (const sub of ['Concepts', 'Entities', 'Methods']) {
+    const kbPath = path.join(vaultPath, 'Knowledge', sub, `${baseName}.md`);
+    if (fs.existsSync(kbPath)) kbCandidates.push(kbPath);
+  }
+  if (kbCandidates.length === 1) return kbCandidates[0];
+  if (kbCandidates.length > 1) {
+    // Ambiguous: log and return null — never silently pick
+    console.warn(`[context-assembler] Ambiguous wikilink [[${ref}]] matches ${kbCandidates.length} Knowledge notes — skipping`);
+    return null;
+  }
 
   // Try vault root
   const rootPath = path.join(vaultPath, `${baseName}.md`);
   if (fs.existsSync(rootPath)) return rootPath;
 
-  // Try common subfolders
-  const folders = ['Projects', 'Reading', 'Memory', 'Agent'];
-  for (const folder of folders) {
+  // Try Reading/ subfolders
+  for (const sub of ['Papers', 'Threads']) {
+    const rPath = path.join(vaultPath, 'Reading', sub, `${baseName}.md`);
+    if (fs.existsSync(rPath)) return rPath;
+  }
+
+  // Try other common subfolders (one level deep, excluding Knowledge which is already handled)
+  for (const folder of ['Projects', 'Memory', 'Agent']) {
     const folderPath = path.join(vaultPath, folder);
     if (!fs.existsSync(folderPath)) continue;
-
-    // Direct child
     const directPath = path.join(folderPath, `${baseName}.md`);
     if (fs.existsSync(directPath)) return directPath;
-
-    // Search subdirectories (one level deep)
     try {
-      const subDirs = fs.readdirSync(folderPath, { withFileTypes: true })
-        .filter(d => d.isDirectory());
-      for (const sub of subDirs) {
+      for (const sub of fs.readdirSync(folderPath, { withFileTypes: true }).filter(d => d.isDirectory())) {
         const subPath = path.join(folderPath, sub.name, `${baseName}.md`);
         if (fs.existsSync(subPath)) return subPath;
       }
-    } catch {
-      // Ignore read errors
-    }
+    } catch { /* ignore */ }
   }
-
   return null;
 }
 

@@ -1,7 +1,7 @@
-import { input, select } from '@inquirer/prompts';
+import { input, password, select } from '@inquirer/prompts';
 import fs from 'node:fs';
 import path from 'node:path';
-import { saveConfig, type CrickNoteConfig } from '../config/config.js';
+import { saveConfig, PROVIDER_PRESETS, type CrickNoteConfig } from '../config/config.js';
 import { generateToken, getTokenPath } from '../server/auth.js';
 import { getDatabase, getDataDir, closeDatabase } from '../storage/database.js';
 
@@ -20,25 +20,74 @@ export async function setup(): Promise<void> {
   const resolvedVaultPath = path.resolve(vaultPath);
 
   // Step 2: LLM provider
-  const provider = await select({
+  const providerChoice = await select({
     message: 'Which LLM provider?',
     choices: [
-      { name: 'Anthropic Claude', value: 'anthropic' as const },
-      { name: 'OpenAI GPT', value: 'openai' as const },
+      { name: 'Anthropic Claude', value: 'anthropic' },
+      { name: 'OpenAI GPT', value: 'openai' },
+      ...Object.entries(PROVIDER_PRESETS).map(([key, preset]) => ({
+        name: preset.label,
+        value: key,
+      })),
+      { name: 'Custom (OpenAI-compatible)', value: 'custom-openai' },
+      { name: 'Custom (Anthropic-compatible)', value: 'custom-anthropic' },
     ],
   });
 
+  // Resolve provider, baseUrl, and default model from choice
+  let provider: 'anthropic' | 'openai';
+  let baseUrl: string | undefined;
+  let defaultModel: string | undefined;
+
+  if (providerChoice === 'anthropic' || providerChoice === 'openai') {
+    provider = providerChoice;
+  } else if (providerChoice in PROVIDER_PRESETS) {
+    const preset = PROVIDER_PRESETS[providerChoice];
+    provider = preset.provider;
+    baseUrl = preset.baseUrl;
+    defaultModel = preset.defaultModel;
+  } else if (providerChoice === 'custom-openai') {
+    provider = 'openai';
+    baseUrl = await input({
+      message: 'Base URL (e.g. https://api.deepseek.com/v1):',
+      validate: (val) => val.startsWith('http') || 'Must be a valid URL',
+    });
+  } else {
+    provider = 'anthropic';
+    baseUrl = await input({
+      message: 'Base URL (Anthropic-compatible endpoint):',
+      validate: (val) => val.startsWith('http') || 'Must be a valid URL',
+    });
+  }
+
   // Step 3: API key
-  const apiKey = await input({
-    message: `${provider === 'anthropic' ? 'Anthropic' : 'OpenAI'} API key:`,
+  const providerLabel = providerChoice in PROVIDER_PRESETS
+    ? PROVIDER_PRESETS[providerChoice].label
+    : provider === 'anthropic' ? 'Anthropic' : 'OpenAI';
+
+  const apiKey = await password({
+    message: `${providerLabel} API key:`,
+    mask: '*',
     validate: (val) => val.length > 0 || 'API key is required',
+  });
+
+  // Step 4: Model (optional, show default)
+  const modelDefault = defaultModel ?? (provider === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4o');
+  const model = await input({
+    message: `Model name (Enter for ${modelDefault}):`,
+    default: modelDefault,
   });
 
   // Save config
   const config: CrickNoteConfig = {
     vaultPath: resolvedVaultPath,
-    llm: { provider, apiKey },
-    server: { host: '127.0.0.1', port: 18789 },
+    llm: {
+      provider,
+      apiKey,
+      ...(model !== modelDefault ? { model } : { model: modelDefault }),
+      ...(baseUrl ? { baseUrl } : {}),
+    },
+    server: { host: '127.0.0.1', port: 18790 },
   };
   saveConfig(config);
   console.log(`\u2713 Config saved to ${path.join(getDataDir(), 'config.json')}`);
@@ -70,7 +119,13 @@ export async function setup(): Promise<void> {
   }
 
   // Create vault directories if needed
-  for (const dir of ['Projects', 'Protocols', 'Reading', 'Memory/Daily', 'Memory/Weekly', 'Memory/Monthly']) {
+  for (const dir of [
+    'Projects', 'Protocols',
+    'Reading', 'Reading/Papers', 'Reading/Threads', 'Reading/attachments',
+    'Memory/Daily', 'Memory/Weekly', 'Memory/Monthly',
+    'Knowledge', 'Knowledge/Concepts', 'Knowledge/Entities', 'Knowledge/Methods',
+    'Knowledge/Review-Queue', 'Knowledge/_Ops', 'Knowledge/_Ops/Update-Logs', 'Knowledge/_Ops/Lint-Reports',
+  ]) {
     const dirPath = path.join(resolvedVaultPath, dir);
     if (!fs.existsSync(dirPath)) {
       fs.mkdirSync(dirPath, { recursive: true });
