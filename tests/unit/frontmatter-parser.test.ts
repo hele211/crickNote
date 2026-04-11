@@ -26,7 +26,9 @@ describe('parseNote', () => {
     expect(result.body).toContain('# Western Blot');
   });
 
-  it('logs a validation warning when required field (date) is missing', () => {
+  it('does not validate legacy required fields for path-based experiment notes (must use note_kind)', () => {
+    // Path-based experiment notes (without note_kind) are not validated by legacy REQUIRED_FIELDS.
+    // They must use note_kind-aware validation (id + created/date).
     const content = [
       '---',
       'project: ProjectA',
@@ -38,11 +40,9 @@ describe('parseNote', () => {
 
     const result = parseNote('Projects/ProjectA/missing-date.md', content);
 
-    expect(result.isValid).toBe(false);
-    expect(result.warnings.length).toBeGreaterThan(0);
-    const dateWarning = result.warnings.find(w => w.field === 'date');
-    expect(dateWarning).toBeDefined();
-    expect(dateWarning!.message).toContain('date');
+    // No validation warnings for path-based notes without note_kind
+    expect(result.isValid).toBe(true);
+    expect(result.warnings).toHaveLength(0);
   });
 
   it('parses a valid protocol note with correct type', () => {

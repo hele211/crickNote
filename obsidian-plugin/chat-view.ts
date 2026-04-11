@@ -17,6 +17,9 @@ export class ChatView extends ItemView {
   private messagesEl: HTMLElement | null = null;
   private chatResponseHandler: ((msg: Record<string, unknown>) => void) | null = null;
   private errorHandler: ((msg: Record<string, unknown>) => void) | null = null;
+  private editResultHandler: ((msg: Record<string, unknown>) => void) | null = null;
+  /** Map from editId to the action buttons container, for updating on server response. */
+  private pendingEditButtons: Map<string, { applyBtn: HTMLButtonElement; cancelBtn: HTMLButtonElement; forceBtn?: HTMLButtonElement; actionsEl: HTMLElement }> = new Map();
 
   constructor(leaf: WorkspaceLeaf, plugin: CrickNotePlugin) {
     super(leaf);
@@ -94,8 +97,49 @@ export class ChatView extends ItemView {
       });
     };
 
+    this.editResultHandler = (msg: Record<string, unknown>) => {
+      const editId = msg.editId as string;
+      const btns = this.pendingEditButtons.get(editId);
+      if (!btns) return;
+
+      if (msg.success) {
+        // Determine which action was taken based on which button shows pending text
+        if (btns.cancelBtn.textContent === 'Cancelling\u2026') {
+          btns.cancelBtn.setText('Cancelled');
+        } else {
+          btns.applyBtn.setText('Applied');
+        }
+        // Add Continue button
+        const continueBtn = btns.actionsEl.createEl('button', {
+          cls: 'cricknote-continue-btn',
+          text: 'Continue',
+        });
+        continueBtn.addEventListener('click', () => {
+          continueBtn.remove();
+          this.sendMessageText('continue');
+        });
+      } else {
+        // Server rejected — re-enable buttons and show error
+        btns.applyBtn.disabled = false;
+        btns.applyBtn.setText('Apply');
+        btns.cancelBtn.disabled = false;
+        btns.cancelBtn.setText('Cancel');
+        if (btns.forceBtn) {
+          btns.forceBtn.disabled = false;
+          btns.forceBtn.setText('Force Apply');
+        }
+        this.addMessage({
+          role: 'system',
+          content: `Edit failed: ${msg.message ?? 'Unknown error'}`,
+          timestamp: Date.now(),
+        });
+      }
+      this.pendingEditButtons.delete(editId);
+    };
+
     this.plugin.ws?.on('chat_response', this.chatResponseHandler);
-    this.plugin.ws?.on('error', this.errorHandler);
+    this.plugin.ws?.on('server_error', this.errorHandler);
+    this.plugin.ws?.on('edit_result', this.editResultHandler);
   }
 
   async onClose(): Promise<void> {
@@ -108,9 +152,14 @@ export class ChatView extends ItemView {
       this.chatResponseHandler = null;
     }
     if (this.errorHandler) {
-      this.plugin.ws?.off('error', this.errorHandler);
+      this.plugin.ws?.off('server_error', this.errorHandler);
       this.errorHandler = null;
     }
+    if (this.editResultHandler) {
+      this.plugin.ws?.off('edit_result', this.editResultHandler);
+      this.editResultHandler = null;
+    }
+    this.pendingEditButtons.clear();
   }
 
   private sendMessage(): void {
@@ -121,6 +170,11 @@ export class ChatView extends ItemView {
     this.addMessage({ role: 'user', content, timestamp: Date.now() });
     this.plugin.ws?.sendChat(content);
     this.inputEl.value = '';
+  }
+
+  private sendMessageText(text: string): void {
+    this.addMessage({ role: 'user', content: text, timestamp: Date.now() });
+    this.plugin.ws?.sendChat(text);
   }
 
   private addMessage(msg: ChatMessage): void {
@@ -151,26 +205,41 @@ export class ChatView extends ItemView {
         const actionsEl = editEl.createDiv({ cls: 'cricknote-edit-actions' });
 
         const applyBtn = actionsEl.createEl('button', { text: 'Apply', cls: 'mod-cta' });
+        const cancelBtn = actionsEl.createEl('button', { text: 'Cancel' });
+        let forceBtn: HTMLButtonElement | undefined;
+
+        // Track buttons so the edit_result handler can update them
+        const btnEntry: { applyBtn: HTMLButtonElement; cancelBtn: HTMLButtonElement; forceBtn?: HTMLButtonElement; actionsEl: HTMLElement } = { applyBtn, cancelBtn, actionsEl };
+
+        const disableAll = () => {
+          applyBtn.disabled = true;
+          cancelBtn.disabled = true;
+          if (forceBtn) forceBtn.disabled = true;
+        };
+
         applyBtn.addEventListener('click', () => {
           this.plugin.ws?.confirmEdit(edit.editId, 'apply');
-          applyBtn.disabled = true;
-          applyBtn.setText('Applied');
+          disableAll();
+          applyBtn.setText('Applying\u2026');
         });
 
         if (edit.hasConflict) {
-          const forceBtn = actionsEl.createEl('button', { text: 'Force Apply' });
+          forceBtn = actionsEl.createEl('button', { text: 'Force Apply' });
+          btnEntry.forceBtn = forceBtn;
           forceBtn.addEventListener('click', () => {
             this.plugin.ws?.confirmEdit(edit.editId, 'force');
-            forceBtn.disabled = true;
+            disableAll();
+            forceBtn!.setText('Applying\u2026');
           });
         }
 
-        const cancelBtn = actionsEl.createEl('button', { text: 'Cancel' });
         cancelBtn.addEventListener('click', () => {
           this.plugin.ws?.confirmEdit(edit.editId, 'cancel');
-          cancelBtn.disabled = true;
-          cancelBtn.setText('Cancelled');
+          disableAll();
+          cancelBtn.setText('Cancelling\u2026');
         });
+
+        this.pendingEditButtons.set(edit.editId, btnEntry);
       }
     }
 

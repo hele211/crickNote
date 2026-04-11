@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { applyMigration002 } from './002-serial-numbering.js';
 
 export function runMigrations(db: Database.Database): void {
   db.exec(`
@@ -9,10 +10,15 @@ export function runMigrations(db: Database.Database): void {
   `);
 
   const current = db.prepare('SELECT MAX(version) as v FROM schema_version').get() as { v: number | null };
-  const currentVersion = current?.v ?? 0;
+  let currentVersion = current?.v ?? 0;
 
   if (currentVersion < 1) {
     applyMigration001(db);
+    currentVersion = 1;
+  }
+
+  if (currentVersion < 2) {
+    applyMigration002(db);
   }
 }
 
