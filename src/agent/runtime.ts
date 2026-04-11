@@ -189,8 +189,7 @@ export class AgentRuntime {
             pendingEdits.push({ editId: proposal.editId, proposal });
 
             if (parsed.reservation && typeof parsed.reservation === 'object') {
-              const { project_id, prefix } = parsed.reservation as { project_id: string; prefix: string };
-              const db = getDatabase();
+              const { project_id } = parsed.reservation as { project_id: string };
               db.prepare('UPDATE prefix_reservations SET edit_id = ? WHERE project_id = ?').run(proposal.editId, project_id);
             }
 
