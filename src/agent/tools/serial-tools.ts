@@ -72,6 +72,11 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         return { error: `Prefix ${prefix} is reserved by another project — vault may be in an inconsistent state. Resolve manually.` };
       }
 
+      const seriesCounter = database.prepare('SELECT scope FROM serial_counters WHERE scope = ?').get(prefix + '-S') as { scope: string } | undefined;
+      if (seriesCounter) {
+        return { error: `Prefix ${prefix}-S counter exists but ${prefix} counter is missing — vault may be in an inconsistent state. Run register_project_counters manually to resolve.` };
+      }
+
       log.debug('Auto-registering missing counters for project', { projectId, prefix });
       database.transaction(() => {
         database.prepare('INSERT OR IGNORE INTO serial_counters (scope, next_val, project_id) VALUES (?, 1, ?)').run(prefix, projectId);
