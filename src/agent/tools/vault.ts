@@ -5,8 +5,13 @@ import type { ToolHandler } from './registry.js';
 import { getDatabase } from '../../storage/database.js';
 import type { ConflictDetector } from '../../editing/conflict-detector.js';
 import { resolveVaultPath } from '../../utils/paths.js';
+import type Database from 'better-sqlite3';
 
-export function createVaultTools(vaultPath: string, conflictDetector?: ConflictDetector): ToolHandler[] {
+export function createVaultTools(
+  vaultPath: string,
+  conflictDetector?: ConflictDetector,
+  injectedDb?: Database.Database,
+): ToolHandler[] {
   return [
     {
       definition: {
@@ -53,6 +58,8 @@ export function createVaultTools(vaultPath: string, conflictDetector?: ConflictD
             experiment_type: { type: 'string', description: 'Filter by experiment type (e.g., "western-blot")' },
             project: { type: 'string', description: 'Filter by project name' },
             status: { type: 'string', description: 'Filter by status (draft, in-progress, complete)' },
+            project_id: { type: 'string', description: 'Filter by serial project ID (e.g., "P001")' },
+            series: { type: 'string', description: 'Filter by series ID (e.g., "CMS001")' },
           },
           required: ['folder'],
         },
@@ -62,7 +69,7 @@ export function createVaultTools(vaultPath: string, conflictDetector?: ConflictD
         if (!folder || folder.includes('..')) {
           return JSON.stringify({ error: 'folder must be a non-empty string without path traversal' });
         }
-        const db = getDatabase();
+        const database = injectedDb ?? getDatabase();
         const conditions: string[] = ['folder LIKE ?'];
         const params: unknown[] = [`${folder}%`];
 
@@ -70,11 +77,13 @@ export function createVaultTools(vaultPath: string, conflictDetector?: ConflictD
         if (args.experiment_type) { conditions.push('experiment_type = ?'); params.push(args.experiment_type); }
         if (args.project) { conditions.push('project = ?'); params.push(args.project); }
         if (args.status) { conditions.push('status = ?'); params.push(args.status); }
+        if (args.project_id) { conditions.push('project_id = ?'); params.push(args.project_id); }
+        if (args.series) { conditions.push('series = ?'); params.push(args.series); }
 
-        const sql = `SELECT path, note_type, date, project, experiment_type, status, result_summary
+        const sql = `SELECT path, note_type, date, project, project_id, note_id, series, experiment_type, status, result_summary
                      FROM note_metadata WHERE ${conditions.join(' AND ')}
                      ORDER BY date DESC LIMIT 50`;
-        const results = db.prepare(sql).all(...params);
+        const results = database.prepare(sql).all(...params);
         return JSON.stringify(results);
       },
     },
@@ -134,6 +143,11 @@ export function createVaultTools(vaultPath: string, conflictDetector?: ConflictD
           notePath = resolveVaultPath(vaultPath, args.path as string);
         } catch {
           return JSON.stringify({ error: `Invalid path: "${args.path}"` });
+        }
+        // Snapshot existing content so conflict detection works on overwrites.
+        if (fs.existsSync(notePath)) {
+          const existing = fs.readFileSync(notePath, 'utf-8');
+          conflictDetector?.recordFileRead(notePath, existing);
         }
         // Use the resolved absolute path so runtime doesn't need to re-resolve.
         return JSON.stringify({
