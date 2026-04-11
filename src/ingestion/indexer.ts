@@ -29,14 +29,18 @@ export function indexNote(input: IndexNoteInput, db?: Database.Database): void {
   database.transaction(() => {
     // 1. Upsert note_metadata
     database.prepare(`
-      INSERT INTO note_metadata (path, folder, note_type, date, project, experiment_type,
-        protocol_ref, status, tags, result_summary, content_hash, mtime, last_indexed)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO note_metadata (path, folder, note_type, date, project, project_id, note_id, series,
+        last_session, experiment_type, protocol_ref, status, tags, result_summary, content_hash, mtime, last_indexed)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(path) DO UPDATE SET
         folder = excluded.folder,
         note_type = excluded.note_type,
         date = excluded.date,
         project = excluded.project,
+        project_id = excluded.project_id,
+        note_id = excluded.note_id,
+        series = excluded.series,
+        last_session = excluded.last_session,
         experiment_type = excluded.experiment_type,
         protocol_ref = excluded.protocol_ref,
         status = excluded.status,
@@ -51,6 +55,10 @@ export function indexNote(input: IndexNoteInput, db?: Database.Database): void {
       note.noteType,
       note.date ?? null,
       note.project ?? null,
+      note.projectId ?? null,
+      note.noteId ?? null,
+      note.series ?? null,
+      note.lastSession ?? null,
       note.experimentType ?? null,
       note.protocolRef ?? null,
       note.status ?? null,
@@ -133,6 +141,21 @@ export function deleteNote(filePath: string, db?: Database.Database): void {
   const database = db ?? getDatabase();
 
   database.transaction(() => {
+    // Decrement experiment_types.count if this note tracked an experiment type.
+    const meta = database.prepare(
+      'SELECT note_type, experiment_type FROM note_metadata WHERE path = ?'
+    ).get(filePath) as { note_type: string; experiment_type: string | null } | undefined;
+
+    if (meta?.note_type === 'experiment' && meta.experiment_type) {
+      database.prepare(`
+        UPDATE experiment_types SET count = count - 1 WHERE name = ?
+      `).run(meta.experiment_type);
+      // Clean up rows that have reached zero.
+      database.prepare(
+        'DELETE FROM experiment_types WHERE name = ? AND count <= 0'
+      ).run(meta.experiment_type);
+    }
+
     // Remove BM25 entries for this note's chunks
     const chunks = database.prepare(
       'SELECT id FROM note_chunks WHERE path = ?'

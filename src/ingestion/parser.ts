@@ -1,8 +1,8 @@
 import matter from 'gray-matter';
 import { utcDateString } from '../utils/date.js';
 
-/** Note type classifications based on vault folder structure. */
-export type NoteType = 'experiment' | 'protocol' | 'reading' | 'diary' | 'agent' | 'unknown';
+/** Note type classifications based on vault folder structure or note_kind frontmatter. */
+export type NoteType = 'experiment' | 'protocol' | 'reading' | 'diary' | 'agent' | 'series' | 'project-index' | 'unknown';
 
 /** Top-level folder name in the vault. */
 export type VaultFolder = 'Projects' | 'Protocols' | 'Reading' | 'Memory' | 'Agent';
@@ -36,28 +36,65 @@ export interface ParsedNote {
   status?: string;
   tags?: string[];
   resultSummary?: string;
+
+  // Serial numbering system fields
+  noteId?: string;
+  series?: string;
+  projectId?: string;
+  lastSession?: string;
+  noteKind?: string;
 }
 
-/** Required fields per note type. */
+/** Required fields per note type (legacy path-based classification). */
 const REQUIRED_FIELDS: Record<NoteType, string[]> = {
   experiment: ['date', 'project', 'experiment_type', 'protocol', 'samples', 'result_summary', 'status'],
+  series: [],
+  'project-index': [],
   protocol: ['title', 'version', 'last_updated', 'category'],
-  reading: ['title', 'authors', 'year', 'journal', 'doi', 'read_date'],
+  reading: ['title', 'authors', 'year', 'journal', 'read_date'],
   diary: ['date', 'type'],
   agent: [],
   unknown: [],
 };
 
+/** Mapping from note_kind frontmatter value to NoteType. */
+const NOTE_KIND_MAP: Record<string, NoteType> = {
+  experiment: 'experiment',
+  series: 'series',
+  project: 'project-index',
+  protocol: 'protocol',
+  reading: 'reading',
+};
+
 /**
  * Classify a note by its relative file path within the vault.
+ * When noteKind is provided, it takes precedence over path-based classification.
  */
-export function classifyNote(filePath: string): { folder: string; noteType: NoteType } {
+export function classifyNote(filePath: string, noteKind?: string): { folder: string; noteType: NoteType } {
   const normalized = filePath.replace(/\\/g, '/');
   const firstSegment = normalized.split('/')[0];
 
+  // note_kind frontmatter takes precedence
+  if (noteKind && NOTE_KIND_MAP[noteKind]) {
+    const noteType = NOTE_KIND_MAP[noteKind];
+    // Determine folder from path regardless
+    const folder = firstSegment || 'root';
+    return { folder, noteType };
+  }
+
+  // Path-based classification
   switch (firstSegment) {
-    case 'Projects':
+    case 'Projects': {
+      // Determine sub-type within Projects
+      if (normalized.endsWith('/_index.md')) {
+        return { folder: 'Projects', noteType: 'project-index' };
+      }
+      const basename = normalized.split('/').pop() ?? '';
+      if (/^[A-Z]+S\d+/.test(basename)) {
+        return { folder: 'Projects', noteType: 'series' };
+      }
       return { folder: 'Projects', noteType: 'experiment' };
+    }
     case 'Protocols':
       return { folder: 'Protocols', noteType: 'protocol' };
     case 'Reading':
@@ -76,18 +113,30 @@ export function classifyNote(filePath: string): { folder: string; noteType: Note
  */
 function validateFrontmatter(
   frontmatter: Record<string, unknown>,
-  noteType: NoteType
+  noteType: NoteType,
+  noteKind?: string
 ): ValidationWarning[] {
   const warnings: ValidationWarning[] = [];
-  const requiredFields = REQUIRED_FIELDS[noteType] ?? [];
 
-  for (const field of requiredFields) {
-    const value = frontmatter[field];
-    if (value === undefined || value === null || value === '') {
-      warnings.push({
-        field,
-        message: `Required field "${field}" is missing for ${noteType} note.`,
-      });
+  // note_kind-aware validation for serial notes
+  if (noteKind === 'experiment' || noteKind === 'series' || noteKind === 'project') {
+    if (!frontmatter['id']) {
+      warnings.push({ field: 'id', message: `Required field "id" is missing for ${noteKind} note.` });
+    }
+    if (!frontmatter['created'] && !frontmatter['date']) {
+      warnings.push({ field: 'created', message: `Field "created" or "date" is required for ${noteKind} note.` });
+    }
+  } else {
+    // Legacy required-fields validation
+    const requiredFields = REQUIRED_FIELDS[noteType] ?? [];
+    for (const field of requiredFields) {
+      const value = frontmatter[field];
+      if (value === undefined || value === null || value === '') {
+        warnings.push({
+          field,
+          message: `Required field "${field}" is missing for ${noteType} note.`,
+        });
+      }
     }
   }
 
@@ -116,12 +165,24 @@ function validateFrontmatter(
 }
 
 /**
+ * Extract the latest session date from dated headings (## YYYY-MM-DD ...) in body text.
+ */
+function extractLastSession(body: string): string | undefined {
+  const matches: string[] = [];
+  const regex = /^##\s+(\d{4}-\d{2}-\d{2})/gm;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(body)) !== null) {
+    matches.push(match[1]);
+  }
+  if (matches.length === 0) return undefined;
+  return matches.sort().pop();
+}
+
+/**
  * Parse a markdown file's content, extracting frontmatter and body.
- * Validates required fields based on note type (derived from file path).
+ * Validates required fields based on note type (derived from note_kind frontmatter or file path).
  */
 export function parseNote(filePath: string, content: string): ParsedNote {
-  const { folder, noteType } = classifyNote(filePath);
-
   let frontmatter: Record<string, unknown> = {};
   let body: string = content;
 
@@ -131,7 +192,6 @@ export function parseNote(filePath: string, content: string): ParsedNote {
     body = parsed.content;
   } catch {
     // If frontmatter parsing fails, treat entire content as body
-    // gray-matter handles Date objects in YAML — normalize them back to strings
   }
 
   // Normalize date values (gray-matter converts YAML dates to Date objects at midnight UTC).
@@ -145,11 +205,33 @@ export function parseNote(filePath: string, content: string): ParsedNote {
   if (frontmatter['read_date'] instanceof Date) {
     frontmatter['read_date'] = utcDateString(frontmatter['read_date'] as Date);
   }
+  if (frontmatter['created'] instanceof Date) {
+    frontmatter['created'] = utcDateString(frontmatter['created'] as Date);
+  }
 
-  const warnings = validateFrontmatter(frontmatter, noteType);
+  // Extract note_kind as primary classifier
+  const noteKind = normalizeString(frontmatter['note_kind']) || undefined;
+
+  const { folder, noteType } = classifyNote(filePath, noteKind);
+
+  const createdDate = normalizeString(frontmatter['created']);
+  const rawDate = normalizeString(frontmatter['date']) || createdDate || undefined;
+
+  const warnings = validateFrontmatter(frontmatter, noteType, noteKind);
 
   // Extract common metadata fields
   const tags = extractTags(frontmatter['tags']);
+
+  // Extract serial numbering fields (only for serial notes)
+  const noteId = normalizeString(frontmatter['id']) || undefined;
+  const seriesField = normalizeString(frontmatter['series']) || undefined;
+  const projectId = normalizeString(frontmatter['project_id']) || undefined;
+
+  // Compute lastSession for experiment notes
+  let lastSession: string | undefined;
+  if (noteType === 'experiment') {
+    lastSession = extractLastSession(body) || createdDate || undefined;
+  }
 
   return {
     filePath,
@@ -159,13 +241,18 @@ export function parseNote(filePath: string, content: string): ParsedNote {
     body,
     warnings,
     isValid: warnings.length === 0,
-    date: normalizeString(frontmatter['date']),
+    date: rawDate,
     project: normalizeString(frontmatter['project']),
     experimentType: normalizeString(frontmatter['experiment_type']),
     protocolRef: normalizeString(frontmatter['protocol']),
     status: normalizeString(frontmatter['status']),
     tags,
     resultSummary: normalizeString(frontmatter['result_summary']),
+    noteId,
+    series: seriesField,
+    projectId,
+    noteKind,
+    lastSession,
   };
 }
 
