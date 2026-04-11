@@ -6,6 +6,7 @@ import type { ToolHandler, ToolContext } from './registry.js';
 import { getDatabase } from '../../storage/database.js';
 import { validatePrefix, getNextSerial } from '../../storage/serial.js';
 import { resolveVaultPath } from '../../utils/paths.js';
+import { fencedSectionUpdate } from '../../editing/auto-writer.js';
 import { logger } from '../../utils/logger.js';
 
 const log = logger.child('serial-tools');
@@ -401,6 +402,100 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
           return JSON.stringify({ error: 'Resolved protocol path is outside the vault.' });
         }
         return JSON.stringify({ type: 'pending_edit', operation: 'create_protocol', path: absPath, newContent });
+      },
+    },
+
+    // get_workflow_events
+    {
+      definition: {
+        name: 'get_workflow_events',
+        description: 'Read edit confirmation/cancellation events for the current session. Use after "continue" to see what was applied.',
+        parameters: { type: 'object', properties: { after_event_id: { type: 'number' } }, required: [] },
+      },
+      execute: async (args, context) => {
+        const sessionId = context?.sessionId;
+        if (!sessionId) return JSON.stringify({ error: 'No session context.' });
+        const database = db();
+        const afterId = typeof args.after_event_id === 'number' ? args.after_event_id : 0;
+        const events = database.prepare(
+          'SELECT id, event_type, payload, timestamp FROM workflow_events WHERE session_id = ? AND id > ? ORDER BY id ASC'
+        ).all(sessionId, afterId) as Array<{ id: number; event_type: string; payload: string; timestamp: number }>;
+        const cursor = events.length > 0 ? events[events.length - 1].id : null;
+        return JSON.stringify({ events: events.map(e => ({ id: e.id, event_type: e.event_type, payload: JSON.parse(e.payload), timestamp: e.timestamp })), cursor });
+      },
+    },
+
+    // update_project_index
+    {
+      definition: {
+        name: 'update_project_index',
+        description: 'Update an auto-generated fenced section in a project _index.md. No user confirmation required — agent-owned sections only.',
+        parameters: {
+          type: 'object',
+          properties: {
+            project_id: { type: 'string' },
+            section: { type: 'string', description: '"experiment-log" or "project-summary"' },
+            content: { type: 'string' },
+          },
+          required: ['project_id', 'section', 'content'],
+        },
+      },
+      execute: async (args) => {
+        const database = db();
+        const ALLOWED_SECTIONS = new Set(['experiment-log', 'project-summary']);
+        const section = args.section as string;
+        if (!ALLOWED_SECTIONS.has(section)) {
+          return JSON.stringify({ error: `Section "${section}" is not allowed. Valid sections: experiment-log, project-summary.` });
+        }
+        const resolved = resolveProject(args.project_id as string, database);
+        if ('error' in resolved) return JSON.stringify({ error: resolved.error });
+        const indexPath = path.join(resolved.folderPath, '_index.md');
+        try {
+          fencedSectionUpdate(indexPath, section, args.content as string, vaultPath);
+          return JSON.stringify({ updated: true });
+        } catch (err) { return JSON.stringify({ error: (err as Error).message }); }
+      },
+    },
+
+    // update_series_table
+    {
+      definition: {
+        name: 'update_series_table',
+        description: 'Update the auto-generated experiment list in a series header file. No user confirmation required.',
+        parameters: {
+          type: 'object',
+          properties: {
+            project_id: { type: 'string' },
+            series_id: { type: 'string' },
+            content: { type: 'string' },
+          },
+          required: ['project_id', 'series_id', 'content'],
+        },
+      },
+      execute: async (args) => {
+        const database = db();
+        const seriesId = args.series_id as string;
+        if (!/^[A-Z]{2,3}S\d{3,4}$/.test(seriesId)) {
+          return JSON.stringify({ error: `Series ID "${seriesId}" has invalid format. Expected pattern: CMS001 (2–3 uppercase letters + "S" + 3–4 digits).` });
+        }
+        const resolved = resolveProject(args.project_id as string, database);
+        if ('error' in resolved) return JSON.stringify({ error: resolved.error });
+        let entries: string[];
+        try {
+          entries = fs.readdirSync(resolved.folderPath);
+        } catch {
+          return JSON.stringify({ error: `Could not read project folder for ${args.project_id as string}.` });
+        }
+        const seriesFile = entries.find(f => f.startsWith(seriesId + '-'));
+        if (!seriesFile) return JSON.stringify({ error: `Series ${seriesId} not found in project ${args.project_id as string}.` });
+        // Use path.join (not resolveVaultPath) so fencedSectionUpdate receives a
+        // path in the same symlink-space as vaultPath, avoiding false traversal errors.
+        // resolveProject already confirmed folderPath is inside the vault.
+        const seriesPath = path.join(resolved.folderPath, seriesFile);
+        try {
+          fencedSectionUpdate(seriesPath, 'experiment-list', args.content as string, vaultPath);
+          return JSON.stringify({ updated: true });
+        } catch (err) { return JSON.stringify({ error: (err as Error).message }); }
       },
     },
   ];

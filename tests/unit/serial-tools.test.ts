@@ -300,3 +300,98 @@ describe('create_protocol', () => {
     expect(fm.malicious).toBeUndefined();
   });
 });
+
+describe('get_workflow_events', () => {
+  let db: Database.Database;
+  let vaultPath: string;
+  beforeEach(() => {
+    db = new Database(':memory:');
+    runMigrations(db);
+    vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), 'wfe-'));
+    db.prepare('INSERT INTO workflow_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)').run('s1', 'edit_confirmed', '{"editId":"a"}', Date.now() - 1000);
+    db.prepare('INSERT INTO workflow_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)').run('s1', 'edit_cancelled', '{"editId":"b"}', Date.now());
+    db.prepare('INSERT INTO workflow_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)').run('s2', 'edit_confirmed', '{"editId":"c"}', Date.now());
+  });
+  afterEach(() => { db.close(); fs.rmSync(vaultPath, { recursive: true, force: true }); });
+
+  it('returns only events for current session', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'get_workflow_events')!;
+    const r = JSON.parse(await tool.execute({}, { sessionId: 's1', vaultPath }));
+    expect(r.events).toHaveLength(2);
+  });
+
+  it('returns empty for unknown session', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'get_workflow_events')!;
+    const r = JSON.parse(await tool.execute({}, { sessionId: 'none', vaultPath }));
+    expect(r.events).toHaveLength(0);
+    expect(r.cursor).toBeNull();
+  });
+});
+
+describe('update_project_index', () => {
+  let db: Database.Database;
+  let vaultPath: string;
+  beforeEach(() => {
+    db = new Database(':memory:');
+    runMigrations(db);
+    vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), 'upi-'));
+    fs.mkdirSync(path.join(vaultPath, 'Projects', 'P001-CM'), { recursive: true });
+    const indexContent = `---\nnote_kind: project\nid: P001\nprefix: CM\n---\n\n<!-- AUTO-GENERATED: experiment-log -->\n## Experiment Log\n| old |\n<!-- END AUTO-GENERATED: experiment-log -->\n`;
+    fs.writeFileSync(path.join(vaultPath, 'Projects', 'P001-CM', '_index.md'), indexContent);
+    db.prepare('INSERT INTO serial_counters (scope, next_val, project_id) VALUES (?, 1, ?)').run('CM', 'P001');
+    db.prepare('INSERT INTO serial_counters (scope, next_val, project_id) VALUES (?, 1, ?)').run('CM-S', 'P001');
+  });
+  afterEach(() => { db.close(); fs.rmSync(vaultPath, { recursive: true, force: true }); });
+
+  it('updates allowed section successfully', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'update_project_index')!;
+    const r = JSON.parse(await tool.execute({ project_id: 'P001', section: 'experiment-log', content: '| CM001 | new row |' }));
+    expect(r.updated).toBe(true);
+    const updated = fs.readFileSync(path.join(vaultPath, 'Projects', 'P001-CM', '_index.md'), 'utf-8');
+    expect(updated).toContain('CM001');
+  });
+
+  it('rejects non-allowlisted section', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'update_project_index')!;
+    const r = JSON.parse(await tool.execute({ project_id: 'P001', section: 'arbitrary-section', content: 'malicious' }));
+    expect(r.error).toMatch(/not allowed/);
+  });
+});
+
+describe('update_series_table', () => {
+  let db: Database.Database;
+  let vaultPath: string;
+  beforeEach(() => {
+    db = new Database(':memory:');
+    runMigrations(db);
+    vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ust-'));
+    fs.mkdirSync(path.join(vaultPath, 'Projects', 'P001-CM'), { recursive: true });
+    const indexContent = `---\nnote_kind: project\nid: P001\nprefix: CM\n---\n`;
+    fs.writeFileSync(path.join(vaultPath, 'Projects', 'P001-CM', '_index.md'), indexContent);
+    const seriesContent = `---\nnote_kind: series\nid: CMS001\nproject_id: P001\n---\n\n<!-- AUTO-GENERATED: experiment-list -->\n| old |\n<!-- END AUTO-GENERATED: experiment-list -->\n`;
+    fs.writeFileSync(path.join(vaultPath, 'Projects', 'P001-CM', 'CMS001-series.md'), seriesContent);
+    db.prepare('INSERT INTO serial_counters (scope, next_val, project_id) VALUES (?, 1, ?)').run('CM', 'P001');
+    db.prepare('INSERT INTO serial_counters (scope, next_val, project_id) VALUES (?, 1, ?)').run('CM-S', 'P001');
+  });
+  afterEach(() => { db.close(); fs.rmSync(vaultPath, { recursive: true, force: true }); });
+
+  it('updates experiment list in series file', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'update_series_table')!;
+    const r = JSON.parse(await tool.execute({ project_id: 'P001', series_id: 'CMS001', content: '| CM001 | western blot |' }));
+    expect(r.updated).toBe(true);
+    const updated = fs.readFileSync(path.join(vaultPath, 'Projects', 'P001-CM', 'CMS001-series.md'), 'utf-8');
+    expect(updated).toContain('CM001');
+  });
+
+  it('errors if series not found in project', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'update_series_table')!;
+    const r = JSON.parse(await tool.execute({ project_id: 'P001', series_id: 'CMS999', content: '...' }));
+    expect(r.error).toContain('not found');
+  });
+});
