@@ -5,6 +5,9 @@ import path from 'node:path';
 import { ConflictDetector } from './conflict-detector.js';
 import { generateDiff, generateThreeWayDiff } from './diff-generator.js';
 import { logEdit, getLastEdit } from '../storage/audit.js';
+import { logger } from '../utils/logger.js';
+
+const log = logger.child('safe-writer');
 
 // ---------------------------------------------------------------------------
 // Types
@@ -44,7 +47,7 @@ export interface ConfirmResult {
  */
 export class SafeWriter {
   private conflictDetector: ConflictDetector;
-  private pendingEdits: Map<string, EditProposal & { triggerQuery: string; sessionId: string }> = new Map();
+  private pendingEdits: Map<string, EditProposal & { triggerQuery: string; sessionId: string; createdAt: number; meta: Record<string, unknown> }> = new Map();
 
   constructor(conflictDetector?: ConflictDetector) {
     this.conflictDetector = conflictDetector ?? new ConflictDetector();
@@ -72,6 +75,7 @@ export class SafeWriter {
     newContent: string,
     triggerQuery: string,
     sessionId: string,
+    meta: Record<string, unknown> = {},
   ): EditProposal {
     const editId = crypto.randomUUID();
 
@@ -111,8 +115,9 @@ export class SafeWriter {
     };
 
     // Store internally so confirmEdit can retrieve it.
-    this.pendingEdits.set(editId, { ...proposal, triggerQuery, sessionId });
+    this.pendingEdits.set(editId, { ...proposal, triggerQuery, sessionId, createdAt: Date.now(), meta });
 
+    log.info('Edit proposed', { editId, filePath, hasConflict: conflictResult.hasConflict });
     return proposal;
   }
 
@@ -128,9 +133,14 @@ export class SafeWriter {
    * - `cancel` — discard the proposal.
    */
   confirmEdit(editId: string, action: ConfirmAction): ConfirmResult {
+    const EDIT_TTL_MS = 30 * 60 * 1000;
     const pending = this.pendingEdits.get(editId);
     if (!pending) {
       return { success: false, editId, action, error: 'Edit proposal not found or already resolved.' };
+    }
+    if (Date.now() - pending.createdAt > EDIT_TTL_MS) {
+      this.pendingEdits.delete(editId);
+      return { success: false, editId, action, error: 'Edit expired — please re-run the tool to generate a fresh edit.' };
     }
 
     // Cancel path — just clean up.
@@ -185,7 +195,7 @@ export class SafeWriter {
         session_id: pending.sessionId,
       });
     } catch (auditErr) {
-      console.error(`[SafeWriter] Audit log failed for ${pending.filePath}:`, auditErr);
+      log.error('Audit log failed', { filePath: pending.filePath, error: (auditErr as Error).message });
     }
 
     // --- Update snapshot so future checks work -----------------------------
@@ -194,6 +204,54 @@ export class SafeWriter {
     // --- Clean up ----------------------------------------------------------
     this.pendingEdits.delete(editId);
     return { success: true, editId, action };
+  }
+
+  /**
+   * Return metadata from a pending edit without consuming it.
+   * Must be called BEFORE confirmEdit (which deletes the entry on success/cancel).
+   */
+  getPendingEditMeta(editId: string): Record<string, unknown> | undefined {
+    return this.pendingEdits.get(editId)?.meta;
+  }
+
+  // -----------------------------------------------------------------------
+  // Cleanup
+  // -----------------------------------------------------------------------
+
+  /**
+   * Remove all pending edits associated with a given session.
+   * Called when a client disconnects so stale proposals don't accumulate.
+   */
+  cleanupSession(sessionId: string): number {
+    let removed = 0;
+    for (const [editId, pending] of this.pendingEdits) {
+      if (pending.sessionId === sessionId) {
+        this.pendingEdits.delete(editId);
+        removed++;
+      }
+    }
+    if (removed > 0) {
+      log.info('Cleaned up pending edits for disconnected session', { sessionId, removed });
+    }
+    return removed;
+  }
+
+  /**
+   * Remove pending edits older than `ttlMs` (default: 30 minutes).
+   */
+  cleanupExpired(ttlMs: number = 30 * 60 * 1000): number {
+    const cutoff = Date.now() - ttlMs;
+    let removed = 0;
+    for (const [editId, pending] of this.pendingEdits) {
+      if (pending.createdAt < cutoff) {
+        this.pendingEdits.delete(editId);
+        removed++;
+      }
+    }
+    if (removed > 0) {
+      log.info('Cleaned up expired pending edits', { removed, ttlMs });
+    }
+    return removed;
   }
 
   // -----------------------------------------------------------------------

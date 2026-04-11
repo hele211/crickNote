@@ -1,17 +1,21 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import type { CrickNoteConfig } from '../config/config.js';
 import type { LLMProvider, Message, ToolCall, StreamChunk } from './providers/base.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAIProvider } from './providers/openai.js';
-import { ToolRegistry } from './tools/registry.js';
+import { ToolRegistry, type ToolContext } from './tools/registry.js';
 import { createVaultTools } from './tools/vault.js';
 import { createSearchTools } from './tools/search.js';
 import { createTaskTools } from './tools/tasks.js';
 import { createTemplateTools } from './tools/templates.js';
 import { createContextTools } from './tools/context.js';
 import { assembleSystemPrompt } from './context.js';
-import { SafeWriter, type EditProposal, type ConfirmResult } from '../editing/safe-writer.js';
+import { SafeWriter, type EditProposal } from '../editing/safe-writer.js';
 import { getDatabase } from '../storage/database.js';
+import { logger } from '../utils/logger.js';
+
+const log = logger.child('runtime');
 
 interface PendingEdit {
   editId: string;
@@ -29,32 +33,41 @@ export class AgentRuntime {
   private registry: ToolRegistry;
   private safeWriter: SafeWriter;
   private config: CrickNoteConfig;
+  private realVaultPath: string;
 
   constructor(config: CrickNoteConfig) {
     this.config = config;
 
+    // Resolve vault root through symlinks so boundary checks match realpath-resolved file paths.
+    try {
+      this.realVaultPath = fs.realpathSync(config.vaultPath);
+    } catch {
+      this.realVaultPath = path.resolve(config.vaultPath);
+    }
+
     // Initialize LLM provider
     if (config.llm.provider === 'anthropic') {
-      this.provider = new AnthropicProvider(config.llm.apiKey);
+      this.provider = new AnthropicProvider(config.llm.apiKey, config.llm.baseUrl);
     } else {
-      this.provider = new OpenAIProvider(config.llm.apiKey);
+      this.provider = new OpenAIProvider(config.llm.apiKey, config.llm.baseUrl);
     }
 
     // Initialize safe writer
     this.safeWriter = new SafeWriter();
+    const conflictDetector = this.safeWriter.getConflictDetector();
 
     // Register tools — pass conflict detector so vault_read/vault_append record snapshots
     this.registry = new ToolRegistry();
-    for (const tool of createVaultTools(config.vaultPath, this.safeWriter.getConflictDetector())) {
+    for (const tool of createVaultTools(config.vaultPath, conflictDetector)) {
       this.registry.register(tool);
     }
     for (const tool of createSearchTools(config.vaultPath)) {
       this.registry.register(tool);
     }
-    for (const tool of createTaskTools(config.vaultPath)) {
+    for (const tool of createTaskTools(config.vaultPath, conflictDetector)) {
       this.registry.register(tool);
     }
-    for (const tool of createTemplateTools(config.vaultPath)) {
+    for (const tool of createTemplateTools(config.vaultPath, conflictDetector)) {
       this.registry.register(tool);
     }
     for (const tool of createContextTools(config.vaultPath)) {
@@ -102,7 +115,6 @@ export class AgentRuntime {
     while (iterations < maxIterations) {
       iterations++;
 
-      const chunks: StreamChunk[] = [];
       let text = '';
       const toolCallsThisTurn: ToolCall[] = [];
       const toolCallAccumulators = new Map<string, { id: string; name: string; args: string }>();
@@ -154,7 +166,9 @@ export class AgentRuntime {
       // Execute tools
       for (const tc of toolCallsThisTurn) {
         allToolCalls.push(tc);
-        const result = await this.registry.execute(tc);
+        log.debug('Executing tool', { name: tc.name, id: tc.id });
+        const toolContext: ToolContext = { sessionId, vaultPath: this.config.vaultPath };
+        const result = await this.registry.execute(tc, toolContext);
 
         // Check if result is a pending edit
         try {
@@ -162,17 +176,23 @@ export class AgentRuntime {
           if (parsed.type === 'pending_edit') {
             // Vault tools now embed the resolved absolute path; validate it stays within the vault.
             const absolutePath = parsed.path as string;
-            if (!path.isAbsolute(absolutePath) || !absolutePath.startsWith(path.resolve(this.config.vaultPath))) {
+            if (!path.isAbsolute(absolutePath) || (absolutePath !== this.realVaultPath && !absolutePath.startsWith(this.realVaultPath + path.sep))) {
+              log.warn('Path escapes vault boundary', { path: absolutePath, tool: tc.name });
               history.push({ role: 'tool', content: JSON.stringify({ error: 'Path escapes vault boundary' }), toolCallId: tc.id });
               continue;
             }
-            const proposal = this.safeWriter.proposeEdit(
-              absolutePath,
-              parsed.newContent,
-              userMessage,
-              sessionId
-            );
+            const meta: Record<string, unknown> = { operation: parsed.operation ?? '', path: parsed.path };
+            if (parsed.reservation && typeof parsed.reservation === 'object') {
+              Object.assign(meta, parsed.reservation); // adds project_id, prefix
+            }
+            const proposal = this.safeWriter.proposeEdit(absolutePath, parsed.newContent, userMessage, sessionId, meta);
             pendingEdits.push({ editId: proposal.editId, proposal });
+
+            if (parsed.reservation && typeof parsed.reservation === 'object') {
+              const { project_id, prefix } = parsed.reservation as { project_id: string; prefix: string };
+              const db = getDatabase();
+              db.prepare('UPDATE prefix_reservations SET edit_id = ? WHERE project_id = ?').run(proposal.editId, project_id);
+            }
 
             // Tell the LLM the edit is pending confirmation
             const toolResult = JSON.stringify({
@@ -206,9 +226,29 @@ export class AgentRuntime {
     return { content: finalContent, toolCalls: allToolCalls, pendingEdits };
   }
 
-  async confirmEdit(editId: string, action: 'apply' | 'force' | 'cancel'): Promise<{ success: boolean; message: string }> {
+  async confirmEdit(editId: string, action: 'apply' | 'force' | 'cancel', sessionId: string): Promise<{ success: boolean; message: string }> {
+    const db = getDatabase();
+    db.prepare('DELETE FROM prefix_reservations WHERE expires_at < ?').run(Date.now());
+
+    // Fetch meta BEFORE confirmEdit deletes the pending entry
+    const editMeta = this.safeWriter.getPendingEditMeta(editId) ?? {};
     const result = this.safeWriter.confirmEdit(editId, action);
+
+    if (action === 'cancel') {
+      db.prepare('DELETE FROM prefix_reservations WHERE edit_id = ?').run(editId);
+    }
+    const eventType = (action === 'cancel' || !result.success) ? 'edit_cancelled' : 'edit_confirmed';
+    db.prepare('INSERT INTO workflow_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)')
+      .run(sessionId, eventType, JSON.stringify({ editId, action, success: result.success, ...editMeta }), Date.now());
+
     return { success: result.success, message: result.error ?? (result.success ? 'Edit applied' : 'Edit failed') };
+  }
+
+  /**
+   * Clean up pending edits for a disconnected session.
+   */
+  cleanupSession(sessionId: string): void {
+    this.safeWriter.cleanupSession(sessionId);
   }
 
   getStatus(): { indexing: { state: string; total: number; indexed: number } } {
