@@ -449,6 +449,7 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         }
         const resolved = resolveProject(args.project_id as string, database);
         if ('error' in resolved) return JSON.stringify({ error: resolved.error });
+        // resolveProject already confirmed folderPath is inside the vault via resolveVaultPath.
         const indexPath = path.join(resolved.folderPath, '_index.md');
         try {
           fencedSectionUpdate(indexPath, section, args.content as string, vaultPath);

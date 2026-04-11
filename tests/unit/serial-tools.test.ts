@@ -328,6 +328,17 @@ describe('get_workflow_events', () => {
     expect(r.events).toHaveLength(0);
     expect(r.cursor).toBeNull();
   });
+
+  it('respects after_event_id cursor', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'get_workflow_events')!;
+    const all = JSON.parse(await tool.execute({}, { sessionId: 's1', vaultPath }));
+    const firstId = all.events[0].id;
+    const r = JSON.parse(await tool.execute({ after_event_id: firstId }, { sessionId: 's1', vaultPath }));
+    expect(r.events).toHaveLength(1);
+    expect(r.events[0].event_type).toBe('edit_cancelled');
+    expect(r.cursor).toBe(r.events[0].id);
+  });
 });
 
 describe('update_project_index', () => {
