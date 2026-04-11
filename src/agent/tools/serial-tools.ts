@@ -278,7 +278,13 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
           if (!/^[A-Z]{2,3}S\d{3,4}$/.test(seriesId)) {
             return JSON.stringify({ error: `Series ID "${seriesId}" has invalid format. Expected pattern: CMS001 (2–3 uppercase letters + "S" + 3–4 digits).` });
           }
-          const seriesFile = fs.readdirSync(folderPath).find(f => f.startsWith(seriesId + '-'));
+          let seriesFiles: string[];
+          try {
+            seriesFiles = fs.readdirSync(folderPath);
+          } catch {
+            return JSON.stringify({ error: `Could not read project folder for ${projectId}.` });
+          }
+          const seriesFile = seriesFiles.find(f => f.startsWith(seriesId + '-'));
           if (!seriesFile) return JSON.stringify({ error: `Series ${seriesId} not found in project ${projectId}.` });
           let seriesPath: string;
           try {
@@ -384,7 +390,7 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         const protId = `PR${serial}`;
         const slug = (args.title as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
         const today = new Date().toISOString().slice(0, 10);
-        const fmData: Record<string, unknown> = { id: protId, title: args.title as string, version: 1, category: args.category as string, created: today, last_updated: today };
+        const fmData: Record<string, unknown> = { note_kind: 'protocol', id: protId, title: args.title as string, version: 1, category: args.category as string, created: today, last_updated: today };
         if (args.derived_from) fmData.derived_from = `[[${args.derived_from as string}]]`;
         const body = `\n# ${args.title as string}\n\n## Materials\n\n## Procedure\n\n## Notes\n`;
         const newContent = matter.stringify(body, fmData);
