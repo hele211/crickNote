@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ToolHandler } from './registry.js';
+import type { ConflictDetector } from '../../editing/conflict-detector.js';
 import { localDateString } from '../../utils/date.js';
+import { resolveVaultPath } from '../../utils/paths.js';
 
-export function createTaskTools(vaultPath: string): ToolHandler[] {
+export function createTaskTools(vaultPath: string, conflictDetector?: ConflictDetector): ToolHandler[] {
   return [
     {
       definition: {
@@ -62,11 +64,13 @@ export function createTaskTools(vaultPath: string): ToolHandler[] {
       execute: async (args) => {
         const today = localDateString();
         const diaryPath = `Memory/Daily/${today}.md`;
-        const fullPath = path.join(vaultPath, diaryPath);
+        const fullPath = resolveVaultPath(vaultPath, diaryPath);
+        const exists = fs.existsSync(fullPath);
 
         let content: string;
-        if (fs.existsSync(fullPath)) {
+        if (exists) {
           content = fs.readFileSync(fullPath, 'utf-8');
+          conflictDetector?.recordFileRead(fullPath, content);
         } else {
           content = `---\ndate: ${today}\ntype: daily-diary\n---\n\n# ${today}\n\n## Tasks\n`;
         }
@@ -78,7 +82,8 @@ export function createTaskTools(vaultPath: string): ToolHandler[] {
         // Find Tasks section or append
         const tasksIdx = content.indexOf('## Tasks');
         if (tasksIdx !== -1) {
-          const insertIdx = content.indexOf('\n', tasksIdx) + 1;
+          const sectionLineEnd = content.indexOf('\n', tasksIdx);
+          const insertIdx = sectionLineEnd === -1 ? content.length : sectionLineEnd + 1;
           content = content.slice(0, insertIdx) + taskLine + '\n' + content.slice(insertIdx);
         } else {
           content += `\n## Tasks\n${taskLine}\n`;
@@ -86,9 +91,9 @@ export function createTaskTools(vaultPath: string): ToolHandler[] {
 
         return JSON.stringify({
           type: 'pending_edit',
-          path: diaryPath,
+          path: fullPath,
           newContent: content,
-          operation: fs.existsSync(fullPath) ? 'update' : 'create',
+          operation: exists ? 'update' : 'create',
         });
       },
     },
@@ -114,7 +119,7 @@ export function createTaskTools(vaultPath: string): ToolHandler[] {
         const files = fs.readdirSync(diaryDir).filter(f => f.endsWith('.md')).sort().reverse().slice(0, 14);
 
         for (const file of files) {
-          const fullPath = path.join(diaryDir, file);
+          const fullPath = resolveVaultPath(vaultPath, path.join('Memory', 'Daily', file));
           const content = fs.readFileSync(fullPath, 'utf-8');
           const taskRegex = /^(- \[) \] (.+)$/gm;
           let match;
@@ -124,10 +129,11 @@ export function createTaskTools(vaultPath: string): ToolHandler[] {
               const newContent = content.slice(0, match.index) +
                 `- [x] ${match[2]}` +
                 content.slice(match.index + match[0].length);
+              conflictDetector?.recordFileRead(fullPath, content);
 
               return JSON.stringify({
                 type: 'pending_edit',
-                path: `Memory/Daily/${file}`,
+                path: fullPath,
                 newContent,
                 operation: 'update',
               });

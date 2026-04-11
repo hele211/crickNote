@@ -13,6 +13,9 @@ import {
   updateIndexingStatus,
   markFullIndexComplete,
 } from './indexer.js';
+import { logger } from '../utils/logger.js';
+
+const log = logger.child('ingestion');
 
 export interface WorkerEvents {
   /** Emitted when indexing state changes */
@@ -27,16 +30,22 @@ export interface WorkerEvents {
   error: [error: Error, filePath?: string];
 }
 
+export interface IngestionWorkerOptions {
+  watchForChanges?: boolean;
+}
+
 export class IngestionWorker extends EventEmitter<WorkerEvents> {
   private readonly vaultPath: string;
+  private readonly watchForChanges: boolean;
   private watcher: VaultWatcher | null = null;
   private running = false;
   private processingQueue: FileChange[] = [];
   private processing = false;
 
-  constructor(vaultPath: string) {
+  constructor(vaultPath: string, options: IngestionWorkerOptions = {}) {
     super();
     this.vaultPath = vaultPath;
+    this.watchForChanges = options.watchForChanges ?? true;
   }
 
   /**
@@ -53,19 +62,23 @@ export class IngestionWorker extends EventEmitter<WorkerEvents> {
 
     try {
       // Pre-load embedding model
+      log.info('Loading embedding model');
       this.emit('status', 'indexing', 'Loading embedding model...');
       await preloadModel();
 
       // Perform initial full index
       await this.fullIndex();
 
-      // Start file watcher for incremental updates
-      this.watcher = new VaultWatcher(this.vaultPath, (change) => {
-        this.enqueueChange(change);
-      });
-      this.watcher.start();
-
-      this.emit('status', 'idle', 'Ingestion worker ready. Watching for changes.');
+      if (this.watchForChanges) {
+        // Start file watcher for incremental updates
+        this.watcher = new VaultWatcher(this.vaultPath, (change) => {
+          this.enqueueChange(change);
+        });
+        this.watcher.start();
+        this.emit('status', 'idle', 'Ingestion worker ready. Watching for changes.');
+      } else {
+        this.emit('status', 'idle', 'Ingestion worker ready.');
+      }
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       this.emit('status', 'error', `Failed to start: ${err.message}`);
@@ -120,6 +133,7 @@ export class IngestionWorker extends EventEmitter<WorkerEvents> {
     }
 
     markFullIndexComplete();
+    log.info('Full index complete', { indexed: indexedCount, total: totalFiles });
     this.emit('status', 'idle', `Full index complete. ${indexedCount}/${totalFiles} files indexed.`);
   }
 
@@ -135,7 +149,9 @@ export class IngestionWorker extends EventEmitter<WorkerEvents> {
     let stat: fs.Stats;
     try {
       content = fs.readFileSync(absolutePath, 'utf-8');
-      stat = fs.statSync(absolutePath);
+      stat = fs.lstatSync(absolutePath);
+      // Never process symlinks – they could escape the vault boundary
+      if (stat.isSymbolicLink()) return;
     } catch {
       // File may have been deleted between detection and processing
       return;
@@ -175,6 +191,7 @@ export class IngestionWorker extends EventEmitter<WorkerEvents> {
       embeddings,
     });
 
+    log.debug('Indexed file', { path: relativePath, chunks: chunks.length });
     this.emit('indexed', relativePath);
   }
 
@@ -199,10 +216,12 @@ export class IngestionWorker extends EventEmitter<WorkerEvents> {
 
         try {
           if (change.event === 'unlink') {
+            log.debug('File removed', { path: change.filePath });
             deleteNote(change.filePath);
             this.emit('removed', change.filePath);
           } else {
             // 'add' or 'change'
+            log.debug('File changed', { path: change.filePath, event: change.event });
             await this.processFile(change.filePath);
           }
         } catch (error) {

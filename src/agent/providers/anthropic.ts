@@ -1,12 +1,15 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { LLMProvider, Message, ToolDefinition, ChatOptions, StreamChunk, ToolCall } from './base.js';
+import type { LLMProvider, Message, ToolDefinition, ChatOptions, StreamChunk } from './base.js';
 
 export class AnthropicProvider implements LLMProvider {
   name = 'anthropic';
   private client: Anthropic;
 
-  constructor(apiKey: string) {
-    this.client = new Anthropic({ apiKey });
+  constructor(apiKey: string, baseURL?: string) {
+    this.client = new Anthropic({
+      apiKey,
+      ...(baseURL ? { baseURL } : {}),
+    });
   }
 
   async *chat(

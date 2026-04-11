@@ -114,7 +114,7 @@ export class VaultWatcher {
     const files: string[] = [];
 
     const walk = async (dir: string): Promise<void> => {
-      const { readdir, stat } = await import('node:fs/promises');
+      const { readdir, lstat } = await import('node:fs/promises');
       const entries = await readdir(dir);
 
       for (const entry of entries) {
@@ -124,7 +124,10 @@ export class VaultWatcher {
         if (entry.startsWith('.')) continue;
 
         const fullPath = path.join(dir, entry);
-        const entryStat = await stat(fullPath);
+        const entryStat = await lstat(fullPath);
+
+        // Never follow symlinks – they could escape the vault boundary
+        if (entryStat.isSymbolicLink()) continue;
 
         if (entryStat.isDirectory()) {
           await walk(fullPath);

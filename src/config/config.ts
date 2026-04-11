@@ -8,6 +8,8 @@ export interface CrickNoteConfig {
     provider: 'anthropic' | 'openai';
     apiKey: string;
     model?: string;
+    /** Custom base URL for API-compatible providers (e.g. Z.AI, DeepSeek, Ollama). */
+    baseUrl?: string;
   };
   embeddingModelPath?: string;
   server: {
@@ -16,10 +18,29 @@ export interface CrickNoteConfig {
   };
 }
 
+/**
+ * Pre-configured third-party providers that are API-compatible with
+ * either the Anthropic or OpenAI protocol.
+ */
+export const PROVIDER_PRESETS: Record<string, { provider: 'anthropic' | 'openai'; baseUrl: string; defaultModel: string; label: string }> = {
+  'zhipu-claude': {
+    provider: 'anthropic',
+    baseUrl: 'https://open.bigmodel.cn/api/anthropic',
+    defaultModel: 'glm-4.5-flash',
+    label: 'Z.AI / Zhipu (Claude-compatible)',
+  },
+  'zhipu-openai': {
+    provider: 'openai',
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4/',
+    defaultModel: 'glm-5',
+    label: 'Z.AI / Zhipu (OpenAI-compatible)',
+  },
+};
+
 const DEFAULT_CONFIG: Partial<CrickNoteConfig> = {
   server: {
     host: '127.0.0.1',
-    port: 18789,
+    port: 18790,
   },
 };
 
@@ -40,14 +61,32 @@ export function loadConfig(): CrickNoteConfig {
   }
 
   const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-  cachedConfig = { ...DEFAULT_CONFIG, ...raw } as CrickNoteConfig;
+  const config = { ...DEFAULT_CONFIG, ...raw } as CrickNoteConfig;
+
+  // Runtime validation of critical fields
+  const errors: string[] = [];
+  if (!config.vaultPath || typeof config.vaultPath !== 'string') {
+    errors.push('vaultPath must be a non-empty string');
+  }
+  const validProviders = ['anthropic', 'openai'];
+  if (!config.llm || !validProviders.includes(config.llm.provider)) {
+    errors.push(`llm.provider must be one of: ${validProviders.join(', ')}`);
+  }
+  if (!config.llm || !config.llm.apiKey || typeof config.llm.apiKey !== 'string') {
+    errors.push('llm.apiKey must be a non-empty string');
+  }
+  if (errors.length > 0) {
+    throw new Error(`Invalid config at ${configPath}:\n  - ${errors.join('\n  - ')}`);
+  }
+
+  cachedConfig = config;
   return cachedConfig;
 }
 
 export function saveConfig(config: CrickNoteConfig): void {
   const configPath = getConfigPath();
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), { mode: 0o600 });
   cachedConfig = config;
 }
 

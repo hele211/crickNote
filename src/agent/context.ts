@@ -4,6 +4,20 @@ import { loadAgentConfig } from '../config/config.js';
 import type { ToolDefinition } from './providers/base.js';
 import { localDateString } from '../utils/date.js';
 
+const contextCache: { [key: string]: { content: string; mtime: number } } = {};
+
+function cachedReadFile(filePath: string): string | null {
+  if (!fs.existsSync(filePath)) return null;
+  const mtime = fs.statSync(filePath).mtimeMs;
+  const cached = contextCache[filePath];
+  if (cached && cached.mtime === mtime) {
+    return cached.content;
+  }
+  const content = fs.readFileSync(filePath, 'utf-8');
+  contextCache[filePath] = { content, mtime };
+  return content;
+}
+
 export function assembleSystemPrompt(
   vaultPath: string,
   tools: ToolDefinition[]
@@ -39,21 +53,21 @@ IMPORTANT RULES:
     sections.push(`## Skill\n\n${skill}`);
   }
 
-  // Layer 5: Today's diary
+  // Layer 5: Today's diary (cached to avoid repeated disk reads)
   const today = localDateString();
   const diaryPath = path.join(vaultPath, 'Memory', 'Daily', `${today}.md`);
-  if (fs.existsSync(diaryPath)) {
-    const diary = fs.readFileSync(diaryPath, 'utf-8');
+  const diary = cachedReadFile(diaryPath);
+  if (diary !== null) {
     sections.push(`## Today's Diary (${today})\n\n${diary}`);
   }
 
-  // Layer 6: Current week's plan
+  // Layer 6: Current week's plan (cached to avoid repeated disk reads)
   // Use ISO week year (not calendar year) so late-December dates like 29 Dec 2025
   // (= ISO week 1 of 2026) map to the correct weekly file.
   const { week: weekNum, isoYear } = getISOWeekInfo(new Date());
   const weekPath = path.join(vaultPath, 'Memory', 'Weekly', `${isoYear}-W${String(weekNum).padStart(2, '0')}.md`);
-  if (fs.existsSync(weekPath)) {
-    const weekPlan = fs.readFileSync(weekPath, 'utf-8');
+  const weekPlan = cachedReadFile(weekPath);
+  if (weekPlan !== null) {
     sections.push(`## This Week's Plan\n\n${weekPlan}`);
   }
 

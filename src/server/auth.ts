@@ -83,7 +83,12 @@ export function validateAuthMessage(
     return { type: 'auth_error', reason: 'invalid_token' };
   }
 
-  if (!validateToken(msg.token)) {
+  try {
+    if (!validateToken(msg.token)) {
+      return { type: 'auth_error', reason: 'invalid_token' };
+    }
+  } catch {
+    // Token file missing/unreadable — return structured error instead of crashing.
     return { type: 'auth_error', reason: 'invalid_token' };
   }
 

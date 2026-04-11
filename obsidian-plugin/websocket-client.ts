@@ -5,20 +5,33 @@ import { join } from 'path';
 
 const PROTOCOL_VERSION = 1;
 
+export interface WebSocketOptions {
+  host?: string;
+  port?: number;
+  tokenPath?: string;
+}
+
 export class CrickNoteWebSocket extends EventEmitter {
   private ws: WebSocket | null = null;
   private plugin: CrickNotePlugin;
   private authenticated = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private host: string;
+  private port: number;
+  private tokenPath: string;
 
-  constructor(plugin: CrickNotePlugin) {
+  constructor(plugin: CrickNotePlugin, options: WebSocketOptions = {}) {
     super();
     this.plugin = plugin;
+    this.host = options.host ?? '127.0.0.1';
+    this.port = options.port ?? 18790;
+    const homeDir = process.env.HOME ?? '~';
+    this.tokenPath = options.tokenPath ?? join(homeDir, '.cricknote', 'auth-token');
   }
 
   async connect(): Promise<void> {
-    const host = '127.0.0.1';
-    const port = 18789;
+    const host = this.host;
+    const port = this.port;
     const url = `ws://${host}:${port}`;
 
     try {
@@ -111,16 +124,14 @@ export class CrickNoteWebSocket extends EventEmitter {
         break;
 
       case 'error':
-        this.emit('error', msg);
+        this.emit('server_error', msg);
         break;
     }
   }
 
   private readToken(): string | null {
-    const homeDir = process.env.HOME ?? '~';
-    const tokenPath = join(homeDir, '.cricknote', 'auth-token');
-    if (existsSync(tokenPath)) {
-      return readFileSync(tokenPath, 'utf-8').trim();
+    if (existsSync(this.tokenPath)) {
+      return readFileSync(this.tokenPath, 'utf-8').trim();
     }
     return null;
   }

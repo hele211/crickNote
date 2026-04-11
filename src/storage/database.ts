@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 import { runMigrations } from './migrations/001-initial.js';
 
 let db: Database.Database | null = null;
@@ -27,5 +28,10 @@ export function closeDatabase(): void {
 }
 
 export function getDataDir(): string {
-  return path.join(process.env.HOME ?? '~', '.cricknote');
+  const configuredDir = process.env.CRICKNOTE_DATA_DIR?.trim();
+  if (configuredDir) {
+    return path.resolve(configuredDir);
+  }
+
+  return path.join(os.homedir(), '.cricknote');
 }

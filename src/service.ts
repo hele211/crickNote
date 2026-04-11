@@ -2,26 +2,32 @@ import type { CrickNoteConfig } from './config/config.js';
 import { getDatabase } from './storage/database.js';
 import { createWebSocketServer } from './server/websocket.js';
 import { IngestionWorker } from './ingestion/worker.js';
+import { logger } from './utils/logger.js';
+
+const log = logger.child('service');
 
 export async function startService(config: CrickNoteConfig): Promise<void> {
   // Initialize database
   getDatabase();
 
-  // Start ingestion worker
+  // Start WebSocket server first so clients can connect immediately
+  const wss = await createWebSocketServer(config);
+
+  log.info('CrickNote agent running', { host: config.server.host, port: config.server.port });
+  log.info('Open Obsidian to connect');
+
+  // Start ingestion worker in the background (model preload + indexing)
   const ingestion = new IngestionWorker(config.vaultPath);
-  await ingestion.start();
-
-  // Start WebSocket server
-  const wss = createWebSocketServer(config);
-
-  console.log(`CrickNote agent running on ${config.server.host}:${config.server.port}`);
-  console.log('Open Obsidian to connect.\n');
+  ingestion.start().catch((err) => {
+    log.error('Ingestion worker failed to start', { error: (err as Error).message });
+  });
 
   // Graceful shutdown
   const shutdown = () => {
-    console.log('\nShutting down...');
+    log.info('Shutting down');
     ingestion.stop();
     wss.close();
+    log.close();
     process.exit(0);
   };
 

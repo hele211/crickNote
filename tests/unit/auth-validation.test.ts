@@ -4,20 +4,18 @@ import os from 'node:os';
 import path from 'node:path';
 import { validateAuthMessage, generateToken } from '../../src/server/auth.js';
 
-// Redirect HOME to a temp dir so generateToken doesn't touch ~/.cricknote.
-const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cricknote-auth-test-'));
-const origHome = process.env.HOME;
+const tmpDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cricknote-auth-test-'));
+const originalDataDir = process.env.CRICKNOTE_DATA_DIR;
 
 beforeEach(() => {
-  process.env.HOME = tmpHome;
-  // Ensure the cricknote subdir exists so generateToken can write the token file.
-  fs.mkdirSync(path.join(tmpHome, '.cricknote'), { recursive: true });
+  process.env.CRICKNOTE_DATA_DIR = tmpDataDir;
+  fs.mkdirSync(tmpDataDir, { recursive: true });
 });
 
 afterEach(() => {
-  process.env.HOME = origHome;
+  process.env.CRICKNOTE_DATA_DIR = originalDataDir;
   // Clean token file between tests.
-  const tokenPath = path.join(tmpHome, '.cricknote', 'auth-token');
+  const tokenPath = path.join(tmpDataDir, 'auth-token');
   if (fs.existsSync(tokenPath)) fs.unlinkSync(tokenPath);
 });
 
