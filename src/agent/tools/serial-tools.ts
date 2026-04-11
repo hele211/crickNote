@@ -4,7 +4,7 @@ import matter from 'gray-matter';
 import type Database from 'better-sqlite3';
 import type { ToolHandler, ToolContext } from './registry.js';
 import { getDatabase } from '../../storage/database.js';
-import { validatePrefix } from '../../storage/serial.js';
+import { validatePrefix, getNextSerial } from '../../storage/serial.js';
 import { resolveVaultPath } from '../../utils/paths.js';
 import { logger } from '../../utils/logger.js';
 
@@ -168,6 +168,60 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         })();
         const repaired = (cnt && !cntS) || (!cnt && cntS);
         return JSON.stringify({ registered: true, counters: [rawPrefix, `${rawPrefix}-S`], ...(repaired ? { repaired: true } : {}) });
+      },
+    },
+    {
+      definition: {
+        name: 'create_project',
+        description: 'Create a new project. Returns pending_edit for user confirmation. Allocates a serial P-ID and temporarily reserves the prefix.',
+        parameters: {
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            prefix: { type: 'string', description: '2–3 uppercase letters. Omit to get a suggestion.' },
+            description: { type: 'string' },
+          },
+          required: ['title'],
+        },
+      },
+      execute: async (args) => {
+        const title = args.title as string;
+        const database = db();
+
+        if (!args.prefix) {
+          const suggested = title.split(/\s+/).map(w => w[0]?.toUpperCase() ?? '').join('').replace(/[^A-Z]/g, '').slice(0, 3);
+          return JSON.stringify({ type: 'prefix_suggestion', suggested_prefix: suggested || 'XX', message: `Suggested prefix: "${suggested || 'XX'}". Confirm or provide different prefix.` });
+        }
+
+        const rawPrefix = (args.prefix as string).toUpperCase();
+        try { validatePrefix(rawPrefix); } catch (e) { return JSON.stringify({ error: (e as Error).message }); }
+
+        database.prepare('DELETE FROM prefix_reservations WHERE expires_at < ?').run(Date.now());
+
+        const existingCounter = database.prepare('SELECT project_id FROM serial_counters WHERE scope = ?').get(rawPrefix) as { project_id: string | null } | undefined;
+        if (existingCounter) return JSON.stringify({ error: `Prefix "${rawPrefix}" is already permanently registered to project ${existingCounter.project_id ?? 'unknown'}.` });
+
+        const collision = checkPrefixCollision(rawPrefix, null, database);
+        if (collision) return JSON.stringify({ error: collision });
+
+        const existingRes = database.prepare('SELECT project_id FROM prefix_reservations WHERE prefix = ?').get(rawPrefix) as { project_id: string } | undefined;
+        if (existingRes) return JSON.stringify({ error: `Prefix "${rawPrefix}" is temporarily reserved by project ${existingRes.project_id}.` });
+
+        let projectId = '';
+        database.transaction(() => {
+          const serial = getNextSerial('project', database);
+          projectId = `P${serial}`;
+          database.prepare('INSERT INTO prefix_reservations (prefix, project_id, expires_at) VALUES (?, ?, ?)').run(rawPrefix, projectId, Date.now() + RESERVATION_TTL_MS);
+        })();
+
+        const folderName = `${projectId}-${title.replace(/[^a-zA-Z0-9]+/g, '')}`;
+        const today = new Date().toISOString().slice(0, 10);
+        const fmData: Record<string, unknown> = { note_kind: 'project', id: projectId, prefix: rawPrefix, title, status: 'active', created: today };
+        if (args.description) fmData.description = args.description as string;
+        const body = `\n<!-- AUTO-GENERATED: experiment-log -->\n## Experiment Log\n| Series | ID | Name | Status | Created |\n|--------|-----|------|--------|----------|\n<!-- END AUTO-GENERATED: experiment-log -->\n\n<!-- AUTO-GENERATED: project-summary -->\n## Project Summary\n(auto-updated)\n<!-- END AUTO-GENERATED: project-summary -->\n\n## Related Knowledge Concepts\n\n## Related Reading\n\n## Related Protocols\n\n## Open Questions\n`;
+        const newContent = matter.stringify(body, fmData);
+        const absPath = resolveVaultPath(vaultPath, path.join('Projects', folderName, '_index.md'));
+        return JSON.stringify({ type: 'pending_edit', operation: 'create_project', path: absPath, newContent, reservation: { project_id: projectId, prefix: rawPrefix } });
       },
     },
   ];

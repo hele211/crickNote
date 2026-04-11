@@ -168,3 +168,68 @@ describe('register_project_counters', () => {
     expect(r.error).toContain('Duplicate');
   });
 });
+
+describe('create_project', () => {
+  let db: Database.Database;
+  let vaultPath: string;
+  beforeEach(() => {
+    db = new Database(':memory:');
+    runMigrations(db);
+    vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-'));
+    fs.mkdirSync(path.join(vaultPath, 'Projects'), { recursive: true });
+  });
+  afterEach(() => { db.close(); fs.rmSync(vaultPath, { recursive: true, force: true }); });
+
+  it('returns pending_edit with correct path and reservation', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
+    const r = JSON.parse(await tool.execute({ title: 'Cell Migration', prefix: 'CM' }));
+    expect(r.type).toBe('pending_edit');
+    expect(r.path).toMatch(/P001-CellMigration\/_index\.md$/);
+    expect(r.reservation).toEqual({ project_id: 'P001', prefix: 'CM' });
+  });
+
+  it('frontmatter built via gray-matter — injection not possible', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
+    const r = JSON.parse(await tool.execute({ title: 'Cell:\nmalicious: injected', prefix: 'CM' }));
+    const parsed = matter(r.newContent);
+    expect(parsed.data.malicious).toBeUndefined();
+    expect(parsed.data.note_kind).toBe('project');
+  });
+
+  it('rejects invalid prefix format before consuming serial', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
+    const r = JSON.parse(await tool.execute({ title: 'Test', prefix: 'TOOLONG' }));
+    expect(r.error).toBeDefined();
+    expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('project') as { next_val: number }).next_val).toBe(1);
+  });
+
+  it('rejects prefix already permanently registered to another project', async () => {
+    db.prepare('INSERT INTO serial_counters (scope, next_val, project_id) VALUES (?, 1, ?)').run('CM', 'P999');
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
+    const r = JSON.parse(await tool.execute({ title: 'Test', prefix: 'CM' }));
+    expect(r.error).toMatch(/already permanently registered/);
+    expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('project') as { next_val: number }).next_val).toBe(1);
+  });
+
+  it('rejects prefix reserved by different project', async () => {
+    db.prepare('INSERT INTO prefix_reservations (prefix, project_id, expires_at) VALUES (?, ?, ?)').run('CM', 'P999', Date.now() + 60_000);
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
+    const r = JSON.parse(await tool.execute({ title: 'Test', prefix: 'CM' }));
+    expect(r.error).toBeDefined();
+    expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('project') as { next_val: number }).next_val).toBe(1);
+  });
+
+  it('stores reservation after allocating serial', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
+    await tool.execute({ title: 'Cell Migration', prefix: 'CM' });
+    expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('project') as { next_val: number }).next_val).toBe(2);
+    const res = db.prepare('SELECT project_id FROM prefix_reservations WHERE prefix = ?').get('CM') as { project_id: string } | undefined;
+    expect(res?.project_id).toBe('P001');
+  });
+});
