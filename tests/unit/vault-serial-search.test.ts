@@ -46,6 +46,7 @@ describe('vault_search serial ID fast path', () => {
 
   beforeEach(() => {
     db = new Database(':memory:');
+    // runMigrations applies both 001 and 002; note_id/series/project_id columns require 002.
     runMigrations(db);
     vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), 'srch-'));
     db.prepare(`INSERT INTO note_metadata (path, folder, note_type, date, project_id, series, note_id, content_hash, mtime, last_indexed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -74,5 +75,12 @@ describe('vault_search serial ID fast path', () => {
         expect(r.match_type).not.toBe('serial_exact');
       }
     }
+  });
+
+  it('falls through to normal search when serial ID is not in DB', async () => {
+    const tools = createSearchTools(vaultPath, db);
+    const tool = tools.find(t => t.definition.name === 'vault_search')!;
+    const result = JSON.parse(await tool.execute({ query: 'CM999' }));
+    expect(result.results?.every((r: Record<string, unknown>) => r.match_type !== 'serial_exact')).toBe(true);
   });
 });
