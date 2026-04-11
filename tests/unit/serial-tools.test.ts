@@ -233,3 +233,70 @@ describe('create_project', () => {
     expect(res?.project_id).toBe('P001');
   });
 });
+
+describe('create_experiment', () => {
+  let db: Database.Database;
+  let vaultPath: string;
+  beforeEach(() => {
+    db = new Database(':memory:');
+    runMigrations(db);
+    vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ce-'));
+    fs.mkdirSync(path.join(vaultPath, 'Projects', 'P001-CM'), { recursive: true });
+    fs.writeFileSync(path.join(vaultPath, 'Projects', 'P001-CM', '_index.md'),
+      matter.stringify('', { note_kind: 'project', id: 'P001', prefix: 'CM', title: 'CM', status: 'active', created: '2026-04-11' }));
+    db.prepare('INSERT INTO serial_counters (scope, next_val, project_id) VALUES (?, 1, ?)').run('CM', 'P001');
+    db.prepare('INSERT INTO serial_counters (scope, next_val, project_id) VALUES (?, 1, ?)').run('CM-S', 'P001');
+    fs.mkdirSync(path.join(vaultPath, 'Protocols'), { recursive: true });
+  });
+  afterEach(() => { db.close(); fs.rmSync(vaultPath, { recursive: true, force: true }); });
+
+  it('returns pending_edit with CM001 filename', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_experiment')!;
+    const r = JSON.parse(await tool.execute({ project_id: 'P001', title: 'Western Blot', experiment_type: 'western-blot' }));
+    expect(r.type).toBe('pending_edit');
+    expect(r.path).toMatch(/CM001-western-blot\.md$/);
+    const fm = matter(r.newContent).data;
+    expect(fm.note_kind).toBe('experiment');
+    expect(fm.id).toBe('CM001');
+    expect(fm.project_id).toBe('P001');
+  });
+
+  it('validates protocol file exists if provided', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_experiment')!;
+    const r = JSON.parse(await tool.execute({ project_id: 'P001', title: 'WB', experiment_type: 'wb', protocol: 'PR999-nonexistent' }));
+    expect(r.error).toContain('PR999-nonexistent');
+  });
+
+  it('errors if project counters not registered', async () => {
+    db.prepare('DELETE FROM serial_counters WHERE scope = ?').run('CM');
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_experiment')!;
+    const r = JSON.parse(await tool.execute({ project_id: 'P001', title: 'Test', experiment_type: 'pcr' }));
+    expect(r.error).toBeDefined();
+  });
+});
+
+describe('create_protocol', () => {
+  let db: Database.Database;
+  let vaultPath: string;
+  beforeEach(() => {
+    db = new Database(':memory:');
+    runMigrations(db);
+    vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), 'prot-'));
+    fs.mkdirSync(path.join(vaultPath, 'Protocols'), { recursive: true });
+  });
+  afterEach(() => { db.close(); fs.rmSync(vaultPath, { recursive: true, force: true }); });
+
+  it('returns PR001 filename with correct frontmatter', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_protocol')!;
+    const r = JSON.parse(await tool.execute({ title: 'Western Blot', category: 'protein-analysis' }));
+    expect(r.path).toMatch(/PR001-western-blot\.md$/);
+    const fm = matter(r.newContent).data;
+    expect(fm.id).toBe('PR001');
+    expect(fm.category).toBe('protein-analysis');
+    expect(fm.malicious).toBeUndefined();
+  });
+});

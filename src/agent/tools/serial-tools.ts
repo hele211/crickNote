@@ -230,5 +230,172 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         return JSON.stringify({ type: 'pending_edit', operation: 'create_project', path: absPath, newContent, reservation: { project_id: projectId, prefix: rawPrefix } });
       },
     },
+
+    // create_experiment
+    {
+      definition: {
+        name: 'create_experiment',
+        description: 'Create a new experiment note in a project using serial numbering. Validates protocol and series existence.',
+        parameters: {
+          type: 'object',
+          properties: {
+            project_id: { type: 'string' },
+            title: { type: 'string' },
+            experiment_type: { type: 'string' },
+            protocol: { type: 'string', description: 'Protocol filename stem (e.g. "PR001-western-blot"). Must exist in Protocols/.' },
+            samples: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, condition: { type: 'string' } } } },
+            reagents: { type: 'array', items: { type: 'string' } },
+            series: { type: 'string', description: 'Series ID to add experiment to (e.g. "CMS001"). Must exist in same project.' },
+          },
+          required: ['project_id', 'title', 'experiment_type'],
+        },
+      },
+      execute: async (args) => {
+        const database = db();
+        const projectId = args.project_id as string;
+        const resolved = resolveProject(projectId, database);
+        if ('error' in resolved) return JSON.stringify({ error: resolved.error });
+        const { prefix, folderPath } = resolved;
+
+        if (args.protocol) {
+          const protocolStem = args.protocol as string;
+          if (protocolStem.includes('/') || protocolStem.includes('\\') || protocolStem.includes('..')) {
+            return JSON.stringify({ error: `Protocol stem "${protocolStem}" contains invalid characters.` });
+          }
+          let protocolPath: string;
+          try {
+            protocolPath = resolveVaultPath(vaultPath, path.join('Protocols', `${protocolStem}.md`));
+          } catch {
+            return JSON.stringify({ error: `Protocol path is invalid.` });
+          }
+          if (!fs.existsSync(protocolPath)) {
+            return JSON.stringify({ error: `Protocol "${protocolStem}" not found in Protocols/. Create it first with create_protocol.` });
+          }
+        }
+
+        if (args.series) {
+          const seriesId = args.series as string;
+          if (!/^[A-Z]{2,3}S\d{3,4}$/.test(seriesId)) {
+            return JSON.stringify({ error: `Series ID "${seriesId}" has invalid format. Expected pattern: CMS001 (2–3 uppercase letters + "S" + 3–4 digits).` });
+          }
+          const seriesFile = fs.readdirSync(folderPath).find(f => f.startsWith(seriesId + '-'));
+          if (!seriesFile) return JSON.stringify({ error: `Series ${seriesId} not found in project ${projectId}.` });
+          let seriesPath: string;
+          try {
+            seriesPath = resolveVaultPath(vaultPath, path.join('Projects', path.basename(folderPath), seriesFile));
+          } catch {
+            return JSON.stringify({ error: `Series file path is invalid.` });
+          }
+          const seriesFm = matter(fs.readFileSync(seriesPath, 'utf-8'));
+          if (seriesFm.data.project_id !== projectId) return JSON.stringify({ error: `Series ${seriesId} belongs to project ${seriesFm.data.project_id}, not ${projectId}.` });
+        }
+
+        const serial = getNextSerial(prefix, database);
+        const expId = `${prefix}${serial}`;
+        const slug = (args.title as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+        const today = new Date().toISOString().slice(0, 10);
+        const samples = (args.samples as Array<{ name: string; condition: string }> | undefined) ?? [];
+        const reagents = (args.reagents as string[] | undefined) ?? [];
+
+        const fmData: Record<string, unknown> = {
+          note_kind: 'experiment', id: expId, project_id: projectId,
+          title: args.title as string, experiment_type: args.experiment_type as string,
+          samples, reagents, status: 'draft', created: today, attachments: [],
+        };
+        if (args.protocol) fmData.protocol = `[[${args.protocol as string}]]`;
+        if (args.series) fmData.series = args.series as string;
+
+        const body = `\n# ${args.title as string}\n\n## ${today} - Initial Setup\n\nTODO: Record experiment here.\n`;
+        const newContent = matter.stringify(body, fmData);
+        const fileName = `${expId}-${slug}.md`;
+        let absPath: string;
+        try {
+          absPath = resolveVaultPath(vaultPath, path.join('Projects', path.basename(folderPath), fileName));
+        } catch {
+          return JSON.stringify({ error: 'Resolved experiment path is outside the vault.' });
+        }
+        return JSON.stringify({ type: 'pending_edit', operation: 'create_experiment', path: absPath, newContent });
+      },
+    },
+
+    // create_series
+    {
+      definition: {
+        name: 'create_series',
+        description: 'Create an experiment series header. After user confirms, use update_series_table to assign experiments.',
+        parameters: {
+          type: 'object',
+          properties: {
+            project_id: { type: 'string' },
+            title: { type: 'string' },
+            objective: { type: 'string' },
+          },
+          required: ['project_id', 'title'],
+        },
+      },
+      execute: async (args) => {
+        const database = db();
+        const projectId = args.project_id as string;
+        const resolved = resolveProject(projectId, database);
+        if ('error' in resolved) return JSON.stringify({ error: resolved.error });
+        const { prefix, folderPath } = resolved;
+
+        const serial = getNextSerial(`${prefix}-S`, database);
+        const seriesId = `${prefix}S${serial}`;
+        const slug = (args.title as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+        const today = new Date().toISOString().slice(0, 10);
+
+        const fmData: Record<string, unknown> = {
+          note_kind: 'series', id: seriesId, project_id: projectId,
+          title: args.title as string, objective: (args.objective as string | undefined) ?? '',
+          status: 'in-progress', created: today,
+        };
+        const body = `\n# ${args.title as string}\n\n## Objective\n${(args.objective as string | undefined) ?? 'TODO'}\n\n<!-- AUTO-GENERATED: experiment-list -->\n## Experiments\n| ID | Name | Status | Created |\n|----|------|--------|----------|\n<!-- END AUTO-GENERATED: experiment-list -->\n\n## Summary\n<!-- User-owned synthesis -->\n`;
+        const newContent = matter.stringify(body, fmData);
+        const fileName = `${seriesId}-${slug}.md`;
+        let absPath: string;
+        try {
+          absPath = resolveVaultPath(vaultPath, path.join('Projects', path.basename(folderPath), fileName));
+        } catch {
+          return JSON.stringify({ error: 'Resolved series path is outside the vault.' });
+        }
+        return JSON.stringify({ type: 'pending_edit', operation: 'create_series', path: absPath, newContent, series_id: seriesId });
+      },
+    },
+
+    // create_protocol
+    {
+      definition: {
+        name: 'create_protocol',
+        description: 'Create a new protocol note with a PR-series serial ID.',
+        parameters: {
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            category: { type: 'string' },
+            derived_from: { type: 'string' },
+          },
+          required: ['title', 'category'],
+        },
+      },
+      execute: async (args) => {
+        const database = db();
+        const serial = getNextSerial('protocol', database);
+        const protId = `PR${serial}`;
+        const slug = (args.title as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+        const today = new Date().toISOString().slice(0, 10);
+        const fmData: Record<string, unknown> = { id: protId, title: args.title as string, version: 1, category: args.category as string, created: today, last_updated: today };
+        if (args.derived_from) fmData.derived_from = `[[${args.derived_from as string}]]`;
+        const body = `\n# ${args.title as string}\n\n## Materials\n\n## Procedure\n\n## Notes\n`;
+        const newContent = matter.stringify(body, fmData);
+        let absPath: string;
+        try {
+          absPath = resolveVaultPath(vaultPath, path.join('Protocols', `${protId}-${slug}.md`));
+        } catch {
+          return JSON.stringify({ error: 'Resolved protocol path is outside the vault.' });
+        }
+        return JSON.stringify({ type: 'pending_edit', operation: 'create_protocol', path: absPath, newContent });
+      },
+    },
   ];
 }
