@@ -112,7 +112,7 @@ function resolveWikilinkPath(
   vaultPath: string,
 ): string | null {
   // Path-safety: reject refs containing traversal or separator characters
-  if (ref.includes('/') || ref.includes('\\') || ref.includes('..')) {
+  if (ref.includes('/') || ref.includes('\\') || ref.includes('..') || ref.includes('\0')) {
     console.warn(`[context-assembler] Wikilink [[${ref}]] contains unsafe path characters — skipping`);
     return null;
   }
@@ -140,9 +140,15 @@ function resolveWikilinkPath(
   if (fs.existsSync(rootPath)) return rootPath;
 
   // Try Reading/ subfolders
+  const readingCandidates: string[] = [];
   for (const sub of ['Papers', 'Threads']) {
     const rPath = path.join(vaultPath, 'Reading', sub, `${baseName}.md`);
-    if (fs.existsSync(rPath)) return rPath;
+    if (fs.existsSync(rPath)) readingCandidates.push(rPath);
+  }
+  if (readingCandidates.length === 1) return readingCandidates[0];
+  if (readingCandidates.length > 1) {
+    console.warn(`[context-assembler] Ambiguous wikilink [[${ref}]] matches ${readingCandidates.length} Reading notes — skipping`);
+    return null;
   }
 
   // Try other common subfolders (one level deep, excluding Knowledge which is already handled)
