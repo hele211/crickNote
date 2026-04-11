@@ -88,7 +88,7 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         const existing = database.prepare('SELECT project_id FROM serial_counters WHERE scope = ?').get(rawPrefix) as { project_id: string | null } | undefined;
         if (existing) {
           if (existing.project_id !== projectId) return JSON.stringify({ error: `Prefix "${rawPrefix}" is permanently registered to another project.` });
-          return JSON.stringify({ reserved: true, expires_at: Date.now() + RESERVATION_TTL_MS });
+          return JSON.stringify({ reserved: true, permanent: true });
         }
 
         const collision = checkPrefixCollision(rawPrefix, projectId, database);

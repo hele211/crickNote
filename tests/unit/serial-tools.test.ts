@@ -146,12 +146,7 @@ describe('register_project_counters', () => {
     const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
     const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'register_project_counters')!;
     const r = JSON.parse(await tool.execute({ project_id: 'P001', prefix: 'CM' }));
-    if (r.registered) {
-      const cmS = db.prepare('SELECT * FROM serial_counters WHERE scope = ?').get('CM-S') as { project_id: string } | undefined;
-      expect(cmS?.project_id).toBe('P001');
-    } else {
-      expect(r.error).toBeDefined();
-    }
+    expect(r.error).toMatch(/Apply the pending project edit/);
   });
 
   it('auto-heals from _index.md when no reservation exists', async () => {
