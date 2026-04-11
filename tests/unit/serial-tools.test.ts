@@ -269,12 +269,18 @@ describe('create_experiment', () => {
     expect(r.error).toContain('PR999-nonexistent');
   });
 
-  it('errors if project counters not registered', async () => {
+  it('auto-heals missing counters and proceeds (no error)', async () => {
     db.prepare('DELETE FROM serial_counters WHERE scope = ?').run('CM');
+    db.prepare('DELETE FROM serial_counters WHERE scope = ?').run('CM-S');
     const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
     const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_experiment')!;
     const r = JSON.parse(await tool.execute({ project_id: 'P001', title: 'Test', experiment_type: 'pcr' }));
-    expect(r.error).toBeDefined();
+    // Should auto-register counters and return a pending_edit, not an error
+    expect(r.error).toBeUndefined();
+    expect(r.type).toBe('pending_edit');
+    // Counters should now exist in DB
+    const cnt = db.prepare('SELECT scope FROM serial_counters WHERE scope = ?').get('CM');
+    expect(cnt).toBeDefined();
   });
 });
 

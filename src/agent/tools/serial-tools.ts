@@ -60,7 +60,15 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
     if (!prefix) return { error: `Project ${projectId} _index.md is missing the prefix field.` };
 
     const counter = database.prepare('SELECT scope FROM serial_counters WHERE scope = ?').get(prefix) as { scope: string } | undefined;
-    if (!counter) return { error: `Project ${projectId} counters not registered. Call register_project_counters(project_id="${projectId}", prefix="${prefix}") first.` };
+    if (!counter) {
+      // Auto-heal: counters missing but _index.md exists — register inline (silently)
+      log.debug('Auto-registering missing counters for project', { projectId, prefix });
+      database.transaction(() => {
+        database.prepare('INSERT OR IGNORE INTO serial_counters (scope, next_val, project_id) VALUES (?, 1, ?)').run(prefix, projectId);
+        database.prepare('INSERT OR IGNORE INTO serial_counters (scope, next_val, project_id) VALUES (?, 1, ?)').run(`${prefix}-S`, projectId);
+        database.prepare('INSERT OR IGNORE INTO prefix_reservations (prefix, project_id, expires_at) VALUES (?, ?, 9999999999999)').run(prefix, projectId);
+      })();
+    }
 
     return { prefix, folderPath };
   }
@@ -202,18 +210,20 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         const existingCounter = database.prepare('SELECT project_id FROM serial_counters WHERE scope = ?').get(rawPrefix) as { project_id: string | null } | undefined;
         if (existingCounter) return JSON.stringify({ error: `Prefix "${rawPrefix}" is already permanently registered to project ${existingCounter.project_id ?? 'unknown'}.` });
 
-        const collision = checkPrefixCollision(rawPrefix, null, database);
-        if (collision) return JSON.stringify({ error: collision });
-
-        const existingRes = database.prepare('SELECT project_id FROM prefix_reservations WHERE prefix = ? AND expires_at > ?').get(rawPrefix, Date.now()) as { project_id: string } | undefined;
-        if (existingRes) return JSON.stringify({ error: `Prefix "${rawPrefix}" is temporarily reserved by project ${existingRes.project_id}.` });
-
         let projectId = '';
+        let collisionError: string | undefined;
         database.transaction(() => {
+          const existingRes = database.prepare('SELECT project_id FROM prefix_reservations WHERE prefix = ? AND expires_at > ?').get(rawPrefix, Date.now()) as { project_id: string } | undefined;
+          if (existingRes) { collisionError = `Prefix "${rawPrefix}" is temporarily reserved by project ${existingRes.project_id}.`; return; }
+
+          const collision = checkPrefixCollision(rawPrefix, null, database);
+          if (collision) { collisionError = collision; return; }
+
           const serial = getNextSerial('project', database);
           projectId = `P${serial}`;
           database.prepare('INSERT INTO prefix_reservations (prefix, project_id, expires_at) VALUES (?, ?, ?)').run(rawPrefix, projectId, Date.now() + RESERVATION_TTL_MS);
         })();
+        if (collisionError) return JSON.stringify({ error: collisionError });
 
         const slug = title.replace(/[^a-zA-Z0-9]+/g, '') || 'Untitled';
         const folderName = `${projectId}-${slug}`;
@@ -285,8 +295,10 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
           } catch {
             return JSON.stringify({ error: `Could not read project folder for ${projectId}.` });
           }
-          const seriesFile = seriesFiles.find(f => f.startsWith(seriesId + '-'));
-          if (!seriesFile) return JSON.stringify({ error: `Series ${seriesId} not found in project ${projectId}.` });
+          const seriesMatches = seriesFiles.filter(f => f.startsWith(seriesId + '-'));
+          if (seriesMatches.length > 1) return JSON.stringify({ error: `Ambiguous: multiple files found for ${seriesId} — fix vault structure before continuing.` });
+          if (seriesMatches.length === 0) return JSON.stringify({ error: `Series ${seriesId} not found in project ${projectId}.` });
+          const seriesFile = seriesMatches[0];
           let seriesPath: string;
           try {
             seriesPath = resolveVaultPath(vaultPath, path.join('Projects', path.basename(folderPath), seriesFile));
@@ -336,6 +348,7 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
             project_id: { type: 'string' },
             title: { type: 'string' },
             objective: { type: 'string' },
+            experiments: { type: 'array', items: { type: 'string' }, description: 'Optional list of existing experiment IDs to include in this series' },
           },
           required: ['project_id', 'title'],
         },
@@ -347,6 +360,46 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         if ('error' in resolved) return JSON.stringify({ error: resolved.error });
         const { prefix, folderPath } = resolved;
 
+        // Validate experiments if provided
+        const experimentIds = (args.experiments as string[] | undefined) ?? [];
+        const validatedExperimentIds: string[] = [];
+        if (experimentIds.length > 0) {
+          // Check for duplicates in input
+          const seen = new Set<string>();
+          for (const id of experimentIds) {
+            if (seen.has(id)) return JSON.stringify({ error: `Duplicate experiment ID ${id} in input` });
+            seen.add(id);
+          }
+
+          let folderEntries: string[];
+          try {
+            folderEntries = fs.readdirSync(folderPath);
+          } catch {
+            return JSON.stringify({ error: `Could not read project folder for ${projectId}.` });
+          }
+
+          for (const id of experimentIds) {
+            const expMatches = folderEntries.filter(f => f.startsWith(id + '-') && f.endsWith('.md'));
+            if (expMatches.length === 0) return JSON.stringify({ error: `Experiment ${id} not found` });
+            if (expMatches.length > 1) return JSON.stringify({ error: `Ambiguous: multiple files found for experiment ${id}` });
+
+            let expPath: string;
+            try {
+              expPath = resolveVaultPath(vaultPath, path.join('Projects', path.basename(folderPath), expMatches[0]));
+            } catch {
+              return JSON.stringify({ error: `Experiment ${id} file path is invalid.` });
+            }
+            const expFm = matter(fs.readFileSync(expPath, 'utf-8'));
+            if (expFm.data.project_id !== projectId) {
+              return JSON.stringify({ error: `Experiment ${id} belongs to project ${expFm.data.project_id as string}, not ${projectId}` });
+            }
+            if (expFm.data.series) {
+              return JSON.stringify({ error: `Experiment ${id} is already in series ${expFm.data.series as string}. Remove it from that series first, or omit it from this list.` });
+            }
+            validatedExperimentIds.push(id);
+          }
+        }
+
         const serial = getNextSerial(`${prefix}-S`, database);
         const seriesId = `${prefix}S${serial}`;
         const slug = (args.title as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
@@ -357,7 +410,10 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
           title: args.title as string, objective: (args.objective as string | undefined) ?? '',
           status: 'in-progress', created: today,
         };
-        const body = `\n# ${args.title as string}\n\n## Objective\n${(args.objective as string | undefined) ?? 'TODO'}\n\n<!-- AUTO-GENERATED: experiment-list -->\n## Experiments\n| ID | Name | Status | Created |\n|----|------|--------|----------|\n<!-- END AUTO-GENERATED: experiment-list -->\n\n## Summary\n<!-- User-owned synthesis -->\n`;
+        const experimentListRows = validatedExperimentIds.length > 0
+          ? validatedExperimentIds.map(id => `| ${id} | (see note) | draft | ${today} |`).join('\n')
+          : '';
+        const body = `\n# ${args.title as string}\n\n## Objective\n${(args.objective as string | undefined) ?? 'TODO'}\n\n<!-- AUTO-GENERATED: experiment-list -->\n## Experiments\n| ID | Name | Status | Created |\n|----|------|--------|----------|\n${experimentListRows}\n<!-- END AUTO-GENERATED: experiment-list -->\n\n## Summary\n<!-- User-owned synthesis -->\n`;
         const newContent = matter.stringify(body, fmData);
         const fileName = `${seriesId}-${slug}.md`;
         let absPath: string;
@@ -492,8 +548,10 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         } catch {
           return JSON.stringify({ error: `Could not read project folder for ${args.project_id as string}.` });
         }
-        const seriesFile = entries.find(f => f.startsWith(seriesId + '-'));
-        if (!seriesFile) return JSON.stringify({ error: `Series ${seriesId} not found in project ${args.project_id as string}.` });
+        const seriesMatches = entries.filter(f => f.startsWith(seriesId + '-'));
+        if (seriesMatches.length > 1) return JSON.stringify({ error: `Ambiguous: multiple files found for ${seriesId} — fix vault structure before continuing.` });
+        if (seriesMatches.length === 0) return JSON.stringify({ error: `Series ${seriesId} not found in project ${args.project_id as string}.` });
+        const seriesFile = seriesMatches[0];
         // Use path.join (not resolveVaultPath) so fencedSectionUpdate receives a
         // path in the same symlink-space as vaultPath, avoiding false traversal errors.
         // resolveProject already confirmed folderPath is inside the vault.

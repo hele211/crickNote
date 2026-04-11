@@ -180,7 +180,8 @@ export class AgentRuntime {
           if (parsed.type === 'pending_edit') {
             // Vault tools now embed the resolved absolute path; validate it stays within the vault.
             const absolutePath = parsed.path as string;
-            if (!path.isAbsolute(absolutePath) || (absolutePath !== this.realVaultPath && !absolutePath.startsWith(this.realVaultPath + path.sep))) {
+            const normalizedPath = path.normalize(absolutePath);
+            if (!path.isAbsolute(normalizedPath) || (normalizedPath !== this.realVaultPath && !normalizedPath.startsWith(this.realVaultPath + path.sep))) {
               log.warn('Path escapes vault boundary', { path: absolutePath, tool: tc.name });
               history.push({ role: 'tool', content: JSON.stringify({ error: 'Path escapes vault boundary' }), toolCallId: tc.id });
               continue;
