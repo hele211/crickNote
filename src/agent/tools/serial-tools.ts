@@ -61,7 +61,17 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
 
     const counter = database.prepare('SELECT scope FROM serial_counters WHERE scope = ?').get(prefix) as { scope: string } | undefined;
     if (!counter) {
-      // Auto-heal: counters missing but _index.md exists — register inline (silently)
+      // Auto-heal: counters missing but _index.md exists — validate before registering inline
+      const collisionMsg = checkPrefixCollision(prefix, projectId, database);
+      if (collisionMsg) return { error: collisionMsg };
+
+      const foreignReservation = database.prepare(
+        'SELECT project_id FROM prefix_reservations WHERE prefix = ? AND expires_at > ?'
+      ).get(prefix, Date.now()) as { project_id: string } | undefined;
+      if (foreignReservation && foreignReservation.project_id !== projectId) {
+        return { error: `Prefix ${prefix} is reserved by another project — vault may be in an inconsistent state. Resolve manually.` };
+      }
+
       log.debug('Auto-registering missing counters for project', { projectId, prefix });
       database.transaction(() => {
         database.prepare('INSERT OR IGNORE INTO serial_counters (scope, next_val, project_id) VALUES (?, 1, ?)').run(prefix, projectId);
@@ -213,6 +223,9 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         let projectId = '';
         let collisionError: string | undefined;
         database.transaction(() => {
+          const counterConflict = database.prepare('SELECT scope FROM serial_counters WHERE scope = ?').get(rawPrefix);
+          if (counterConflict) { collisionError = `Prefix "${rawPrefix}" already has a permanent counter — it is already registered.`; return; }
+
           const existingRes = database.prepare('SELECT project_id FROM prefix_reservations WHERE prefix = ? AND expires_at > ?').get(rawPrefix, Date.now()) as { project_id: string } | undefined;
           if (existingRes) { collisionError = `Prefix "${rawPrefix}" is temporarily reserved by project ${existingRes.project_id}.`; return; }
 
@@ -392,6 +405,9 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
             const expFm = matter(fs.readFileSync(expPath, 'utf-8'));
             if (expFm.data.project_id !== projectId) {
               return JSON.stringify({ error: `Experiment ${id} belongs to project ${expFm.data.project_id as string}, not ${projectId}` });
+            }
+            if (expFm.data.note_kind !== 'experiment') {
+              return JSON.stringify({ error: `${id} is not an experiment note (note_kind: ${String(expFm.data.note_kind ?? 'unknown')})` });
             }
             if (expFm.data.series) {
               return JSON.stringify({ error: `Experiment ${id} is already in series ${expFm.data.series as string}. Remove it from that series first, or omit it from this list.` });
