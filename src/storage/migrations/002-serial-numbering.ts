@@ -1,6 +1,12 @@
 import type Database from 'better-sqlite3';
 
 export function applyMigration002(db: Database.Database): void {
+  // ALTER TABLE must be outside the transaction (SQLite DDL forces implicit commit)
+  for (const [col, type] of [['note_id', 'TEXT'], ['series', 'TEXT'], ['project_id', 'TEXT'], ['last_session', 'TEXT']] as Array<[string, string]>) {
+    try { db.exec(`ALTER TABLE note_metadata ADD COLUMN ${col} ${type};`); }
+    catch (e) { if (!(e as Error).message.includes('duplicate column name')) throw e; }
+  }
+
   db.transaction(() => {
     db.exec(`
       CREATE TABLE IF NOT EXISTS workflow_events (
@@ -17,6 +23,7 @@ export function applyMigration002(db: Database.Database): void {
         edit_id    TEXT,
         expires_at INTEGER NOT NULL
       );
+      CREATE INDEX IF NOT EXISTS idx_prefix_reservations_expires ON prefix_reservations(expires_at);
       CREATE TABLE IF NOT EXISTS serial_counters (
         scope      TEXT PRIMARY KEY,
         next_val   INTEGER NOT NULL DEFAULT 1,
@@ -24,14 +31,10 @@ export function applyMigration002(db: Database.Database): void {
       );
     `);
     db.exec(`INSERT OR IGNORE INTO serial_counters (scope, next_val, project_id) VALUES ('project', 1, NULL), ('protocol', 1, NULL);`);
-    for (const [col, type] of [['note_id', 'TEXT'], ['series', 'TEXT'], ['project_id', 'TEXT'], ['last_session', 'TEXT']] as Array<[string, string]>) {
-      try { db.exec(`ALTER TABLE note_metadata ADD COLUMN ${col} ${type};`); }
-      catch (e) { if (!(e as Error).message.includes('duplicate column name')) throw e; }
-    }
     db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_note_metadata_note_id ON note_metadata(note_id) WHERE note_id IS NOT NULL;
-      CREATE INDEX IF NOT EXISTS idx_note_metadata_series ON note_metadata(series);
-      CREATE INDEX IF NOT EXISTS idx_note_metadata_project_id ON note_metadata(project_id);
+      CREATE INDEX IF NOT EXISTS idx_note_metadata_series ON note_metadata(series) WHERE series IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_note_metadata_project_id ON note_metadata(project_id) WHERE project_id IS NOT NULL;
     `);
     db.prepare('INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)').run(2, Date.now());
   })();
