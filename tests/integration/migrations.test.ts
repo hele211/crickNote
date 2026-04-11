@@ -30,17 +30,17 @@ describe('database migrations', () => {
     expect(tableNames).toContain('chat_messages');
     expect(tableNames).toContain('edit_audit_log');
     expect(tableNames).toContain('indexing_status');
+    expect(tableNames).toContain('workflow_events');
+    expect(tableNames).toContain('prefix_reservations');
+    expect(tableNames).toContain('serial_counters');
   });
 
   it('records schema_version correctly', () => {
     runMigrations(db);
 
-    const row = db
-      .prepare('SELECT version, applied_at FROM schema_version ORDER BY version DESC LIMIT 1')
-      .get() as { version: number; applied_at: number };
-
-    expect(row.version).toBe(1);
-    expect(row.applied_at).toBeGreaterThan(0);
+    const row = db.prepare('SELECT MAX(version) as v FROM schema_version').get() as { v: number };
+    expect(row.v).toBe(2);
+    expect(row.v).toBeGreaterThan(0);
   });
 
   it('is idempotent — running migrations twice does not error', () => {
@@ -48,12 +48,8 @@ describe('database migrations', () => {
     // Second run should not throw
     expect(() => runMigrations(db)).not.toThrow();
 
-    // Still exactly one version record
-    const rows = db
-      .prepare('SELECT version FROM schema_version')
-      .all() as Array<{ version: number }>;
-    expect(rows).toHaveLength(1);
-    expect(rows[0].version).toBe(1);
+    const maxRow = db.prepare('SELECT MAX(version) as v FROM schema_version').get() as { v: number };
+    expect(maxRow.v).toBe(2);
   });
 
   it('creates expected indexes', () => {

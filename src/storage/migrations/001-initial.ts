@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { applyMigration002 } from './002-serial-numbering.js';
 
 export function runMigrations(db: Database.Database): void {
   db.exec(`
@@ -13,6 +14,10 @@ export function runMigrations(db: Database.Database): void {
 
   if (currentVersion < 1) {
     applyMigration001(db);
+  }
+
+  if (currentVersion < 2) {
+    applyMigration002(db);
   }
 }
 
