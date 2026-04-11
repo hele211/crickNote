@@ -47,7 +47,7 @@ export interface ParsedNote {
 
 /** Required fields per note type (legacy path-based classification). */
 const REQUIRED_FIELDS: Record<NoteType, string[]> = {
-  experiment: ['date', 'project', 'experiment_type', 'protocol', 'samples', 'result_summary', 'status'],
+  experiment: [],
   series: [],
   'project-index': [],
   protocol: ['title', 'version', 'last_updated', 'category'],
@@ -229,7 +229,7 @@ export function parseNote(filePath: string, content: string): ParsedNote {
 
   // Compute lastSession for experiment notes
   let lastSession: string | undefined;
-  if (noteType === 'experiment') {
+  if (noteType === 'experiment' || noteType === 'series' || noteType === 'project-index') {
     lastSession = extractLastSession(body) || createdDate || undefined;
   }
 
