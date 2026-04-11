@@ -203,7 +203,7 @@ describe('create_project', () => {
     const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
     const r = JSON.parse(await tool.execute({ title: 'Test', prefix: 'TOOLONG' }));
     expect(r.error).toBeDefined();
-    expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('project') as { next_val: number }).next_val).toBe(1);
+    expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('project') as { next_val: number } | undefined)?.next_val ?? -1).toBe(1);
   });
 
   it('rejects prefix already permanently registered to another project', async () => {
@@ -212,7 +212,7 @@ describe('create_project', () => {
     const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
     const r = JSON.parse(await tool.execute({ title: 'Test', prefix: 'CM' }));
     expect(r.error).toMatch(/already permanently registered/);
-    expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('project') as { next_val: number }).next_val).toBe(1);
+    expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('project') as { next_val: number } | undefined)?.next_val ?? -1).toBe(1);
   });
 
   it('rejects prefix reserved by different project', async () => {
@@ -221,14 +221,14 @@ describe('create_project', () => {
     const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
     const r = JSON.parse(await tool.execute({ title: 'Test', prefix: 'CM' }));
     expect(r.error).toBeDefined();
-    expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('project') as { next_val: number }).next_val).toBe(1);
+    expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('project') as { next_val: number } | undefined)?.next_val ?? -1).toBe(1);
   });
 
   it('stores reservation after allocating serial', async () => {
     const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
     const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
     await tool.execute({ title: 'Cell Migration', prefix: 'CM' });
-    expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('project') as { next_val: number }).next_val).toBe(2);
+    expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('project') as { next_val: number } | undefined)?.next_val ?? -1).toBe(2);
     const res = db.prepare('SELECT project_id FROM prefix_reservations WHERE prefix = ?').get('CM') as { project_id: string } | undefined;
     expect(res?.project_id).toBe('P001');
   });
