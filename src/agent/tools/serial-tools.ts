@@ -421,7 +421,12 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
           'SELECT id, event_type, payload, timestamp FROM workflow_events WHERE session_id = ? AND id > ? ORDER BY id ASC'
         ).all(sessionId, afterId) as Array<{ id: number; event_type: string; payload: string; timestamp: number }>;
         const cursor = events.length > 0 ? events[events.length - 1].id : null;
-        return JSON.stringify({ events: events.map(e => ({ id: e.id, event_type: e.event_type, payload: JSON.parse(e.payload), timestamp: e.timestamp })), cursor });
+        const mapped = events.map(e => {
+          let payload: unknown;
+          try { payload = JSON.parse(e.payload); } catch { payload = e.payload; }
+          return { id: e.id, event_type: e.event_type, payload, timestamp: e.timestamp };
+        });
+        return JSON.stringify({ events: mapped, cursor });
       },
     },
 
@@ -493,6 +498,10 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         // path in the same symlink-space as vaultPath, avoiding false traversal errors.
         // resolveProject already confirmed folderPath is inside the vault.
         const seriesPath = path.join(resolved.folderPath, seriesFile);
+        const seriesFm = matter(fs.readFileSync(seriesPath, 'utf-8'));
+        if (seriesFm.data.project_id !== (args.project_id as string)) {
+          return JSON.stringify({ error: `Series ${seriesId} belongs to project ${String(seriesFm.data.project_id)}, not ${args.project_id as string}.` });
+        }
         try {
           fencedSectionUpdate(seriesPath, 'experiment-list', args.content as string, vaultPath);
           return JSON.stringify({ updated: true });
