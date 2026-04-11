@@ -204,7 +204,7 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         const collision = checkPrefixCollision(rawPrefix, null, database);
         if (collision) return JSON.stringify({ error: collision });
 
-        const existingRes = database.prepare('SELECT project_id FROM prefix_reservations WHERE prefix = ?').get(rawPrefix) as { project_id: string } | undefined;
+        const existingRes = database.prepare('SELECT project_id FROM prefix_reservations WHERE prefix = ? AND expires_at > ?').get(rawPrefix, Date.now()) as { project_id: string } | undefined;
         if (existingRes) return JSON.stringify({ error: `Prefix "${rawPrefix}" is temporarily reserved by project ${existingRes.project_id}.` });
 
         let projectId = '';
@@ -214,13 +214,19 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
           database.prepare('INSERT INTO prefix_reservations (prefix, project_id, expires_at) VALUES (?, ?, ?)').run(rawPrefix, projectId, Date.now() + RESERVATION_TTL_MS);
         })();
 
-        const folderName = `${projectId}-${title.replace(/[^a-zA-Z0-9]+/g, '')}`;
+        const slug = title.replace(/[^a-zA-Z0-9]+/g, '') || 'Untitled';
+        const folderName = `${projectId}-${slug}`;
         const today = new Date().toISOString().slice(0, 10);
         const fmData: Record<string, unknown> = { note_kind: 'project', id: projectId, prefix: rawPrefix, title, status: 'active', created: today };
         if (args.description) fmData.description = args.description as string;
         const body = `\n<!-- AUTO-GENERATED: experiment-log -->\n## Experiment Log\n| Series | ID | Name | Status | Created |\n|--------|-----|------|--------|----------|\n<!-- END AUTO-GENERATED: experiment-log -->\n\n<!-- AUTO-GENERATED: project-summary -->\n## Project Summary\n(auto-updated)\n<!-- END AUTO-GENERATED: project-summary -->\n\n## Related Knowledge Concepts\n\n## Related Reading\n\n## Related Protocols\n\n## Open Questions\n`;
         const newContent = matter.stringify(body, fmData);
-        const absPath = resolveVaultPath(vaultPath, path.join('Projects', folderName, '_index.md'));
+        let absPath: string;
+        try {
+          absPath = resolveVaultPath(vaultPath, path.join('Projects', folderName, '_index.md'));
+        } catch {
+          return JSON.stringify({ error: 'Resolved project path is outside the vault.' });
+        }
         return JSON.stringify({ type: 'pending_edit', operation: 'create_project', path: absPath, newContent, reservation: { project_id: projectId, prefix: rawPrefix } });
       },
     },
