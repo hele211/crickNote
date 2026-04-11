@@ -26,6 +26,12 @@ describe('autoWrite', () => {
     fs.mkdirSync(path.dirname(target), { recursive: true });
     expect(() => autoWrite(target, '# x', vaultPath)).toThrow('autoWrite not permitted');
   });
+
+  it('writes a mapping file in Reading/Papers', () => {
+    const target = path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-mapping.md');
+    autoWrite(target, '# mapping', vaultPath);
+    expect(fs.readFileSync(target, 'utf-8')).toBe('# mapping');
+  });
 });
 
 describe('fencedSectionUpdate', () => {
@@ -65,6 +71,7 @@ describe('frontmatterFieldUpdate', () => {
   beforeEach(() => {
     vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ffu-test-'));
     fs.mkdirSync(path.join(vaultPath, 'Reading', 'Papers'), { recursive: true });
+    fs.mkdirSync(path.join(vaultPath, 'Knowledge', 'Concepts'), { recursive: true });
   });
   afterEach(() => { fs.rmSync(vaultPath, { recursive: true, force: true }); });
 
@@ -82,5 +89,22 @@ describe('frontmatterFieldUpdate', () => {
     const filePath = path.join(vaultPath, 'Reading', 'Papers', 'smith-2026.md');
     fs.writeFileSync(filePath, '---\ntitle: x\n---\n');
     expect(() => frontmatterFieldUpdate(filePath, 'title', 'new', vaultPath)).toThrow('not permitted');
+  });
+
+  it('updates needs_review in a Knowledge/Concepts note', () => {
+    const filePath = path.join(vaultPath, 'Knowledge', 'Concepts', 'pcr.md');
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, '---\ntitle: PCR\nneeds_review: false\n---\n\n# Body');
+    frontmatterFieldUpdate(filePath, 'needs_review', true, vaultPath);
+    const content = fs.readFileSync(filePath, 'utf-8');
+    expect(content).toContain('needs_review: true');
+    expect(content).toContain('# Body');
+  });
+
+  it('throws for needs_review on _index.md (excluded)', () => {
+    const filePath = path.join(vaultPath, 'Knowledge', 'Concepts', '_index.md');
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, '---\ntitle: x\n---\n');
+    expect(() => frontmatterFieldUpdate(filePath, 'needs_review', true, vaultPath)).toThrow('not permitted');
   });
 });
