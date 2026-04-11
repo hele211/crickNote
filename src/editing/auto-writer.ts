@@ -40,7 +40,7 @@ function writeFile(absPath: string, content: string): void {
 }
 
 function resolveChecked(filePath: string, vaultPath: string): { abs: string; rel: string } {
-  const rel = path.relative(vaultPath, filePath).replace(/\\/g, '/');
+  const rel = path.relative(vaultPath, path.resolve(filePath)).replace(/\\/g, '/');
   const abs = resolveVaultPath(vaultPath, rel); // throws if outside vault
   return { abs, rel };
 }

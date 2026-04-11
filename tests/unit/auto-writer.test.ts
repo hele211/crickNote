@@ -32,6 +32,12 @@ describe('autoWrite', () => {
     autoWrite(target, '# mapping', vaultPath);
     expect(fs.readFileSync(target, 'utf-8')).toBe('# mapping');
   });
+
+  it('rejects a vault-escape path', () => {
+    const escapeTarget = path.join(vaultPath, '..', '..', 'etc', 'passwd');
+    expect(() => autoWrite(escapeTarget, 'x', vaultPath))
+      .toThrow(/traversal rejected|autoWrite not permitted/);
+  });
 });
 
 describe('fencedSectionUpdate', () => {
@@ -63,6 +69,24 @@ describe('fencedSectionUpdate', () => {
     const filePath = path.join(vaultPath, 'Projects', 'P001-CellMigration', '_index.md');
     fs.writeFileSync(filePath, '# no fence');
     expect(() => fencedSectionUpdate(filePath, 'experiment-log', 'x', vaultPath)).toThrow("fence 'experiment-log' not found");
+  });
+
+  it('throws if close marker not found', () => {
+    const filePath = path.join(vaultPath, 'Projects', 'P001-CellMigration', '_index.md');
+    fs.writeFileSync(filePath, '<!-- AUTO-GENERATED: experiment-log -->\nno close tag');
+    expect(() => fencedSectionUpdate(filePath, 'experiment-log', 'x', vaultPath))
+      .toThrow("END AUTO-GENERATED fence 'experiment-log' not found");
+  });
+
+  it('throws for duplicate open marker', () => {
+    const filePath = path.join(vaultPath, 'Projects', 'P001-CellMigration', '_index.md');
+    fs.writeFileSync(
+      filePath,
+      '<!-- AUTO-GENERATED: experiment-log -->\nfirst\n<!-- END AUTO-GENERATED: experiment-log -->\n' +
+      '<!-- AUTO-GENERATED: experiment-log -->\nsecond\n<!-- END AUTO-GENERATED: experiment-log -->\n'
+    );
+    expect(() => fencedSectionUpdate(filePath, 'experiment-log', 'x', vaultPath))
+      .toThrow("Duplicate AUTO-GENERATED fence 'experiment-log'");
   });
 });
 
