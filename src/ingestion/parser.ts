@@ -2,7 +2,7 @@ import matter from 'gray-matter';
 import { utcDateString } from '../utils/date.js';
 
 /** Note type classifications based on vault folder structure or note_kind frontmatter. */
-export type NoteType = 'experiment' | 'protocol' | 'reading' | 'diary' | 'agent' | 'series' | 'project-index' | 'unknown';
+export type NoteType = 'experiment' | 'protocol' | 'reading' | 'diary' | 'agent' | 'series' | 'project-index' | 'knowledge' | 'review-queue' | 'unknown';
 
 /** Top-level folder name in the vault. */
 export type VaultFolder = 'Projects' | 'Protocols' | 'Reading' | 'Memory' | 'Agent';
@@ -43,6 +43,14 @@ export interface ParsedNote {
   projectId?: string;
   lastSession?: string;
   noteKind?: string;
+  // Knowledge base fields
+  kbStatus?: string;
+  knowledgeKind?: string;
+  needsReview?: boolean;
+  reviewFlaggedAt?: string;
+  aliases?: string[];
+  rqSource?: string;
+  rqTarget?: string;
 }
 
 /** Required fields per note type (legacy path-based classification). */
@@ -54,6 +62,8 @@ const REQUIRED_FIELDS: Record<NoteType, string[]> = {
   reading: ['title', 'authors', 'year', 'journal', 'read_date'],
   diary: ['date', 'type'],
   agent: [],
+  knowledge: [],
+  'review-queue': [],
   unknown: [],
 };
 
@@ -103,6 +113,12 @@ export function classifyNote(filePath: string, noteKind?: string): { folder: str
       return { folder: 'Memory', noteType: 'diary' };
     case 'Agent':
       return { folder: 'Agent', noteType: 'agent' };
+    case 'Knowledge': {
+      const segments = normalized.split('/');
+      if (segments[1] === 'Review-Queue') return { folder: 'Knowledge', noteType: 'review-queue' };
+      if (segments[1] === '_Ops') return { folder: 'Knowledge', noteType: 'unknown' };
+      return { folder: 'Knowledge', noteType: 'knowledge' };
+    }
     default:
       return { folder: firstSegment || 'root', noteType: 'unknown' };
   }
@@ -153,10 +169,14 @@ function validateFrontmatter(
 
   if (frontmatter['status'] && typeof frontmatter['status'] === 'string') {
     const validStatuses = ['draft', 'in-progress', 'complete'];
-    if (!validStatuses.includes(frontmatter['status'])) {
+    const reviewQueueStatuses = ['pending', 'resolved', 'dismissed'];
+    const allValid = noteType === 'review-queue'
+      ? reviewQueueStatuses
+      : validStatuses;
+    if (!allValid.includes(frontmatter['status'])) {
       warnings.push({
         field: 'status',
-        message: `Field "status" should be one of: ${validStatuses.join(', ')}. Got "${frontmatter['status']}".`,
+        message: `Field "status" should be one of: ${allValid.join(', ')}. Got "${frontmatter['status']}".`,
       });
     }
   }
@@ -227,6 +247,24 @@ export function parseNote(filePath: string, content: string): ParsedNote {
   const seriesField = normalizeString(frontmatter['series']) || undefined;
   const projectId = normalizeString(frontmatter['project_id']) || undefined;
 
+  // Knowledge base fields
+  const kbStatus = normalizeString(frontmatter['kb_status']) || undefined;
+  const knowledgeKind = normalizeString(frontmatter['knowledge_kind']) || undefined;
+  const needsReviewRaw = frontmatter['needs_review'];
+  const needsReview = needsReviewRaw !== undefined && needsReviewRaw !== null
+    ? Boolean(needsReviewRaw) : undefined;
+  const reviewFlaggedAt = normalizeString(frontmatter['review_flagged_at']) || undefined;
+
+  const aliasesRaw = frontmatter['aliases'];
+  const aliases: string[] | undefined = Array.isArray(aliasesRaw)
+    ? aliasesRaw.map(String)
+    : typeof aliasesRaw === 'string' && aliasesRaw.trim()
+      ? [aliasesRaw.trim()]
+      : undefined;
+
+  const rqSource = normalizeString(frontmatter['rq_source']) || undefined;
+  const rqTarget = normalizeString(frontmatter['rq_target']) || undefined;
+
   // Compute lastSession for experiment notes
   let lastSession: string | undefined;
   if (noteType === 'experiment' || noteType === 'series' || noteType === 'project-index') {
@@ -253,6 +291,13 @@ export function parseNote(filePath: string, content: string): ParsedNote {
     projectId,
     noteKind,
     lastSession,
+    kbStatus,
+    knowledgeKind,
+    needsReview,
+    reviewFlaggedAt,
+    aliases,
+    rqSource,
+    rqTarget,
   };
 }
 

@@ -30,8 +30,9 @@ export function indexNote(input: IndexNoteInput, db?: Database.Database): void {
     // 1. Upsert note_metadata
     database.prepare(`
       INSERT INTO note_metadata (path, folder, note_type, date, project, project_id, note_id, series,
-        last_session, experiment_type, protocol_ref, status, tags, result_summary, content_hash, mtime, last_indexed)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        last_session, experiment_type, protocol_ref, status, tags, result_summary, content_hash, mtime, last_indexed,
+        kb_status, knowledge_kind, needs_review, review_flagged_at, aliases, rq_source, rq_target)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(path) DO UPDATE SET
         folder = excluded.folder,
         note_type = excluded.note_type,
@@ -48,7 +49,14 @@ export function indexNote(input: IndexNoteInput, db?: Database.Database): void {
         result_summary = excluded.result_summary,
         content_hash = excluded.content_hash,
         mtime = excluded.mtime,
-        last_indexed = excluded.last_indexed
+        last_indexed = excluded.last_indexed,
+        kb_status = excluded.kb_status,
+        knowledge_kind = excluded.knowledge_kind,
+        needs_review = excluded.needs_review,
+        review_flagged_at = excluded.review_flagged_at,
+        aliases = excluded.aliases,
+        rq_source = excluded.rq_source,
+        rq_target = excluded.rq_target
     `).run(
       note.filePath,
       note.folder,
@@ -66,7 +74,14 @@ export function indexNote(input: IndexNoteInput, db?: Database.Database): void {
       note.resultSummary ?? null,
       contentHash,
       mtime,
-      now
+      now,
+      note.kbStatus ?? null,
+      note.knowledgeKind ?? null,
+      note.needsReview != null ? (note.needsReview ? 1 : 0) : null,
+      note.reviewFlaggedAt ?? null,
+      note.aliases ? JSON.stringify(note.aliases) : null,
+      note.rqSource ?? null,
+      note.rqTarget ?? null
     );
 
     // 2. Delete existing chunks (cascade will remove embeddings and BM25 entries)
