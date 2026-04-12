@@ -76,6 +76,13 @@ export async function loadSources(
       continue;
     }
 
+    // Reject paths that escape the attachment folder
+    const normalizedSrcPath = path.normalize(src.path);
+    if (normalizedSrcPath.startsWith('..') || path.isAbsolute(normalizedSrcPath)) {
+      warnings.push(`Skipping "${src.path}" — source paths must be relative to the attachment folder.`);
+      continue;
+    }
+
     let absPath: string;
     try {
       absPath = resolveVaultPath(vaultPath, path.join('Reading', 'attachments', sourceSlug, src.path));
