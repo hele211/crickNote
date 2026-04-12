@@ -982,5 +982,196 @@ ${updateLog.notes || ''}
         });
       },
     },
+
+    // -----------------------------------------------------------------------
+    // kb_lint
+    // -----------------------------------------------------------------------
+    {
+      definition: {
+        name: 'kb_lint',
+        description:
+          'Run structural health checks on the knowledge base (8 checks). Writes a dated report to Knowledge/_Ops/Lint-Reports/ and returns a summary.',
+        parameters: {
+          type: 'object',
+          properties: {
+            target: {
+              type: 'string',
+              description: 'Optional: specific folder or note to lint (relative vault path). Default: entire vault.',
+            },
+          },
+        },
+      },
+      execute: async (args) => {
+        const urgent: string[] = [];
+        const needsAttention: string[] = [];
+        const niceToImprove: string[] = [];
+
+        const targetArg = args.target as string | undefined;
+        const lintRoot = targetArg
+          ? (() => { try { return resolveVaultPath(vaultPath, targetArg); } catch { return vaultPath; } })()
+          : vaultPath;
+
+        function collectMdFiles(dir: string): string[] {
+          if (!fs.existsSync(dir)) return [];
+          const results: string[] = [];
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) results.push(...collectMdFiles(full));
+            else if (entry.isFile() && entry.name.endsWith('.md')) results.push(full);
+          }
+          return results;
+        }
+
+        const allFiles = collectMdFiles(lintRoot);
+
+        const allVaultFiles = lintRoot === vaultPath ? allFiles : collectMdFiles(vaultPath);
+        const existingSlugs = new Set(allVaultFiles.map(f => path.basename(f, '.md')));
+
+        for (const absPath of allFiles) {
+          const rel = path.relative(vaultPath, absPath).replace(/\\/g, '/');
+          let raw: string;
+          try { raw = fs.readFileSync(absPath, 'utf-8'); } catch { continue; }
+          const parsed = matter(raw);
+          const fm = parsed.data as Record<string, unknown>;
+          const body = parsed.content;
+          const slug = path.basename(absPath, '.md');
+          const isKnowledge = rel.match(/^Knowledge\/(Concepts|Entities|Methods)\/(?!_index)/);
+          const isReading = rel.startsWith('Reading/Papers/') || rel.startsWith('Reading/Threads/');
+          const isReviewQueue = rel.startsWith('Knowledge/Review-Queue/');
+
+          // Check 1: knowledge note with no compiled_from
+          if (isKnowledge) {
+            const cf = fm['compiled_from'];
+            if (!cf || (Array.isArray(cf) && cf.length === 0)) {
+              urgent.push(`[[${slug}]] has no compiled_from — no source attribution`);
+            }
+          }
+
+          // Check 2: claim bullet without source link
+          if (isKnowledge) {
+            for (const line of body.split('\n')) {
+              if (/^- \[(?:supports|contradicts|extends)\]/.test(line) && !line.includes('[[')) {
+                urgent.push(`[[${slug}]] has a claim bullet without a source link: "${line.slice(0, 80)}"`);
+              }
+            }
+          }
+
+          // Check 3: broken wikilinks
+          const wikilinkRegex = /\[\[([^\]|#]+)(?:[|\]#][^\]]*)??\]\]/g;
+          let wm: RegExpExecArray | null;
+          while ((wm = wikilinkRegex.exec(body)) !== null) {
+            const linked = wm[1].trim();
+            if (!existingSlugs.has(linked)) {
+              urgent.push(`[[${slug}]] has broken link to [[${linked}]]`);
+            }
+          }
+
+          // Check 4: reading note complete but not merged
+          if (isReading && fm['status'] === 'complete') {
+            const kbStat = fm['kb_status'] as string | undefined;
+            if (!kbStat || ['pending', 'mapped', 'merged_with_review'].includes(kbStat)) {
+              needsAttention.push(`[[${slug}]] is complete but kb_status is "${kbStat ?? 'unset'}" — unfinished KB work`);
+            }
+          }
+
+          // Check 5: stale needs_review flag (>14 days)
+          if (isKnowledge && fm['needs_review']) {
+            const flaggedAt = fm['review_flagged_at'] as string | undefined;
+            if (flaggedAt) {
+              const age = (Date.now() - new Date(flaggedAt).getTime()) / 86400000;
+              if (age > 14) {
+                needsAttention.push(`[[${slug}]] has needs_review=true flagged ${Math.floor(age)} days ago — stale review flag`);
+              }
+            }
+          }
+
+          // Check 6: Review-Queue item pending >14 days
+          if (isReviewQueue && fm['status'] === 'pending') {
+            const created = fm['created'] as string | undefined;
+            if (created) {
+              const age = (Date.now() - new Date(created).getTime()) / 86400000;
+              if (age > 14) {
+                needsAttention.push(`[[${slug}]] has been in Review-Queue for ${Math.floor(age)} days`);
+              }
+            }
+          }
+        }
+
+        // Check 7: duplicate/overlapping knowledge notes (title similarity)
+        const knowledgeSlugs = allFiles
+          .filter(f => /Knowledge\/(Concepts|Entities|Methods)/.test(f) && !f.endsWith('_index.md'))
+          .map(f => path.basename(f, '.md'));
+        for (let i = 0; i < knowledgeSlugs.length; i++) {
+          for (let j = i + 1; j < knowledgeSlugs.length; j++) {
+            const a = knowledgeSlugs[i].replace(/-/g, ' ');
+            const b = knowledgeSlugs[j].replace(/-/g, ' ');
+            if (a.includes(b) || b.includes(a)) {
+              niceToImprove.push(`[[${knowledgeSlugs[i]}]] may overlap with [[${knowledgeSlugs[j]}]] — similar names`);
+            }
+          }
+        }
+
+        // Check 8: knowledge note not updated despite newer related reading notes
+        for (const absPath of allFiles) {
+          const rel = path.relative(vaultPath, absPath).replace(/\\/g, '/');
+          if (!rel.match(/^Knowledge\/(Concepts|Entities|Methods)\/(?!_index)/)) continue;
+          try {
+            const fileFm = matter(fs.readFileSync(absPath, 'utf-8')).data as Record<string, unknown>;
+            const slug = path.basename(absPath, '.md');
+            const lastUpdated = fileFm['last_updated'] as string | undefined;
+            if (!lastUpdated) continue;
+            const compiledFrom = fileFm['compiled_from'];
+            if (!Array.isArray(compiledFrom) || compiledFrom.length === 0) continue;
+            const lastUpdatedDate = new Date(lastUpdated);
+
+            for (const sourceRef of compiledFrom as unknown[]) {
+              const sourceSlug = String(sourceRef).replace(/^\[\[|\]\]$/g, '');
+              for (const prefix of ['Reading/Papers', 'Reading/Threads']) {
+                const sourceAbs = path.join(vaultPath, prefix, `${sourceSlug}.md`);
+                if (!fs.existsSync(sourceAbs)) continue;
+                try {
+                  const srcFm = matter(fs.readFileSync(sourceAbs, 'utf-8')).data as Record<string, unknown>;
+                  const readDate = srcFm['read_date'] as string | undefined;
+                  if (readDate && new Date(readDate) > lastUpdatedDate) {
+                    niceToImprove.push(`[[${slug}]] last updated ${lastUpdated} but compiled source [[${sourceSlug}]] was read ${readDate} — may need updating`);
+                    break;
+                  }
+                } catch { /* skip */ }
+                break;
+              }
+            }
+          } catch { /* skip */ }
+        }
+
+        // Write report
+        const today = new Date().toISOString().slice(0, 10);
+        const reportContent = `---
+type: lint-report
+date: ${today}
+---
+
+# KB Lint Report — ${today}
+
+## Urgent
+${urgent.length ? urgent.map(i => `- ${i}`).join('\n') : '(none)'}
+
+## Needs Attention
+${needsAttention.length ? needsAttention.map(i => `- ${i}`).join('\n') : '(none)'}
+
+## Nice to Improve
+${niceToImprove.length ? niceToImprove.map(i => `- ${i}`).join('\n') : '(none)'}
+`;
+        const reportPath = path.join(vaultPath, 'Knowledge', '_Ops', 'Lint-Reports', `${today}.md`);
+        autoWrite(reportPath, reportContent, vaultPath);
+
+        return JSON.stringify({
+          urgent,
+          needsAttention,
+          niceToImprove,
+          reportPath: `Knowledge/_Ops/Lint-Reports/${today}.md`,
+          summary: `Lint complete: ${urgent.length} urgent, ${needsAttention.length} needs attention, ${niceToImprove.length} nice to improve.`,
+        });
+      },
+    },
   ];
 }

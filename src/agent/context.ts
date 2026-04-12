@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import matter from 'gray-matter';
 import { loadAgentConfig } from '../config/config.js';
 import type { ToolDefinition } from './providers/base.js';
 import { localDateString } from '../utils/date.js';
@@ -59,6 +60,43 @@ IMPORTANT RULES:
   const diary = cachedReadFile(diaryPath);
   if (diary !== null) {
     sections.push(`## Today's Diary (${today})\n\n${diary}`);
+  }
+
+  // Layer 5b: KB lint reminder + unfinished KB work count
+  const lintReportsDir = path.join(vaultPath, 'Knowledge', '_Ops', 'Lint-Reports');
+  if (fs.existsSync(lintReportsDir)) {
+    const reports = fs.readdirSync(lintReportsDir)
+      .filter(f => /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
+      .sort();
+
+    let unfinishedKbCount = 0;
+    for (const readingSubdir of ['Reading/Papers', 'Reading/Threads']) {
+      const readingDir = path.join(vaultPath, readingSubdir);
+      if (!fs.existsSync(readingDir)) continue;
+      for (const f of fs.readdirSync(readingDir).filter(n => n.endsWith('.md'))) {
+        try {
+          const fm = matter(fs.readFileSync(path.join(readingDir, f), 'utf-8')).data as Record<string, unknown>;
+          if (fm['status'] === 'complete' && ['pending', 'mapped', 'merged_with_review'].includes(fm['kb_status'] as string)) {
+            unfinishedKbCount++;
+          }
+        } catch { /* skip */ }
+      }
+    }
+
+    if (reports.length === 0) {
+      const kbMsg = unfinishedKbCount > 0 ? ` ${unfinishedKbCount} reading note(s) have unfinished KB work.` : '';
+      sections.push(`**KB reminder:** KB lint has never run. Run kb_lint to check knowledge base health.${kbMsg}`);
+    } else {
+      const lastReport = reports[reports.length - 1];
+      const lastDate = new Date(lastReport.replace('.md', ''));
+      const daysAgo = (Date.now() - lastDate.getTime()) / 86400000;
+      const kbMsg = unfinishedKbCount > 0 ? ` ${unfinishedKbCount} reading note(s) have unfinished KB work.` : '';
+      if (daysAgo > 14) {
+        sections.push(`**KB reminder:** KB lint hasn't run in ${Math.floor(daysAgo)} days. Run kb_lint to check for issues.${kbMsg}`);
+      } else if (unfinishedKbCount > 0) {
+        sections.push(`**KB reminder:** ${unfinishedKbCount} reading note(s) have unfinished KB work (kb_status: pending/mapped/merged_with_review).`);
+      }
+    }
   }
 
   // Layer 6: Current week's plan (cached to avoid repeated disk reads)
