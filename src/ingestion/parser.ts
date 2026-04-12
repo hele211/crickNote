@@ -249,10 +249,9 @@ export function parseNote(filePath: string, content: string): ParsedNote {
 
   // Knowledge base fields
   const kbStatus = normalizeString(frontmatter['kb_status']) || undefined;
-  const knowledgeKind = normalizeString(frontmatter['knowledge_kind']) || undefined;
-  const needsReviewRaw = frontmatter['needs_review'];
-  const needsReview = needsReviewRaw !== undefined && needsReviewRaw !== null
-    ? Boolean(needsReviewRaw) : undefined;
+  const knowledgeKind = normalizeString(frontmatter['knowledge_kind'])
+    || (noteType === 'review-queue' ? 'review' : undefined);
+  const needsReview = normalizeBool(frontmatter['needs_review']);
   const reviewFlaggedAt = normalizeString(frontmatter['review_flagged_at']) || undefined;
 
   const aliasesRaw = frontmatter['aliases'];
@@ -262,8 +261,12 @@ export function parseNote(filePath: string, content: string): ParsedNote {
       ? [aliasesRaw.trim()]
       : undefined;
 
-  const rqSource = normalizeString(frontmatter['rq_source']) || undefined;
-  const rqTarget = normalizeString(frontmatter['rq_target']) || undefined;
+  const rqSource = normalizeString(frontmatter['rq_source'])
+    || extractWikilinkTarget(frontmatter['source'])
+    || undefined;
+  const rqTarget = normalizeString(frontmatter['rq_target'])
+    || extractWikilinkTarget(frontmatter['target_concept'])
+    || undefined;
 
   // Compute lastSession for experiment notes
   let lastSession: string | undefined;
@@ -307,6 +310,31 @@ export function parseNote(filePath: string, content: string): ParsedNote {
 function normalizeString(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
   return String(value).trim();
+}
+
+/**
+ * Normalize a frontmatter value to a boolean or undefined.
+ * Handles boolean, 0/1, and string representations of true/false.
+ */
+function normalizeBool(value: unknown): boolean | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'boolean') return value;
+  if (value === 1 || value === 0) return value === 1;
+  const s = String(value).toLowerCase().trim();
+  if (s === 'true') return true;
+  if (s === 'false') return false;
+  return undefined;
+}
+
+/**
+ * Extract the inner target from a wikilink like [[target]] or [[target|alias]].
+ * Returns undefined if the value is not a wikilink.
+ */
+function extractWikilinkTarget(value: unknown): string | undefined {
+  const str = normalizeString(value);
+  if (!str) return undefined;
+  const match = str.match(/^\[\[([^\]|]+)(?:\|[^\]]+)?\]\]$/);
+  return match ? match[1].trim() : undefined;
 }
 
 /**

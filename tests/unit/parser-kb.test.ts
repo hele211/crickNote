@@ -32,6 +32,18 @@ rq_target: cd4-cd8-interaction
 # IL-42 suppression magnitude — context conflict
 `;
 
+const REVIEW_QUEUE_NOTE_WIKILINK_ONLY = `---
+type: review-queue
+source: "[[smith-2026-il42-signalling]]"
+target_concept: "[[cd4-cd8-interaction]]"
+reason: ambiguous-relationship
+created: 2026-04-08
+status: pending
+---
+
+# Conflict note without rq_source/rq_target fields
+`;
+
 const READING_NOTE = `---
 title: IL-42 mediated suppression
 authors: [Smith]
@@ -82,5 +94,17 @@ describe('parseNote — knowledge notes', () => {
     const parsed = parseNote('Knowledge/Review-Queue/2026-04-08-conflict.md', REVIEW_QUEUE_NOTE);
     expect(parsed.isValid).toBe(true);
     expect(parsed.warnings.every(w => !w.message.includes('status'))).toBe(true);
+  });
+
+  it('review-queue note with status:resolved is valid', () => {
+    const resolvedNote = REVIEW_QUEUE_NOTE.replace('status: pending', 'status: resolved');
+    const parsed = parseNote('Knowledge/Review-Queue/2026-04-08-conflict.md', resolvedNote);
+    expect(parsed.warnings.every(w => !w.message.includes('status'))).toBe(true);
+  });
+
+  it('extracts rq_source and rq_target from wikilinks when direct fields absent', () => {
+    const parsed = parseNote('Knowledge/Review-Queue/2026-04-08-conflict.md', REVIEW_QUEUE_NOTE_WIKILINK_ONLY);
+    expect(parsed.rqSource).toBe('smith-2026-il42-signalling');
+    expect(parsed.rqTarget).toBe('cd4-cd8-interaction');
   });
 });

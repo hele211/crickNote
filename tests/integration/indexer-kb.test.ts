@@ -18,11 +18,14 @@ describe('indexer — KB fields', () => {
       },
       contentHash: 'abc', mtime: Date.now(), chunks: [], embeddings: [],
     }, db);
-    const row = db.prepare('SELECT kb_status, knowledge_kind, needs_review, aliases FROM note_metadata WHERE path = ?')
+    const row = db.prepare('SELECT kb_status, knowledge_kind, needs_review, review_flagged_at, aliases, rq_source, rq_target FROM note_metadata WHERE path = ?')
       .get('Knowledge/Concepts/test.md') as Record<string, unknown>;
     expect(row.kb_status).toBe('pending');
     expect(row.knowledge_kind).toBe('concept');
     expect(row.needs_review).toBe(0);
+    expect(row.review_flagged_at).toBeNull();
     expect(JSON.parse(row.aliases as string)).toEqual(['test alias']);
+    expect(row.rq_source).toBeNull();
+    expect(row.rq_target).toBeNull();
   });
 });
