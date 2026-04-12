@@ -102,6 +102,12 @@ describe('parseNote — knowledge notes', () => {
     expect(parsed.warnings.every(w => !w.message.includes('status'))).toBe(true);
   });
 
+  it('review-queue note with status:dismissed is valid', () => {
+    const dismissedNote = REVIEW_QUEUE_NOTE.replace('status: pending', 'status: dismissed');
+    const parsed = parseNote('Knowledge/Review-Queue/2026-04-08-conflict.md', dismissedNote);
+    expect(parsed.warnings.every(w => !w.message.includes('status'))).toBe(true);
+  });
+
   it('extracts rq_source and rq_target from wikilinks when direct fields absent', () => {
     const parsed = parseNote('Knowledge/Review-Queue/2026-04-08-conflict.md', REVIEW_QUEUE_NOTE_WIKILINK_ONLY);
     expect(parsed.rqSource).toBe('smith-2026-il42-signalling');
