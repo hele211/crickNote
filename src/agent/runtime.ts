@@ -11,6 +11,7 @@ import { createTaskTools } from './tools/tasks.js';
 import { createTemplateTools } from './tools/templates.js';
 import { createContextTools } from './tools/context.js';
 import { createSerialTools } from './tools/serial-tools.js';
+import { createKbTools } from './tools/kb-tools.js';
 import { assembleSystemPrompt } from './context.js';
 import { SafeWriter, type EditProposal } from '../editing/safe-writer.js';
 import { getDatabase } from '../storage/database.js';
@@ -75,6 +76,9 @@ export class AgentRuntime {
       this.registry.register(tool);
     }
     for (const tool of createSerialTools(config.vaultPath)) {
+      this.registry.register(tool);
+    }
+    for (const tool of createKbTools(config.vaultPath)) {
       this.registry.register(tool);
     }
   }
