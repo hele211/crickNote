@@ -4,6 +4,28 @@ import path from 'node:path';
 import { saveConfig, PROVIDER_PRESETS, type CrickNoteConfig } from '../config/config.js';
 import { generateToken, getTokenPath } from '../server/auth.js';
 import { getDatabase, getDataDir, closeDatabase } from '../storage/database.js';
+import { rebuildKnowledgeIndex } from '../knowledge/index-builder.js';
+
+const VAULT_DIRS = [
+  'Projects', 'Protocols',
+  'Reading', 'Reading/Papers', 'Reading/Threads', 'Reading/attachments',
+  'Memory/Daily', 'Memory/Weekly', 'Memory/Monthly',
+  'Knowledge', 'Knowledge/Concepts', 'Knowledge/Entities', 'Knowledge/Methods',
+  'Knowledge/Review-Queue', 'Knowledge/_Ops', 'Knowledge/_Ops/Update-Logs', 'Knowledge/_Ops/Lint-Reports',
+] as const;
+
+export function ensureVaultScaffold(vaultPath: string): void {
+  for (const dir of VAULT_DIRS) {
+    const dirPath = path.join(vaultPath, dir);
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+    }
+  }
+
+  for (const kind of ['Concepts', 'Entities', 'Methods'] as const) {
+    rebuildKnowledgeIndex(kind, vaultPath);
+  }
+}
 
 export async function setup(): Promise<void> {
   console.log('\nWelcome to CrickNote!\n');
@@ -118,19 +140,8 @@ export async function setup(): Promise<void> {
     console.log(`\u2713 Agent config created in vault (${agentDir})`);
   }
 
-  // Create vault directories if needed
-  for (const dir of [
-    'Projects', 'Protocols',
-    'Reading', 'Reading/Papers', 'Reading/Threads', 'Reading/attachments',
-    'Memory/Daily', 'Memory/Weekly', 'Memory/Monthly',
-    'Knowledge', 'Knowledge/Concepts', 'Knowledge/Entities', 'Knowledge/Methods',
-    'Knowledge/Review-Queue', 'Knowledge/_Ops', 'Knowledge/_Ops/Update-Logs', 'Knowledge/_Ops/Lint-Reports',
-  ]) {
-    const dirPath = path.join(resolvedVaultPath, dir);
-    if (!fs.existsSync(dirPath)) {
-      fs.mkdirSync(dirPath, { recursive: true });
-    }
-  }
+  // Create vault directories and initial KB indexes if needed
+  ensureVaultScaffold(resolvedVaultPath);
   console.log('\u2713 Vault directories verified');
 
   // Install Obsidian plugin
