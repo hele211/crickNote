@@ -7,6 +7,16 @@ import { embedText } from '../../ingestion/embedder.js';
 import { getDatabase } from '../../storage/database.js';
 import type Database from 'better-sqlite3';
 
+function isSearchHousekeepingPath(notePath: string): boolean {
+  const normalized = notePath.replace(/\\/g, '/');
+  return normalized.startsWith('Knowledge/_Ops/')
+    || /^Knowledge\/(Concepts|Entities|Methods)\/_index\.md$/.test(normalized);
+}
+
+function filterSearchCandidates<T extends { path: string }>(candidates: T[]): T[] {
+  return candidates.filter(candidate => !isSearchHousekeepingPath(candidate.path));
+}
+
 export function createSearchTools(vaultPath: string, injectedDb?: Database.Database): ToolHandler[] {
   return [
     {
@@ -114,6 +124,14 @@ export function createSearchTools(vaultPath: string, injectedDb?: Database.Datab
           });
         }
 
+        candidates = filterSearchCandidates(candidates);
+        if (candidates.length === 0) {
+          return JSON.stringify({
+            results: [],
+            message: 'No matching notes found. Would you like to search more broadly?',
+          });
+        }
+
         // Step 3: Semantic ranking — only when candidates > 5 (per architecture spec)
         if (candidates.length > 5) {
           try {
@@ -151,6 +169,8 @@ export function createSearchTools(vaultPath: string, injectedDb?: Database.Datab
             // Embedding or ranking failed — fall through with unranked candidates
           }
         }
+
+        candidates = filterSearchCandidates(candidates);
 
         // Step 4: Assemble context
         const topPaths = candidates.slice(0, 5).map(c => c.path);

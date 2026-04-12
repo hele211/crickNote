@@ -17,6 +17,33 @@ export interface IndexNoteInput {
   embeddings: Float32Array[];
 }
 
+interface ExistingNoteTypeRow {
+  note_type: string;
+  experiment_type: string | null;
+}
+
+function getTrackedExperimentType(noteType: string, experimentType: string | null | undefined): string | null {
+  return noteType === 'experiment' && experimentType ? experimentType : null;
+}
+
+function incrementExperimentTypeCount(database: Database.Database, experimentType: string): void {
+  database.prepare(`
+    INSERT INTO experiment_types (name, aliases, count)
+    VALUES (?, '[]', 1)
+    ON CONFLICT(name) DO UPDATE SET
+      count = count + 1
+  `).run(experimentType);
+}
+
+function decrementExperimentTypeCount(database: Database.Database, experimentType: string): void {
+  database.prepare(`
+    UPDATE experiment_types SET count = count - 1 WHERE name = ?
+  `).run(experimentType);
+  database.prepare(
+    'DELETE FROM experiment_types WHERE name = ? AND count <= 0'
+  ).run(experimentType);
+}
+
 /**
  * Upsert a note and its chunks/embeddings into the database.
  * Uses a transaction for atomicity.
@@ -27,6 +54,14 @@ export function indexNote(input: IndexNoteInput, db?: Database.Database): void {
   const now = Date.now();
 
   database.transaction(() => {
+    const existing = database.prepare(
+      'SELECT note_type, experiment_type FROM note_metadata WHERE path = ?'
+    ).get(note.filePath) as ExistingNoteTypeRow | undefined;
+    const previousTrackedType = existing
+      ? getTrackedExperimentType(existing.note_type, existing.experiment_type)
+      : null;
+    const nextTrackedType = getTrackedExperimentType(note.noteType, note.experimentType);
+
     // 1. Upsert note_metadata
     database.prepare(`
       INSERT INTO note_metadata (path, folder, note_type, date, project, project_id, note_id, series,
@@ -136,14 +171,12 @@ export function indexNote(input: IndexNoteInput, db?: Database.Database): void {
       insertBm25.run(String(chunkId), chunk.content);
     }
 
-    // 4. Track experiment type if this is an experiment note
-    if (note.noteType === 'experiment' && note.experimentType) {
-      database.prepare(`
-        INSERT INTO experiment_types (name, aliases, count)
-        VALUES (?, '[]', 1)
-        ON CONFLICT(name) DO UPDATE SET
-          count = count + 1
-      `).run(note.experimentType);
+    // 4. Track experiment type transitions without double-counting re-indexes
+    if (previousTrackedType && previousTrackedType !== nextTrackedType) {
+      decrementExperimentTypeCount(database, previousTrackedType);
+    }
+    if (nextTrackedType && previousTrackedType !== nextTrackedType) {
+      incrementExperimentTypeCount(database, nextTrackedType);
     }
   })();
 }
@@ -159,16 +192,13 @@ export function deleteNote(filePath: string, db?: Database.Database): void {
     // Decrement experiment_types.count if this note tracked an experiment type.
     const meta = database.prepare(
       'SELECT note_type, experiment_type FROM note_metadata WHERE path = ?'
-    ).get(filePath) as { note_type: string; experiment_type: string | null } | undefined;
+    ).get(filePath) as ExistingNoteTypeRow | undefined;
 
-    if (meta?.note_type === 'experiment' && meta.experiment_type) {
-      database.prepare(`
-        UPDATE experiment_types SET count = count - 1 WHERE name = ?
-      `).run(meta.experiment_type);
-      // Clean up rows that have reached zero.
-      database.prepare(
-        'DELETE FROM experiment_types WHERE name = ? AND count <= 0'
-      ).run(meta.experiment_type);
+    const trackedType = meta
+      ? getTrackedExperimentType(meta.note_type, meta.experiment_type)
+      : null;
+    if (trackedType) {
+      decrementExperimentTypeCount(database, trackedType);
     }
 
     // Remove BM25 entries for this note's chunks

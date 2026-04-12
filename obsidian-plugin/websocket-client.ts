@@ -16,6 +16,7 @@ export class CrickNoteWebSocket extends EventEmitter {
   private plugin: CrickNotePlugin;
   private authenticated = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectEnabled = true;
   private host: string;
   private port: number;
   private tokenPath: string;
@@ -30,6 +31,7 @@ export class CrickNoteWebSocket extends EventEmitter {
   }
 
   async connect(): Promise<void> {
+    this.reconnectEnabled = true;
     const host = this.host;
     const port = this.port;
     const url = `ws://${host}:${port}`;
@@ -59,7 +61,9 @@ export class CrickNoteWebSocket extends EventEmitter {
       this.ws.onclose = () => {
         this.authenticated = false;
         this.emit('disconnected');
-        this.scheduleReconnect();
+        if (this.reconnectEnabled) {
+          this.scheduleReconnect();
+        }
       };
 
       this.ws.onerror = () => {
@@ -71,12 +75,14 @@ export class CrickNoteWebSocket extends EventEmitter {
   }
 
   disconnect(): void {
+    this.reconnectEnabled = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    this.ws?.close();
+    const ws = this.ws;
     this.ws = null;
+    ws?.close();
   }
 
   send(message: Record<string, unknown>): void {
@@ -137,10 +143,12 @@ export class CrickNoteWebSocket extends EventEmitter {
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectTimer) return;
+    if (!this.reconnectEnabled || this.reconnectTimer) return;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      this.connect();
+      if (this.reconnectEnabled) {
+        this.connect();
+      }
     }, 5000);
   }
 }

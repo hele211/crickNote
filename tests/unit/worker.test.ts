@@ -15,6 +15,11 @@ describe('shouldIgnoreIngestionPath', () => {
     expect(shouldIgnoreIngestionPath('Projects/P001-CM/CM001-western-blot-mapping-20260412T104938.md')).toBe(true);
   });
 
+  it('ignores KB housekeeping artifacts', () => {
+    expect(shouldIgnoreIngestionPath('Knowledge/_Ops/Lint-Reports/2026-04-12.md')).toBe(true);
+    expect(shouldIgnoreIngestionPath('Knowledge/Concepts/_index.md')).toBe(true);
+  });
+
   it('does not ignore real vault notes', () => {
     expect(shouldIgnoreIngestionPath('Reading/Papers/smith-2026.md')).toBe(false);
     expect(shouldIgnoreIngestionPath('Knowledge/Concepts/il-42.md')).toBe(false);
