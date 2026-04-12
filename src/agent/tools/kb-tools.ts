@@ -705,5 +705,253 @@ ${updateLog.deferred.map(d => `- ${d}`).join('\n') || '(none)'}
         });
       },
     },
+
+    // -----------------------------------------------------------------------
+    // kb_apply_direct (Mode 2)
+    // -----------------------------------------------------------------------
+    {
+      definition: {
+        name: 'kb_apply_direct',
+        description:
+          'Load a single source note and a specific target Knowledge note for a direct (ad-hoc) update. Does NOT change kb_status on reading notes — use the full kb_suggest → kb_apply pipeline for systematic processing. After calling this tool, propose the update via vault_write, then optionally call this tool again with update_log to record the Update Log.',
+        parameters: {
+          type: 'object',
+          properties: {
+            source: { type: 'string', description: 'Relative vault path to source note (reading or experiment)' },
+            target: { type: 'string', description: 'Relative vault path to target Knowledge note' },
+            update_log: {
+              type: 'object',
+              description: 'If provided, writes an Update Log. Omit to just load content.',
+              properties: {
+                updated: { type: 'array', items: { type: 'string' } },
+                created: { type: 'array', items: { type: 'string' } },
+                notes: { type: 'string' },
+              },
+            },
+          },
+          required: ['source', 'target'],
+        },
+      },
+      execute: async (args) => {
+        let sourcePath: string, targetPath: string;
+        try {
+          sourcePath = resolveVaultPath(vaultPath, args.source as string);
+          targetPath = resolveVaultPath(vaultPath, args.target as string);
+        } catch (e) {
+          return JSON.stringify({ error: (e as Error).message });
+        }
+        if (!fs.existsSync(sourcePath)) return JSON.stringify({ error: `Source not found: ${args.source}` });
+        if (!fs.existsSync(targetPath)) return JSON.stringify({ error: `Target not found: ${args.target}` });
+
+        const sourceContent = fs.readFileSync(sourcePath, 'utf-8');
+        const targetContent = fs.readFileSync(targetPath, 'utf-8');
+
+        // Write Update Log if provided
+        const updateLog = args.update_log as { updated: string[]; created: string[]; notes: string } | undefined;
+        let logPath = '';
+        if (updateLog) {
+          const sourceSlug = path.basename(sourcePath, '.md');
+          const today = new Date().toISOString().slice(0, 10);
+          const ts = new Date().toISOString().replace(/[:.]/g, '').slice(0, 15);
+          const logContent = `---
+type: update-log
+source: [[${sourceSlug}]]
+date: ${today}
+mode: direct
+---
+
+# KB Update Log (direct) — ${sourceSlug}
+
+## Updated
+${(updateLog.updated || []).map(u => `- ${u}`).join('\n') || '(none)'}
+
+## Created
+${(updateLog.created || []).map(c => `- ${c}`).join('\n') || '(none)'}
+
+## Notes
+${updateLog.notes || ''}
+`;
+          logPath = path.join(vaultPath, 'Knowledge', '_Ops', 'Update-Logs', `${today}T${ts.slice(9)}-${sourceSlug}.md`);
+          autoWrite(logPath, logContent, vaultPath);
+        }
+
+        return JSON.stringify({
+          sourceContent,
+          targetContent,
+          logWritten: logPath ? path.relative(vaultPath, logPath) : null,
+          instruction: [
+            `Update the target knowledge note using the source content.`,
+            'Rules (same as kb_apply):',
+            '  1. Every Key Claims bullet: - [supports|contradicts|extends] Text. [[source-slug]]',
+            '  2. Never delete old claims — add contradiction tag instead.',
+            '  3. Update compiled_from, last_updated, aliases.',
+            '  4. kb_status on the source note is NOT changed by direct mode.',
+            '',
+            'Call vault_write with the updated target content.',
+          ].join('\n'),
+        });
+      },
+    },
+
+    // -----------------------------------------------------------------------
+    // kb_resolve_review
+    // -----------------------------------------------------------------------
+    {
+      definition: {
+        name: 'kb_resolve_review',
+        description:
+          'Load a Review-Queue item and its target Knowledge note. If resolution and resolution_summary are provided, marks the item resolved, clears needs_review on the target (if no other pending items target it), and updates kb_status on the source note if this was the last unresolved item.',
+        parameters: {
+          type: 'object',
+          properties: {
+            review_item: { type: 'string', description: 'Relative vault path to the Review-Queue note' },
+            resolution: { type: 'string', enum: ['resolved', 'dismissed'], description: 'Outcome — provide after the user has decided' },
+            resolution_summary: { type: 'string', description: 'One-line summary of the resolution decision' },
+            confirmed_knowledge_write: {
+              type: 'boolean',
+              description: 'Set to true ONLY after the user has confirmed the vault_write diff for the Knowledge note update. Required when passing resolution.',
+            },
+          },
+          required: ['review_item'],
+        },
+      },
+      execute: async (args) => {
+        let rqPath: string;
+        try {
+          rqPath = safeVaultJoin(vaultPath, args.review_item as string);
+        } catch {
+          return JSON.stringify({ error: `Invalid path: "${args.review_item}"` });
+        }
+        if (!fs.existsSync(rqPath)) {
+          return JSON.stringify({ error: `Review-Queue note not found: ${args.review_item}` });
+        }
+
+        const raw = fs.readFileSync(rqPath, 'utf-8');
+        const parsed = matter(raw);
+        const fm = parsed.data as Record<string, unknown>;
+
+        const rqTarget = String(fm['rq_target'] || '').replace(/^\[\[|\]\]$/g, '');
+        const rqSource = String(fm['rq_source'] || '').replace(/^\[\[|\]\]$/g, '');
+
+        // Find target knowledge note
+        let targetContent = '(not found)';
+        let targetAbsPath = '';
+        for (const kind of ['Concepts', 'Entities', 'Methods']) {
+          const candidate = path.join(vaultPath, 'Knowledge', kind, `${rqTarget}.md`);
+          if (fs.existsSync(candidate)) {
+            targetContent = fs.readFileSync(candidate, 'utf-8');
+            targetAbsPath = candidate;
+            break;
+          }
+        }
+
+        const resolution = args.resolution as string | undefined;
+        const confirmedWrite = Boolean(args.confirmed_knowledge_write);
+
+        if (resolution && !confirmedWrite) {
+          return JSON.stringify({
+            error: 'Safety guard: confirmed_knowledge_write must be true before resolving a Review-Queue item. Call vault_write to update the Knowledge note first, then call kb_resolve_review again after the user confirms the diff.',
+          });
+        }
+
+        if (!resolution) {
+          // First call — just load content for LLM review
+          return JSON.stringify({
+            reviewContent: raw,
+            targetContent,
+            rqTarget,
+            rqSource,
+            instruction: [
+              `Review the conflict above and decide how to resolve it.`,
+              `IMPORTANT: the workflow is:`,
+              `  1. Call vault_write to update [[${rqTarget}]] in the Knowledge folder (required first)`,
+              `  2. Wait for user confirmation of the diff`,
+              `  3. THEN call kb_resolve_review again with resolution: "resolved" and resolution_summary`,
+              `Calling kb_resolve_review with a resolution before vault_write confirmation violates the spec.`,
+            ].join('\n'),
+          });
+        }
+
+        // Mark the Review-Queue note resolved/dismissed
+        const summary = (args.resolution_summary as string) || '';
+        const newBody = parsed.content.replace(
+          /## Resolution\n[\s\S]*/,
+          `## Resolution\n${summary}\n`
+        );
+        const updatedRq = matter.stringify(newBody, { ...fm, status: resolution });
+        autoWrite(rqPath, updatedRq, vaultPath);
+
+        // Check if this is the last pending Review-Queue item for this source
+        const rqDir = path.join(vaultPath, 'Knowledge', 'Review-Queue');
+        const pendingForSource = fs.readdirSync(rqDir)
+          .filter(f => f.endsWith('.md'))
+          .map(f => {
+            try { return matter(fs.readFileSync(path.join(rqDir, f), 'utf-8')).data as Record<string, unknown>; }
+            catch { return null; }
+          })
+          .filter(d => d && d['rq_source'] === rqSource && d['status'] === 'pending')
+          .length;
+
+        // If no more pending items for this target — clear needs_review
+        const pendingForTarget = fs.readdirSync(rqDir)
+          .filter(f => f.endsWith('.md'))
+          .map(f => {
+            try { return matter(fs.readFileSync(path.join(rqDir, f), 'utf-8')).data as Record<string, unknown>; }
+            catch { return null; }
+          })
+          .filter(d => d && d['rq_target'] === rqTarget && d['status'] === 'pending')
+          .length;
+
+        if (pendingForTarget === 0 && targetAbsPath) {
+          frontmatterFieldUpdate(targetAbsPath, 'needs_review', false, vaultPath);
+          frontmatterFieldUpdate(targetAbsPath, 'review_flagged_at', null, vaultPath);
+        }
+
+        // If last pending item for this source — advance kb_status merged_with_review → merged
+        if (pendingForSource === 0) {
+          for (const prefix of ['Reading/Papers', 'Reading/Threads']) {
+            const candidate = path.join(vaultPath, prefix, `${rqSource}.md`);
+            if (fs.existsSync(candidate)) {
+              const srcFm = matter(fs.readFileSync(candidate, 'utf-8')).data as Record<string, unknown>;
+              if (srcFm['kb_status'] === 'merged_with_review') {
+                frontmatterFieldUpdate(candidate, 'kb_status', 'merged', vaultPath);
+              }
+              break;
+            }
+          }
+        }
+
+        // Update mapping artifact: change deferred row → applied for this rq_source/rq_target pair
+        const rqSourceSlug = rqSource;
+        function findMappingArtifact(rootDir: string): string | null {
+          if (!fs.existsSync(rootDir)) return null;
+          for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
+            if (entry.isDirectory()) { const r = findMappingArtifact(path.join(rootDir, entry.name)); if (r) return r; }
+            else if (entry.name === `${rqSourceSlug}-mapping.md`) return path.join(rootDir, entry.name);
+          }
+          return null;
+        }
+        const mappingAbs = findMappingArtifact(path.join(vaultPath, 'Reading'))
+          || findMappingArtifact(path.join(vaultPath, 'Projects'));
+        if (mappingAbs) {
+          const mappingRaw = fs.readFileSync(mappingAbs, 'utf-8');
+          const mappingParsed = matter(mappingRaw);
+          const { content: updatedBody } = updateMappingTargetState(mappingParsed.content, rqTarget, 'applied', `[[${path.basename(rqPath, '.md')}]]`);
+          const allTargets = parseMappingTargets(updatedBody);
+          const anyPending = allTargets.some(t => t.state === 'pending');
+          const newMappingStatus = anyPending ? 'confirmed' : 'applied';
+          const updatedMapping = matter.stringify(updatedBody, { ...mappingParsed.data, status: newMappingStatus });
+          autoWrite(mappingAbs, updatedMapping, vaultPath);
+        }
+
+        return JSON.stringify({
+          status: resolution,
+          rqItem: args.review_item,
+          needsReviewCleared: pendingForTarget === 0,
+          kbStatusAdvanced: pendingForSource === 0,
+          message: `Review-Queue item ${resolution}. Mapping artifact row updated (deferred → applied). ${pendingForTarget === 0 ? `needs_review cleared on [[${rqTarget}]].` : ''} ${pendingForSource === 0 ? `kb_status advanced to merged.` : ''}`,
+        });
+      },
+    },
   ];
 }
