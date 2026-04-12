@@ -740,9 +740,12 @@ ${updateLog.deferred.map(d => `- ${d}`).join('\n') || '(none)'}
         } catch (e) {
           return JSON.stringify({ error: (e as Error).message });
         }
-        const targetRel = (args.target as string).replace(/\\/g, '/');
+        const targetRel = path.posix.normalize((args.target as string).replace(/\\/g, '/'));
         const allowedPrefixes = ['Knowledge/Concepts/', 'Knowledge/Entities/', 'Knowledge/Methods/'];
-        if (!allowedPrefixes.some(p => targetRel.startsWith(p)) || !targetRel.endsWith('.md')) {
+        if (
+          targetRel.startsWith('../') || targetRel === '..' || path.posix.isAbsolute(targetRel) ||
+          !allowedPrefixes.some(p => targetRel.startsWith(p)) || !targetRel.endsWith('.md')
+        ) {
           return JSON.stringify({ error: `Target must be a .md file under Knowledge/Concepts/, Knowledge/Entities/, or Knowledge/Methods/. Got: "${args.target}"` });
         }
         if (!fs.existsSync(sourcePath)) return JSON.stringify({ error: `Source not found: ${args.source}` });
