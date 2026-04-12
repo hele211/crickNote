@@ -12,7 +12,7 @@ function isAutoWriteAllowed(rel: string): boolean {
     rel.startsWith('Knowledge/_Ops/Update-Logs/') ||
     rel.startsWith('Knowledge/_Ops/Lint-Reports/') ||
     /^Knowledge\/(Concepts|Entities|Methods)\/_index\.md$/.test(rel) ||
-    /^Reading\/(Papers|Threads)\/.*-mapping(-\d{8}T\d{6})?\.md$/.test(rel) ||
+    /^Reading\/[^/]+\/.*-mapping(-\d{8}T\d{6})?\.md$/.test(rel) ||
     /^Projects\/P\d+-[^/]+\/.*-mapping(-\d{8}T\d{6})?\.md$/.test(rel)
   );
 }
@@ -25,7 +25,7 @@ function isFencedSectionAllowed(rel: string): boolean {
 }
 
 function isFrontmatterFieldAllowed(rel: string, field: string): boolean {
-  if ((rel.startsWith('Reading/Papers/') || rel.startsWith('Reading/Threads/')) && field === 'kb_status') return true;
+  if (/^Reading\/[^/]+\//.test(rel) && field === 'kb_status') return true;
   if (/^Knowledge\/(Concepts|Entities|Methods)\/(?!_index\.md)/.test(rel) && ['needs_review', 'review_flagged_at'].includes(field)) return true;
   return false;
 }

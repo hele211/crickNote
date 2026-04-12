@@ -255,7 +255,7 @@ ${rejectedLines || '(none)'}
                 message: `A completed mapping artifact already exists at "${artifactRel}". Call kb_write_mapping again with rerun_confirmed: true to create a new timestamped mapping.`,
               });
             }
-            const ts = new Date().toISOString().replace(/[-:]/g, '').replace('T', 'T').slice(0, 15);
+            const ts = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
             const newRel = `${sourceDir}/${sourceSlug}-mapping-${ts}.md`;
             autoWrite(path.join(vaultPath, newRel), artifactContent, vaultPath);
             if (isReadingNote) {
