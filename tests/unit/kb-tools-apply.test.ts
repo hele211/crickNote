@@ -124,6 +124,7 @@ status: confirmed
       target_slug: 'cd4-cd8-interaction',
       state: 'applied',
       contradiction_added: false,
+      update_log: { updated: ['[[cd4-cd8-interaction]]'], created: [], deferred: [] },
     });
     const updated = fs.readFileSync(path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-il42-mapping.md'), 'utf-8');
     expect(updated).toContain('| [[cd4-cd8-interaction]] | update | applied |');
@@ -153,6 +154,7 @@ status: confirmed
       review_queue_title: 'IL-42 suppression conflict',
       review_queue_reason: 'ambiguous-relationship',
       review_queue_body: 'Smith 2026 reports 40% suppression...',
+      update_log: { updated: [], created: [], deferred: ['[[cd4-cd8-interaction]]'] },
     });
     const rqFiles = fs.readdirSync(path.join(vaultPath, 'Knowledge', 'Review-Queue'));
     expect(rqFiles.length).toBe(1);
@@ -166,6 +168,7 @@ status: confirmed
       target_slug: 'cd4-cd8-interaction',
       state: 'applied',
       contradiction_added: true,
+      update_log: { updated: ['[[cd4-cd8-interaction]]'], created: [], deferred: [] },
     });
     const concept = fs.readFileSync(path.join(vaultPath, 'Knowledge', 'Concepts', 'cd4-cd8-interaction.md'), 'utf-8');
     expect(concept).toContain('needs_review: true');

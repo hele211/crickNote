@@ -10,7 +10,28 @@ import { autoWrite, frontmatterFieldUpdate } from '../../editing/auto-writer.js'
 
 const log = logger.child('kb-tools');
 
-// Helper: parse the Targets table from a mapping artifact body
+// Helper: validate path is inside vault (including symlink resolution), then return
+// a path.join result to avoid realpathSync desync on macOS with autoWrite.
+function safeVaultJoin(vaultRoot: string, rel: string): string {
+  const normalized = path.normalize(rel.replace(/\\/g, '/'));
+  if (path.isAbsolute(normalized) || normalized.startsWith('..')) {
+    throw new Error(`Path traversal rejected: "${rel}"`);
+  }
+  // Use resolveVaultPath to validate symlinks don't escape the vault (throws if they do),
+  // but return path.join to keep consistent prefix with vaultRoot for autoWrite.
+  resolveVaultPath(vaultRoot, normalized); // throws if outside vault after symlink resolution
+  return path.join(vaultRoot, normalized);
+}
+
+// Slug validation — must not contain path separators or traversal sequences.
+const SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+function isValidSlug(s: string): boolean { return SLUG_RE.test(s); }
+
+// Escape regex metacharacters in a literal string.
+function escapeRegex(s: string): string { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+// Helper: parse the Targets table from a mapping artifact body.
+// Scoped to the ## Targets section; supports [[slug|alias]] wikilinks.
 interface MappingTarget {
   slug: string;
   action: string;
@@ -21,31 +42,35 @@ interface MappingTarget {
 
 function parseMappingTargets(body: string): MappingTarget[] {
   const targets: MappingTarget[] = [];
-  const tableRegex = /\|\s*\[\[([^\]]+)\]\]\s*\|\s*(\S+)\s*\|\s*(\S+)\s*\|\s*([^|]*)\|\s*([^|]*)\|/g;
-  let m: RegExpExecArray | null;
-  while ((m = tableRegex.exec(body)) !== null) {
-    targets.push({
-      slug: m[1].trim(),
-      action: m[2].trim(),
-      state: m[3].trim(),
-      reviewQueue: m[4].trim(),
-      updated: m[5].trim(),
-    });
+  const sectionMatch = body.match(/## Targets\s*\n([\s\S]*?)(?=\n## |\s*$)/);
+  if (!sectionMatch) return targets;
+  for (const line of sectionMatch[1].split('\n')) {
+    if (!line.includes('[[')) continue;
+    const cells = line.split('|').map(c => c.trim()).filter((_, i, a) => i > 0 && i < a.length - 1);
+    if (cells.length < 5) continue;
+    const slugMatch = cells[0].match(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/);
+    if (!slugMatch) continue;
+    const slug = slugMatch[1].trim();
+    if (!slug) continue;
+    targets.push({ slug, action: cells[1], state: cells[2], reviewQueue: cells[3], updated: cells[4] });
   }
   return targets;
 }
 
+// Update a target row's state in the mapping body. Returns updated content and a flag.
 function updateMappingTargetState(
   artifactContent: string,
   slug: string,
   newState: string,
   reviewQueueLink: string,
-): string {
+): { content: string; updated: boolean } {
+  const escapedSlug = escapeRegex(slug);
   const rowRegex = new RegExp(
-    `(\\|\\s*\\[\\[${slug}\\]\\]\\s*\\|\\s*\\S+\\s*\\|)\\s*\\S+\\s*(\\|[^|]*\\|)[^|]*(\\|)`,
+    `(\\|\\s*\\[\\[${escapedSlug}(?:\\|[^\\]]*)?\\]\\]\\s*\\|\\s*\\S+\\s*\\|)\\s*\\S+\\s*(\\|[^|]*\\|)[^|]*(\\|)`,
   );
   const timestamp = new Date().toISOString().slice(0, 16);
-  return artifactContent.replace(rowRegex, `$1 ${newState} | ${reviewQueueLink} | ${timestamp} |`);
+  const newContent = artifactContent.replace(rowRegex, `$1 ${newState} | ${reviewQueueLink} | ${timestamp} |`);
+  return { content: newContent, updated: newContent !== artifactContent };
 }
 
 export function createKbTools(
@@ -372,9 +397,15 @@ ${rejectedLines || '(none)'}
           return JSON.stringify({ status: 'all_done', message: 'No pending targets remain. Call kb_apply_advance with the final update_log to complete the workflow.' });
         }
 
-        // Resolve source from mapping frontmatter
+        // Resolve source slug from mapping frontmatter; validate it
         const sourceWikilink = String(parsed.data['source'] || '');
-        const sourceSlug = sourceWikilink.replace(/^\[\[|\]\]$/g, '');
+        const sourceSlug = sourceWikilink.replace(/^\[\[|\]\]$/g, '').trim();
+        if (!isValidSlug(sourceSlug)) {
+          return JSON.stringify({ error: `Invalid source slug in mapping frontmatter: "${sourceSlug}"` });
+        }
+        if (!isValidSlug(pending.slug)) {
+          return JSON.stringify({ error: `Invalid target slug in mapping table: "${pending.slug}"` });
+        }
 
         // Find source note — first try mapping artifact directory (supports experiment notes
         // in project subdirs like Projects/P001-*/CM003-qpcr.md), then fall back to common locations
@@ -419,11 +450,15 @@ ${rejectedLines || '(none)'}
           }
         }
 
-        // Crash-recovery dedup: if source already in compiled_from, skip
+        // Crash-recovery dedup: if source already in compiled_from, skip.
+        // Normalize entries to bare slugs (strip [[/]]) and use exact equality.
         if (targetContent !== '(target note not found — will be created)') {
           const targetFm = matter(targetContent).data as Record<string, unknown>;
           const compiledFrom = Array.isArray(targetFm['compiled_from']) ? targetFm['compiled_from'] : [];
-          if (compiledFrom.some((cf: unknown) => String(cf).includes(sourceSlug))) {
+          const normalizedFrom = compiledFrom.map((cf: unknown) =>
+            String(cf).replace(/^\[\[|\]\]$/g, '').trim()
+          );
+          if (normalizedFrom.includes(sourceSlug)) {
             return JSON.stringify({
               status: 'already_applied',
               message: `Source [[${sourceSlug}]] is already in compiled_from of [[${pending.slug}]]. Skipping — call kb_apply_advance with state: "applied" to advance.`,
@@ -488,8 +523,13 @@ ${rejectedLines || '(none)'}
         },
       },
       execute: async (args) => {
-        const mappingRel = (args.mapping as string).replace(/\\/g, '/');
-        const artifactPath = path.join(vaultPath, mappingRel);
+        // -- Input validation ------------------------------------------------
+        let artifactPath: string;
+        try {
+          artifactPath = safeVaultJoin(vaultPath, args.mapping as string);
+        } catch {
+          return JSON.stringify({ error: `Invalid mapping path: "${args.mapping}"` });
+        }
         if (!fs.existsSync(artifactPath)) {
           return JSON.stringify({ error: `Mapping artifact not found: ${args.mapping}` });
         }
@@ -498,17 +538,57 @@ ${rejectedLines || '(none)'}
         const state = args.state as string;
         const contradictionAdded = Boolean(args.contradiction_added);
 
+        if (!isValidSlug(slug)) {
+          return JSON.stringify({ error: `Invalid target_slug: "${slug}"` });
+        }
+        const validStates = new Set(['applied', 'skipped', 'deferred']);
+        if (!validStates.has(state)) {
+          return JSON.stringify({ error: `Invalid state: "${state}". Must be applied, skipped, or deferred.` });
+        }
+        if (state === 'deferred' && !args.review_queue_body) {
+          return JSON.stringify({ error: 'review_queue_body is required when state is "deferred".' });
+        }
+
+        // -- Parse mapping artifact ------------------------------------------
         const raw = fs.readFileSync(artifactPath, 'utf-8');
         const parsed = matter(raw);
+        const allTargetsBefore = parseMappingTargets(parsed.content);
+
+        if (allTargetsBefore.length === 0) {
+          return JSON.stringify({ error: 'Mapping artifact has no parseable target rows.' });
+        }
+        if (!allTargetsBefore.some(t => t.slug === slug)) {
+          return JSON.stringify({ error: `Target slug "${slug}" not found in mapping artifact.` });
+        }
+
+        // Require update_log (with valid shape) on the final advance — validate before side effects
+        const remainingAfter = allTargetsBefore.filter(t => t.slug !== slug && t.state === 'pending');
+        if (remainingAfter.length === 0) {
+          if (!args.update_log) {
+            return JSON.stringify({ error: 'update_log is required on the final kb_apply_advance call.' });
+          }
+          const ul = args.update_log as Record<string, unknown>;
+          if (!Array.isArray(ul['updated']) || !Array.isArray(ul['created']) || !Array.isArray(ul['deferred'])) {
+            return JSON.stringify({ error: 'update_log must have arrays: updated, created, deferred.' });
+          }
+        }
+
+        // Validate sourceSlug from frontmatter before it is used in filenames/paths
+        const sourceSlugRaw = String(parsed.data['source'] || '').replace(/^\[\[|\]\]$/g, '').trim();
+        if (remainingAfter.length === 0 && !isValidSlug(sourceSlugRaw)) {
+          return JSON.stringify({ error: `Invalid source slug in mapping frontmatter: "${sourceSlugRaw}"` });
+        }
 
         let rqLink = '';
 
-        // Create Review-Queue note if deferred
+        // -- Create Review-Queue note if deferred ----------------------------
         if (state === 'deferred') {
           const rqTitle = (args.review_queue_title as string) || `${slug}-review`;
           const today = new Date().toISOString().slice(0, 10);
-          const rqSlug = `${today}-${slug}`;
-          const rqBody = (args.review_queue_body as string) || '';
+          // Add millisecond suffix to avoid collision on same-day same-target deferrals
+          const rqSuffix = Date.now().toString(36);
+          const rqSlug = `${today}-${slug}-${rqSuffix}`;
+          const rqBody = args.review_queue_body as string;
           const rqContent = `---
 type: review-queue
 source: ${parsed.data['source'] || ''}
@@ -535,7 +615,6 @@ ${rqBody}
           autoWrite(rqPath, rqContent, vaultPath);
           rqLink = `[[${rqSlug}]]`;
 
-          // Set needs_review on the target knowledge note
           for (const kind of ['Concepts', 'Entities', 'Methods']) {
             const candidate = path.join(vaultPath, 'Knowledge', kind, `${slug}.md`);
             if (fs.existsSync(candidate)) {
@@ -546,7 +625,7 @@ ${rqBody}
           }
         }
 
-        // Set needs_review if contradiction added (and not already deferred)
+        // -- Set needs_review if contradiction added -------------------------
         if (contradictionAdded && state !== 'deferred') {
           for (const kind of ['Concepts', 'Entities', 'Methods']) {
             const candidate = path.join(vaultPath, 'Knowledge', kind, `${slug}.md`);
@@ -558,8 +637,11 @@ ${rqBody}
           }
         }
 
-        // Update mapping artifact target row
-        let newBody = updateMappingTargetState(parsed.content, slug, state, rqLink);
+        // -- Update mapping artifact target row ------------------------------
+        const { content: newBody, updated: rowUpdated } = updateMappingTargetState(parsed.content, slug, state, rqLink);
+        if (!rowUpdated) {
+          return JSON.stringify({ error: `Could not update row for target "${slug}" in mapping artifact — row not found or already updated.` });
+        }
         const allTargets = parseMappingTargets(newBody);
         const anyPending = allTargets.some(t => t.state === 'pending');
         const newStatus = anyPending ? 'confirmed' : 'applied';
@@ -567,15 +649,14 @@ ${rqBody}
         const updatedArtifact = matter.stringify(newBody, { ...parsed.data, status: newStatus });
         autoWrite(artifactPath, updatedArtifact, vaultPath);
 
-        // If all done — write Update Log, rebuild indexes, update kb_status
+        // -- Finalisation: Update Log, index rebuild, kb_status --------------
         if (!anyPending) {
-          const sourceSlug = String(parsed.data['source'] || '').replace(/^\[\[|\]\]$/g, '');
+          const sourceSlug = sourceSlugRaw;
           const today = new Date().toISOString().slice(0, 10);
-          const ts = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
+          const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 
-          const updateLog = (args.update_log as { updated: string[]; created: string[]; deferred: string[] } | undefined);
-          if (updateLog) {
-            const logContent = `---
+          const updateLog = args.update_log as { updated: string[]; created: string[]; deferred: string[] };
+          const logContent = `---
 type: update-log
 source: ${parsed.data['source'] || ''}
 date: ${today}
@@ -592,18 +673,15 @@ ${updateLog.created.map(c => `- ${c}`).join('\n') || '(none)'}
 ## Deferred to Review
 ${updateLog.deferred.map(d => `- ${d}`).join('\n') || '(none)'}
 `;
-            const logPath = path.join(vaultPath, 'Knowledge', '_Ops', 'Update-Logs', `${today}T${ts.slice(9)}-${sourceSlug}.md`);
-            autoWrite(logPath, logContent, vaultPath);
-          }
+          const logPath = path.join(vaultPath, 'Knowledge', '_Ops', 'Update-Logs', `${ts}-${sourceSlug}.md`);
+          autoWrite(logPath, logContent, vaultPath);
 
-          // Rebuild indexes for affected kinds
           const { rebuildKnowledgeIndex } = await import('../../knowledge/index-builder.js');
           for (const kind of ['Concepts', 'Entities', 'Methods'] as const) {
             const kindDir = path.join(vaultPath, 'Knowledge', kind);
             if (fs.existsSync(kindDir)) rebuildKnowledgeIndex(kind, vaultPath);
           }
 
-          // Update kb_status on source reading note
           const anyDeferred = allTargets.some(t => t.state === 'deferred');
           const newKbStatus = anyDeferred ? 'merged_with_review' : 'merged';
           for (const prefix of ['Reading/Papers', 'Reading/Threads']) {
