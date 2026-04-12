@@ -10,6 +10,44 @@ import { autoWrite, frontmatterFieldUpdate } from '../../editing/auto-writer.js'
 
 const log = logger.child('kb-tools');
 
+// Helper: parse the Targets table from a mapping artifact body
+interface MappingTarget {
+  slug: string;
+  action: string;
+  state: string;
+  reviewQueue: string;
+  updated: string;
+}
+
+function parseMappingTargets(body: string): MappingTarget[] {
+  const targets: MappingTarget[] = [];
+  const tableRegex = /\|\s*\[\[([^\]]+)\]\]\s*\|\s*(\S+)\s*\|\s*(\S+)\s*\|\s*([^|]*)\|\s*([^|]*)\|/g;
+  let m: RegExpExecArray | null;
+  while ((m = tableRegex.exec(body)) !== null) {
+    targets.push({
+      slug: m[1].trim(),
+      action: m[2].trim(),
+      state: m[3].trim(),
+      reviewQueue: m[4].trim(),
+      updated: m[5].trim(),
+    });
+  }
+  return targets;
+}
+
+function updateMappingTargetState(
+  artifactContent: string,
+  slug: string,
+  newState: string,
+  reviewQueueLink: string,
+): string {
+  const rowRegex = new RegExp(
+    `(\\|\\s*\\[\\[${slug}\\]\\]\\s*\\|\\s*\\S+\\s*\\|)\\s*\\S+\\s*(\\|[^|]*\\|)[^|]*(\\|)`,
+  );
+  const timestamp = new Date().toISOString().slice(0, 16);
+  return artifactContent.replace(rowRegex, `$1 ${newState} | ${reviewQueueLink} | ${timestamp} |`);
+}
+
 export function createKbTools(
   vaultPath: string,
   injectedDb?: Database.Database,
@@ -291,6 +329,301 @@ ${rejectedLines || '(none)'}
           artifactPath: artifactRel,
           targetCount: confirmedTargets.length,
           message: `Mapping artifact written. Run kb_apply with mapping: "${artifactRel}" to start applying updates.`,
+        });
+      },
+    },
+
+    // -----------------------------------------------------------------------
+    // kb_apply (Mode 1 — from mapping artifact)
+    // -----------------------------------------------------------------------
+    {
+      definition: {
+        name: 'kb_apply',
+        description:
+          'Load the next pending target from a mapping artifact alongside the source note. Returns their content so you can propose an update via vault_write. After the user confirms vault_write, call kb_apply_advance to record the state change.',
+        parameters: {
+          type: 'object',
+          properties: {
+            mapping: {
+              type: 'string',
+              description: 'Relative vault path to the mapping artifact (*-mapping.md)',
+            },
+          },
+          required: ['mapping'],
+        },
+      },
+      execute: async (args) => {
+        let artifactPath: string;
+        try {
+          artifactPath = resolveVaultPath(vaultPath, args.mapping as string);
+        } catch {
+          return JSON.stringify({ error: `Invalid path: "${args.mapping}"` });
+        }
+        if (!fs.existsSync(artifactPath)) {
+          return JSON.stringify({ error: `Mapping artifact not found: ${args.mapping}` });
+        }
+
+        const raw = fs.readFileSync(artifactPath, 'utf-8');
+        const parsed = matter(raw);
+        const targets = parseMappingTargets(parsed.content);
+
+        const pending = targets.find(t => t.state === 'pending');
+        if (!pending) {
+          return JSON.stringify({ status: 'all_done', message: 'No pending targets remain. Call kb_apply_advance with the final update_log to complete the workflow.' });
+        }
+
+        // Resolve source from mapping frontmatter
+        const sourceWikilink = String(parsed.data['source'] || '');
+        const sourceSlug = sourceWikilink.replace(/^\[\[|\]\]$/g, '');
+
+        // Find source note — first try mapping artifact directory (supports experiment notes
+        // in project subdirs like Projects/P001-*/CM003-qpcr.md), then fall back to common locations
+        let sourceContent = '(source note not found)';
+        const artifactDir = path.dirname(artifactPath);
+        const candidatePaths = [
+          path.join(artifactDir, `${sourceSlug}.md`),
+          path.join(vaultPath, 'Reading', 'Papers', `${sourceSlug}.md`),
+          path.join(vaultPath, 'Reading', 'Threads', `${sourceSlug}.md`),
+        ];
+        for (const candidatePath of candidatePaths) {
+          if (fs.existsSync(candidatePath)) {
+            sourceContent = fs.readFileSync(candidatePath, 'utf-8');
+            break;
+          }
+        }
+        // If still not found, search recursively under Projects/
+        if (sourceContent === '(source note not found)') {
+          const projectsDir = path.join(vaultPath, 'Projects');
+          if (fs.existsSync(projectsDir)) {
+            function findInDir(dir: string): string | null {
+              for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                if (entry.isDirectory()) { const r = findInDir(path.join(dir, entry.name)); if (r) return r; }
+                else if (entry.name === `${sourceSlug}.md`) return path.join(dir, entry.name);
+              }
+              return null;
+            }
+            const found = findInDir(projectsDir);
+            if (found) sourceContent = fs.readFileSync(found, 'utf-8');
+          }
+        }
+
+        // Find target knowledge note (try all three kinds)
+        let targetContent = '(target note not found — will be created)';
+        let targetPath = '';
+        for (const kind of ['Concepts', 'Entities', 'Methods']) {
+          const candidate = path.join(vaultPath, 'Knowledge', kind, `${pending.slug}.md`);
+          if (fs.existsSync(candidate)) {
+            targetContent = fs.readFileSync(candidate, 'utf-8');
+            targetPath = `Knowledge/${kind}/${pending.slug}.md`;
+            break;
+          }
+        }
+
+        // Crash-recovery dedup: if source already in compiled_from, skip
+        if (targetContent !== '(target note not found — will be created)') {
+          const targetFm = matter(targetContent).data as Record<string, unknown>;
+          const compiledFrom = Array.isArray(targetFm['compiled_from']) ? targetFm['compiled_from'] : [];
+          if (compiledFrom.some((cf: unknown) => String(cf).includes(sourceSlug))) {
+            return JSON.stringify({
+              status: 'already_applied',
+              message: `Source [[${sourceSlug}]] is already in compiled_from of [[${pending.slug}]]. Skipping — call kb_apply_advance with state: "applied" to advance.`,
+              target_slug: pending.slug,
+            });
+          }
+        }
+
+        return JSON.stringify({
+          sourceContent,
+          targetContent,
+          targetSlug: pending.slug,
+          targetAction: pending.action,
+          targetPath: targetPath || `(determine correct Kind folder before creating)`,
+          mappingPath: args.mapping,
+          remainingPending: targets.filter(t => t.state === 'pending').length,
+          instruction: [
+            `Update [[${pending.slug}]] (action: ${pending.action}) using the source content above.`,
+            'Rules:',
+            '  1. Prefer updating an existing note over creating a new one.',
+            '  2. Every Key Claims bullet must use format: - [supports|contradicts|extends] Text. [[source-slug]]',
+            '  3. Never silently delete old claims — add contradiction tag instead.',
+            '  4. Put disagreements into Contradictions and Caveats section.',
+            '  5. Update compiled_from, last_updated, and aliases if new synonyms found.',
+            '',
+            'Call vault_write with the updated knowledge note content.',
+            'After the user confirms, call kb_apply_advance.',
+          ].join('\n'),
+        });
+      },
+    },
+
+    // -----------------------------------------------------------------------
+    // kb_apply_advance
+    // -----------------------------------------------------------------------
+    {
+      definition: {
+        name: 'kb_apply_advance',
+        description:
+          'Record the outcome of one kb_apply step: update the mapping artifact state, create a Review-Queue note if deferred, set needs_review if contradiction was added. When all targets are done, writes the Update Log, rebuilds Knowledge indexes, and updates kb_status.',
+        parameters: {
+          type: 'object',
+          properties: {
+            mapping: { type: 'string', description: 'Relative vault path to the mapping artifact' },
+            target_slug: { type: 'string', description: 'Slug of the knowledge note just processed' },
+            state: { type: 'string', enum: ['applied', 'skipped', 'deferred'], description: 'Outcome for this target' },
+            contradiction_added: { type: 'boolean', description: 'True if a contradiction was added to the knowledge note' },
+            review_queue_title: { type: 'string', description: 'Title for Review-Queue note (required when state=deferred)' },
+            review_queue_reason: { type: 'string', description: 'Reason slug (ambiguous-relationship, source-conflict, etc.)' },
+            review_queue_body: { type: 'string', description: 'Full body of the Review-Queue note (required when state=deferred)' },
+            update_log: {
+              type: 'object',
+              description: 'Summary of all changes this session — provide on FINAL advance (last pending target)',
+              properties: {
+                updated: { type: 'array', items: { type: 'string' } },
+                created: { type: 'array', items: { type: 'string' } },
+                deferred: { type: 'array', items: { type: 'string' } },
+              },
+            },
+          },
+          required: ['mapping', 'target_slug', 'state', 'contradiction_added'],
+        },
+      },
+      execute: async (args) => {
+        const mappingRel = (args.mapping as string).replace(/\\/g, '/');
+        const artifactPath = path.join(vaultPath, mappingRel);
+        if (!fs.existsSync(artifactPath)) {
+          return JSON.stringify({ error: `Mapping artifact not found: ${args.mapping}` });
+        }
+
+        const slug = args.target_slug as string;
+        const state = args.state as string;
+        const contradictionAdded = Boolean(args.contradiction_added);
+
+        const raw = fs.readFileSync(artifactPath, 'utf-8');
+        const parsed = matter(raw);
+
+        let rqLink = '';
+
+        // Create Review-Queue note if deferred
+        if (state === 'deferred') {
+          const rqTitle = (args.review_queue_title as string) || `${slug}-review`;
+          const today = new Date().toISOString().slice(0, 10);
+          const rqSlug = `${today}-${slug}`;
+          const rqBody = (args.review_queue_body as string) || '';
+          const rqContent = `---
+type: review-queue
+source: ${parsed.data['source'] || ''}
+target_concept: [[${slug}]]
+reason: ${(args.review_queue_reason as string) || 'ambiguous-relationship'}
+created: ${today}
+status: pending
+rq_source: ${String(parsed.data['source'] || '').replace(/^\[\[|\]\]$/g, '')}
+rq_target: ${slug}
+---
+
+# ${rqTitle}
+
+## The Issue
+${rqBody}
+
+## Source Claim
+
+## Existing Knowledge
+
+## Resolution
+`;
+          const rqPath = path.join(vaultPath, 'Knowledge', 'Review-Queue', `${rqSlug}.md`);
+          autoWrite(rqPath, rqContent, vaultPath);
+          rqLink = `[[${rqSlug}]]`;
+
+          // Set needs_review on the target knowledge note
+          for (const kind of ['Concepts', 'Entities', 'Methods']) {
+            const candidate = path.join(vaultPath, 'Knowledge', kind, `${slug}.md`);
+            if (fs.existsSync(candidate)) {
+              frontmatterFieldUpdate(candidate, 'needs_review', true, vaultPath);
+              frontmatterFieldUpdate(candidate, 'review_flagged_at', new Date().toISOString(), vaultPath);
+              break;
+            }
+          }
+        }
+
+        // Set needs_review if contradiction added (and not already deferred)
+        if (contradictionAdded && state !== 'deferred') {
+          for (const kind of ['Concepts', 'Entities', 'Methods']) {
+            const candidate = path.join(vaultPath, 'Knowledge', kind, `${slug}.md`);
+            if (fs.existsSync(candidate)) {
+              frontmatterFieldUpdate(candidate, 'needs_review', true, vaultPath);
+              frontmatterFieldUpdate(candidate, 'review_flagged_at', new Date().toISOString(), vaultPath);
+              break;
+            }
+          }
+        }
+
+        // Update mapping artifact target row
+        let newBody = updateMappingTargetState(parsed.content, slug, state, rqLink);
+        const allTargets = parseMappingTargets(newBody);
+        const anyPending = allTargets.some(t => t.state === 'pending');
+        const newStatus = anyPending ? 'confirmed' : 'applied';
+
+        const updatedArtifact = matter.stringify(newBody, { ...parsed.data, status: newStatus });
+        autoWrite(artifactPath, updatedArtifact, vaultPath);
+
+        // If all done — write Update Log, rebuild indexes, update kb_status
+        if (!anyPending) {
+          const sourceSlug = String(parsed.data['source'] || '').replace(/^\[\[|\]\]$/g, '');
+          const today = new Date().toISOString().slice(0, 10);
+          const ts = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
+
+          const updateLog = (args.update_log as { updated: string[]; created: string[]; deferred: string[] } | undefined);
+          if (updateLog) {
+            const logContent = `---
+type: update-log
+source: ${parsed.data['source'] || ''}
+date: ${today}
+---
+
+# KB Update Log — ${sourceSlug}
+
+## Updated
+${updateLog.updated.map(u => `- ${u}`).join('\n') || '(none)'}
+
+## Created
+${updateLog.created.map(c => `- ${c}`).join('\n') || '(none)'}
+
+## Deferred to Review
+${updateLog.deferred.map(d => `- ${d}`).join('\n') || '(none)'}
+`;
+            const logPath = path.join(vaultPath, 'Knowledge', '_Ops', 'Update-Logs', `${today}T${ts.slice(9)}-${sourceSlug}.md`);
+            autoWrite(logPath, logContent, vaultPath);
+          }
+
+          // Rebuild indexes for affected kinds
+          const { rebuildKnowledgeIndex } = await import('../../knowledge/index-builder.js');
+          for (const kind of ['Concepts', 'Entities', 'Methods'] as const) {
+            const kindDir = path.join(vaultPath, 'Knowledge', kind);
+            if (fs.existsSync(kindDir)) rebuildKnowledgeIndex(kind, vaultPath);
+          }
+
+          // Update kb_status on source reading note
+          const anyDeferred = allTargets.some(t => t.state === 'deferred');
+          const newKbStatus = anyDeferred ? 'merged_with_review' : 'merged';
+          for (const prefix of ['Reading/Papers', 'Reading/Threads']) {
+            const candidate = path.join(vaultPath, prefix, `${sourceSlug}.md`);
+            if (fs.existsSync(candidate)) {
+              frontmatterFieldUpdate(candidate, 'kb_status', newKbStatus, vaultPath);
+              break;
+            }
+          }
+        }
+
+        log.info('kb_apply_advance', { target: slug, state, mappingStatus: newStatus });
+        return JSON.stringify({
+          status: state,
+          target: slug,
+          mappingStatus: newStatus,
+          remainingPending: anyPending ? allTargets.filter(t => t.state === 'pending').length : 0,
+          message: anyPending
+            ? `Target [[${slug}]] marked ${state}. Call kb_apply again to process the next pending target.`
+            : `All targets processed. Mapping status: ${newStatus}. kb_status updated.`,
         });
       },
     },
