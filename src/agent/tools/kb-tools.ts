@@ -197,7 +197,7 @@ export function createKbTools(
         const confirmedTargets = (args.confirmed_targets as Array<{ slug: string; action: string; kind?: string }>) || [];
         const rejectedTargets = (args.rejected_targets as Array<{ slug: string; reason?: string }>) || [];
         // Determine source type once — only Reading notes use kb_status
-        const isReadingNote = (args.source as string).startsWith('Reading/');
+        const isReadingNote = /^Reading\/[^/]+\//.test(args.source as string);
 
         // Use args.source (vault-relative) to derive all paths — avoids symlink
         // desync between raw vaultPath and realpathSync-resolved notePath on macOS.
@@ -213,15 +213,27 @@ export function createKbTools(
           return JSON.stringify({ status: 'skipped', message: 'No targets confirmed. No mapping artifact written.' + (isReadingNote ? ' kb_status set to skipped.' : '') });
         }
 
+        // Runtime validation of action enum
+        const validActions = new Set(['update', 'create']);
+        for (const t of confirmedTargets) {
+          if (!validActions.has(t.action)) {
+            return JSON.stringify({ error: `Invalid action "${t.action}" for target "${t.slug}". Must be "update" or "create".` });
+          }
+          if (t.action === 'create' && !t.kind) {
+            return JSON.stringify({ error: `Target "${t.slug}" has action "create" but missing required "kind" field (Concepts|Entities|Methods).` });
+          }
+        }
+
         // Build mapping artifact content
+        const sanitize = (s: string) => s.replace(/[|\n\r]/g, ' ').trim();
         const sourceSlug = path.basename(sourceRel, '.md');
         const sourceDir = path.dirname(sourceRel); // vault-relative directory
         const today = new Date().toISOString().slice(0, 10);
         const targetRows = confirmedTargets.map(t =>
-          `| [[${t.slug}]] | ${t.action} | pending | | |`
+          `| [[${sanitize(t.slug)}]] | ${t.action} | pending | | |`
         ).join('\n');
         const rejectedLines = rejectedTargets.map(t =>
-          `- [[${t.slug}]]${t.reason ? ` — "${t.reason}"` : ''}`
+          `- [[${sanitize(t.slug)}]]${t.reason ? ` — "${sanitize(t.reason)}"` : ''}`
         ).join('\n');
 
         const artifactContent = `---
@@ -248,7 +260,8 @@ ${rejectedLines || '(none)'}
         // Check collision (spec §10)
         if (fs.existsSync(artifactAbs)) {
           const existing = fs.readFileSync(artifactAbs, 'utf-8');
-          if (existing.includes('status: applied')) {
+          const existingParsed = matter(existing);
+          if (existingParsed.data.status === 'applied') {
             if (!args.rerun_confirmed) {
               return JSON.stringify({
                 status: 'needs_confirmation',
@@ -262,7 +275,7 @@ ${rejectedLines || '(none)'}
               frontmatterFieldUpdate(sourceAbsVault, 'kb_status', 'mapped', vaultPath);
             }
             return JSON.stringify({ status: 'mapped', artifactPath: newRel, targetCount: confirmedTargets.length, note: 'Previous applied artifact preserved; new timestamped artifact created.' });
-          } else if (existing.includes('status: confirmed')) {
+          } else if (existingParsed.data.status === 'confirmed') {
             return JSON.stringify({ status: 'already_in_progress', message: 'A mapping is already in progress. Run kb_apply to continue.' });
           }
           // status: draft → overwrite

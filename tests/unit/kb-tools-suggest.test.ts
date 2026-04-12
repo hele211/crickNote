@@ -124,6 +124,21 @@ describe('kb_write_mapping tool', () => {
     const artifact = path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-il42-mapping.md');
     expect(fs.existsSync(artifact)).toBe(false);
   });
+
+  it('confirmed collision returns already_in_progress', async () => {
+    // Write a pre-existing confirmed (in-progress) mapping artifact
+    fs.writeFileSync(
+      path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-il42-mapping.md'),
+      '---\nstatus: confirmed\n---\n\n## Targets\n'
+    );
+    const tool = tools.find(t => t.definition.name === 'kb_write_mapping')!;
+    const result = JSON.parse(await tool.execute({
+      source: 'Reading/Papers/smith-2026-il42.md',
+      confirmed_targets: [{ slug: 'cd4-cd8-interaction', action: 'update' }],
+      rejected_targets: [],
+    }));
+    expect(result.status).toBe('already_in_progress');
+  });
 });
 
 describe('kb_write_mapping — experiment note paths (no kb_status)', () => {
