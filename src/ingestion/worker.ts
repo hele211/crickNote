@@ -142,6 +142,10 @@ export class IngestionWorker extends EventEmitter<WorkerEvents> {
    * Skips if content hash hasn't changed.
    */
   private async processFile(relativePath: string): Promise<void> {
+    if (shouldIgnoreIngestionPath(relativePath)) {
+      return;
+    }
+
     const absolutePath = path.join(this.vaultPath, relativePath);
 
     // Read file
@@ -233,4 +237,12 @@ export class IngestionWorker extends EventEmitter<WorkerEvents> {
       this.processing = false;
     }
   }
+}
+
+export function shouldIgnoreIngestionPath(relativePath: string): boolean {
+  const normalized = relativePath.replace(/\\/g, '/');
+  return (
+    /(^|\/)attachments\//.test(normalized) ||
+    /^(Reading\/[^/]+|Projects\/[^/]+)\/[^/]+-mapping(?:-\d{8}T\d{6})?\.md$/.test(normalized)
+  );
 }

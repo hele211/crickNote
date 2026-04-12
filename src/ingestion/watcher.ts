@@ -21,6 +21,11 @@ const IGNORED_DIRS = [
   'Agent',
 ];
 
+const IGNORED_PATH_PATTERNS = [
+  /(^|[/\\])attachments([/\\]|$)/,
+  /[/\\][^/\\]+-mapping(?:-\d{8}T\d{6})?\.md$/,
+] as const;
+
 /** Debounce interval in milliseconds for file change events. */
 const DEBOUNCE_MS = 1500;
 
@@ -47,6 +52,7 @@ export class VaultWatcher {
     this.watcher = chokidar.watch(this.vaultPath, {
       ignored: [
         ...ignoredPatterns,
+        ...IGNORED_PATH_PATTERNS,
         // Also ignore dotfiles/dotdirs at any level
         /(^|[/\\])\../,
       ],
@@ -124,6 +130,7 @@ export class VaultWatcher {
         if (entry.startsWith('.')) continue;
 
         const fullPath = path.join(dir, entry);
+        if (IGNORED_PATH_PATTERNS.some(pattern => pattern.test(fullPath))) continue;
         const entryStat = await lstat(fullPath);
 
         // Never follow symlinks – they could escape the vault boundary
