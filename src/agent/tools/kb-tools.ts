@@ -740,6 +740,11 @@ ${updateLog.deferred.map(d => `- ${d}`).join('\n') || '(none)'}
         } catch (e) {
           return JSON.stringify({ error: (e as Error).message });
         }
+        const targetRel = (args.target as string).replace(/\\/g, '/');
+        const allowedPrefixes = ['Knowledge/Concepts/', 'Knowledge/Entities/', 'Knowledge/Methods/'];
+        if (!allowedPrefixes.some(p => targetRel.startsWith(p)) || !targetRel.endsWith('.md')) {
+          return JSON.stringify({ error: `Target must be a .md file under Knowledge/Concepts/, Knowledge/Entities/, or Knowledge/Methods/. Got: "${args.target}"` });
+        }
         if (!fs.existsSync(sourcePath)) return JSON.stringify({ error: `Source not found: ${args.source}` });
         if (!fs.existsSync(targetPath)) return JSON.stringify({ error: `Target not found: ${args.target}` });
 
@@ -751,8 +756,9 @@ ${updateLog.deferred.map(d => `- ${d}`).join('\n') || '(none)'}
         let logPath = '';
         if (updateLog) {
           const sourceSlug = path.basename(sourcePath, '.md');
-          const today = new Date().toISOString().slice(0, 10);
-          const ts = new Date().toISOString().replace(/[:.]/g, '').slice(0, 15);
+          const now = new Date();
+          const today = now.toISOString().slice(0, 10);
+          const timePart = now.toISOString().slice(11, 19).replace(/:/g, '-');
           const logContent = `---
 type: update-log
 source: [[${sourceSlug}]]
@@ -771,7 +777,7 @@ ${(updateLog.created || []).map(c => `- ${c}`).join('\n') || '(none)'}
 ## Notes
 ${updateLog.notes || ''}
 `;
-          logPath = path.join(vaultPath, 'Knowledge', '_Ops', 'Update-Logs', `${today}T${ts.slice(9)}-${sourceSlug}.md`);
+          logPath = path.join(vaultPath, 'Knowledge', '_Ops', 'Update-Logs', `${today}T${timePart}-${sourceSlug}.md`);
           autoWrite(logPath, logContent, vaultPath);
         }
 
@@ -833,6 +839,13 @@ ${updateLog.notes || ''}
         const rqTarget = String(fm['rq_target'] || '').replace(/^\[\[|\]\]$/g, '');
         const rqSource = String(fm['rq_source'] || '').replace(/^\[\[|\]\]$/g, '');
 
+        if (!rqTarget || !isValidSlug(rqTarget)) {
+          return JSON.stringify({ error: `Invalid or missing rq_target in Review-Queue note: "${rqTarget}"` });
+        }
+        if (!rqSource || !isValidSlug(rqSource)) {
+          return JSON.stringify({ error: `Invalid or missing rq_source in Review-Queue note: "${rqSource}"` });
+        }
+
         // Find target knowledge note
         let targetContent = '(not found)';
         let targetAbsPath = '';
@@ -847,6 +860,10 @@ ${updateLog.notes || ''}
 
         const resolution = args.resolution as string | undefined;
         const confirmedWrite = Boolean(args.confirmed_knowledge_write);
+
+        if (resolution && resolution !== 'resolved' && resolution !== 'dismissed') {
+          return JSON.stringify({ error: `Invalid resolution value: "${resolution}". Must be "resolved" or "dismissed".` });
+        }
 
         if (resolution && !confirmedWrite) {
           return JSON.stringify({
@@ -874,10 +891,15 @@ ${updateLog.notes || ''}
 
         // Mark the Review-Queue note resolved/dismissed
         const summary = (args.resolution_summary as string) || '';
-        const newBody = parsed.content.replace(
-          /## Resolution\n[\s\S]*/,
-          `## Resolution\n${summary}\n`
-        );
+        let newBody: string;
+        if (/## Resolution\n/.test(parsed.content)) {
+          newBody = parsed.content.replace(
+            /## Resolution\n[\s\S]*/,
+            `## Resolution\n${summary}\n`
+          );
+        } else {
+          newBody = `${parsed.content.trimEnd()}\n\n## Resolution\n${summary}\n`;
+        }
         const updatedRq = matter.stringify(newBody, { ...fm, status: resolution });
         autoWrite(rqPath, updatedRq, vaultPath);
 
@@ -936,12 +958,16 @@ ${updateLog.notes || ''}
         if (mappingAbs) {
           const mappingRaw = fs.readFileSync(mappingAbs, 'utf-8');
           const mappingParsed = matter(mappingRaw);
-          const { content: updatedBody } = updateMappingTargetState(mappingParsed.content, rqTarget, 'applied', `[[${path.basename(rqPath, '.md')}]]`);
-          const allTargets = parseMappingTargets(updatedBody);
-          const anyPending = allTargets.some(t => t.state === 'pending');
-          const newMappingStatus = anyPending ? 'confirmed' : 'applied';
-          const updatedMapping = matter.stringify(updatedBody, { ...mappingParsed.data, status: newMappingStatus });
-          autoWrite(mappingAbs, updatedMapping, vaultPath);
+          const { content: updatedBody, updated: rowUpdated } = updateMappingTargetState(mappingParsed.content, rqTarget, 'applied', `[[${path.basename(rqPath, '.md')}]]`);
+          if (!rowUpdated) {
+            log.warn('kb_resolve_review: target row not found in mapping artifact, skipping status update', { rqTarget, mappingAbs });
+          } else {
+            const allTargets = parseMappingTargets(updatedBody);
+            const anyUnresolved = allTargets.some(t => t.state === 'pending' || t.state === 'deferred');
+            const newMappingStatus = anyUnresolved ? 'confirmed' : 'applied';
+            const updatedMapping = matter.stringify(updatedBody, { ...mappingParsed.data, status: newMappingStatus });
+            autoWrite(mappingAbs, updatedMapping, vaultPath);
+          }
         }
 
         return JSON.stringify({
