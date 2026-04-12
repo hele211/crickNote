@@ -65,4 +65,34 @@ describe('rebuildKnowledgeIndex', () => {
     const occurrences = (idx.match(/_index/g) || []).length;
     expect(occurrences).toBe(0);
   });
+
+  it('creates valid empty _index.md when folder has no knowledge notes', () => {
+    // Remove the concept files, leave folder empty
+    fs.rmSync(path.join(vaultPath, 'Knowledge', 'Concepts', 'cd4-cd8-interaction.md'));
+    fs.rmSync(path.join(vaultPath, 'Knowledge', 'Concepts', 't-cell-suppression.md'));
+    rebuildKnowledgeIndex('Concepts', vaultPath);
+    const idx = fs.readFileSync(path.join(vaultPath, 'Knowledge', 'Concepts', '_index.md'), 'utf-8');
+    expect(idx).toContain('type: index');
+    expect(idx).toContain('| Title |'); // table header still present
+  });
+
+  it('skips corrupted files without crashing', () => {
+    fs.writeFileSync(
+      path.join(vaultPath, 'Knowledge', 'Concepts', 'bad.md'),
+      '---\n: invalid yaml: [\n---\n'
+    );
+    expect(() => rebuildKnowledgeIndex('Concepts', vaultPath)).not.toThrow();
+  });
+
+  it('works for Entities and Methods kinds', () => {
+    fs.mkdirSync(path.join(vaultPath, 'Knowledge', 'Entities'), { recursive: true });
+    fs.writeFileSync(
+      path.join(vaultPath, 'Knowledge', 'Entities', 'il-42.md'),
+      '---\ntitle: IL-42\naliases: [interleukin-42]\nlast_updated: 2026-04-08\ncompiled_from: ["[[smith-2026]]"]\n---\n'
+    );
+    rebuildKnowledgeIndex('Entities', vaultPath);
+    const idx = fs.readFileSync(path.join(vaultPath, 'Knowledge', 'Entities', '_index.md'), 'utf-8');
+    expect(idx).toContain('folder: Knowledge/Entities');
+    expect(idx).toContain('IL-42');
+  });
 });

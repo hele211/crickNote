@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import matter from 'gray-matter';
 import { autoWrite } from '../editing/auto-writer.js';
-import { utcDateString } from '../utils/date.js';
+import { utcDateString, localDateString } from '../utils/date.js';
 
 type KnowledgeKind = 'Concepts' | 'Entities' | 'Methods';
 
@@ -49,10 +49,11 @@ export function rebuildKnowledgeIndex(kind: KnowledgeKind, vaultPath: string): v
 
   entries.sort((a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()));
 
-  const today = utcDateString(new Date());
-  const rows = entries.map(e =>
-    `| [[${e.slug}]] | ${e.aliases} | ${e.lastUpdated} | ${e.sourceCount} |`
-  ).join('\n');
+  const today = localDateString();
+  const rows = entries.map(e => {
+    const safeAliases = e.aliases.replace(/\|/g, '\\|');
+    return `| [[${e.slug}|${e.title}]] | ${safeAliases} | ${e.lastUpdated} | ${e.sourceCount} |`;
+  }).join('\n');
 
   const content = `---
 type: index
