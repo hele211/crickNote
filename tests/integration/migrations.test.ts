@@ -39,7 +39,7 @@ describe('database migrations', () => {
     runMigrations(db);
 
     const row = db.prepare('SELECT MAX(version) as v FROM schema_version').get() as { v: number };
-    expect(row.v).toBe(2);
+    expect(row.v).toBe(3);
     expect(row.v).toBeGreaterThan(0);
   });
 
@@ -49,7 +49,7 @@ describe('database migrations', () => {
     expect(() => runMigrations(db)).not.toThrow();
 
     const maxRow = db.prepare('SELECT MAX(version) as v FROM schema_version').get() as { v: number };
-    expect(maxRow.v).toBe(2);
+    expect(maxRow.v).toBe(3);
   });
 
   it('creates expected indexes', () => {
