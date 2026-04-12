@@ -12,8 +12,8 @@ function isAutoWriteAllowed(rel: string): boolean {
     rel.startsWith('Knowledge/_Ops/Update-Logs/') ||
     rel.startsWith('Knowledge/_Ops/Lint-Reports/') ||
     /^Knowledge\/(Concepts|Entities|Methods)\/_index\.md$/.test(rel) ||
-    /^Reading\/(Papers|Threads)\/.*-mapping\.md$/.test(rel) ||
-    /^Projects\/P\d+-[^/]+\/.*-mapping\.md$/.test(rel)
+    /^Reading\/(Papers|Threads)\/.*-mapping(-\d{8}T\d{6})?\.md$/.test(rel) ||
+    /^Projects\/P\d+-[^/]+\/.*-mapping(-\d{8}T\d{6})?\.md$/.test(rel)
   );
 }
 
