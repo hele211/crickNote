@@ -1007,9 +1007,28 @@ ${updateLog.notes || ''}
         const niceToImprove: string[] = [];
 
         const targetArg = args.target as string | undefined;
-        const lintRoot = targetArg
-          ? (() => { try { return resolveVaultPath(vaultPath, targetArg); } catch { return vaultPath; } })()
-          : vaultPath;
+        let lintRoot: string;
+        let singleFile: string | null = null;
+        if (targetArg) {
+          let resolved: string;
+          try {
+            resolved = resolveVaultPath(vaultPath, targetArg);
+          } catch {
+            return JSON.stringify({ error: `Invalid target: "${targetArg}" is outside the vault or does not exist.` });
+          }
+          if (!fs.existsSync(resolved)) {
+            return JSON.stringify({ error: `Invalid target: "${targetArg}" does not exist.` });
+          }
+          const stat = fs.statSync(resolved);
+          if (stat.isFile()) {
+            singleFile = resolved;
+            lintRoot = vaultPath;
+          } else {
+            lintRoot = resolved;
+          }
+        } else {
+          lintRoot = vaultPath;
+        }
 
         function collectMdFiles(dir: string): string[] {
           if (!fs.existsSync(dir)) return [];
@@ -1022,9 +1041,9 @@ ${updateLog.notes || ''}
           return results;
         }
 
-        const allFiles = collectMdFiles(lintRoot);
+        const allFiles = singleFile ? [singleFile] : collectMdFiles(lintRoot);
 
-        const allVaultFiles = lintRoot === vaultPath ? allFiles : collectMdFiles(vaultPath);
+        const allVaultFiles = (singleFile || lintRoot !== vaultPath) ? collectMdFiles(vaultPath) : allFiles;
         const existingSlugs = new Set(allVaultFiles.map(f => path.basename(f, '.md')));
 
         for (const absPath of allFiles) {
@@ -1069,8 +1088,8 @@ ${updateLog.notes || ''}
           // Check 4: reading note complete but not merged
           if (isReading && fm['status'] === 'complete') {
             const kbStat = fm['kb_status'] as string | undefined;
-            if (!kbStat || ['pending', 'mapped', 'merged_with_review'].includes(kbStat)) {
-              needsAttention.push(`[[${slug}]] is complete but kb_status is "${kbStat ?? 'unset'}" — unfinished KB work`);
+            if (kbStat && ['pending', 'mapped', 'merged_with_review'].includes(kbStat)) {
+              needsAttention.push(`[[${slug}]] is complete but kb_status is "${kbStat}" — unfinished KB work`);
             }
           }
 
@@ -1125,7 +1144,7 @@ ${updateLog.notes || ''}
             const lastUpdatedDate = new Date(lastUpdated);
 
             for (const sourceRef of compiledFrom as unknown[]) {
-              const sourceSlug = String(sourceRef).replace(/^\[\[|\]\]$/g, '');
+              const sourceSlug = String(sourceRef).replace(/^\[\[|\]\]$/g, '').split(/[|#]/)[0].trim();
               for (const prefix of ['Reading/Papers', 'Reading/Threads']) {
                 const sourceAbs = path.join(vaultPath, prefix, `${sourceSlug}.md`);
                 if (!fs.existsSync(sourceAbs)) continue;
@@ -1137,7 +1156,6 @@ ${updateLog.notes || ''}
                     break;
                   }
                 } catch { /* skip */ }
-                break;
               }
             }
           } catch { /* skip */ }
