@@ -404,9 +404,13 @@ export function createReadingIntakeTools(
           }
         }
 
+        // Use an existing thread note if one is already present, otherwise default to Papers
+        const existingNoteRef = findReadingNoteBySlug(vaultPath, slug);
         let notePath: string;
         try {
-          notePath = resolveVaultPath(vaultPath, path.join('Reading', 'Papers', `${slug}.md`));
+          notePath = existingNoteRef
+            ? existingNoteRef.absPath
+            : resolveVaultPath(vaultPath, path.join('Reading', 'Papers', `${slug}.md`));
         } catch {
           return JSON.stringify({ error: 'Resolved reading note path is outside the vault.' });
         }
