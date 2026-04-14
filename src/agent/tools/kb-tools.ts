@@ -5,6 +5,10 @@ import type Database from 'better-sqlite3';
 import type { ToolHandler } from './registry.js';
 import { resolveVaultPath } from '../../utils/paths.js';
 import { loadSources } from '../../knowledge/source-loader.js';
+import {
+  hasCreateHeadings,
+  inferReadingPipelineStep,
+} from '../../knowledge/reading-note.js';
 import { logger } from '../../utils/logger.js';
 import { autoWrite, frontmatterFieldUpdate } from '../../editing/auto-writer.js';
 
@@ -46,9 +50,11 @@ function parseMappingTargets(body: string): MappingTarget[] {
   if (!sectionMatch) return targets;
   for (const line of sectionMatch[1].split('\n')) {
     if (!line.includes('[[')) continue;
-    const cells = line.split('|').map(c => c.trim()).filter((_, i, a) => i > 0 && i < a.length - 1);
+    // Collapse display aliases before splitting so | inside [[...]] doesn't fragment cells
+    const collapsed = line.replace(/\[\[([^\]]*?)\|([^\]]*?)\]\]/g, '[[$1]]');
+    const cells = collapsed.split('|').map(c => c.trim()).filter((_, i, a) => i > 0 && i < a.length - 1);
     if (cells.length < 5) continue;
-    const slugMatch = cells[0].match(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/);
+    const slugMatch = cells[0].match(/\[\[([^\]]+)\]\]/);
     if (!slugMatch) continue;
     const slug = slugMatch[1].trim();
     if (!slug) continue;
@@ -110,11 +116,19 @@ export function createKbTools(
         const raw = fs.readFileSync(notePath, 'utf-8');
         const parsed = matter(raw);
         const fm = parsed.data as Record<string, unknown>;
+        const hasCreateSections = hasCreateHeadings(parsed.content);
+        const readingStatus = typeof fm.status === 'string' ? fm.status : undefined;
+        const kbStatus = typeof fm.kb_status === 'string' ? fm.kb_status : undefined;
 
         const sources = fm['sources'];
         if (!Array.isArray(sources) || sources.length === 0) {
           return JSON.stringify({
             note: { frontmatter: fm, body: parsed.content },
+            status: readingStatus,
+            kb_status: kbStatus,
+            has_create_headings: hasCreateSections,
+            sources_missing: true,
+            next_step: 'needs_sources',
             sources: [],
             warnings: ['No sources listed in frontmatter. Add a "sources:" array and re-run.'],
             instruction: 'No sources to load. Draft CREATE sections from any content already in the note body, or ask the user to add source files first.',
@@ -130,6 +144,11 @@ export function createKbTools(
 
         return JSON.stringify({
           note: { path: args.path, frontmatter: fm, body: parsed.content },
+          status: readingStatus,
+          kb_status: kbStatus,
+          has_create_headings: hasCreateSections,
+          sources_missing: false,
+          next_step: inferReadingPipelineStep(fm, parsed.content),
           sources: result.sources,
           warnings: result.warnings,
           totalTokens: result.totalTokens,
