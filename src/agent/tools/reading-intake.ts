@@ -479,6 +479,10 @@ export function createReadingIntakeTools(
         },
       },
       execute: async (args) => {
+        if (args.path === undefined && args.slug === undefined) {
+          return JSON.stringify({ error: 'Either "slug" or "path" is required.' });
+        }
+
         let noteRef: { absPath: string; relPath: string; slug: string } | null = null;
         let slug: string;
 
