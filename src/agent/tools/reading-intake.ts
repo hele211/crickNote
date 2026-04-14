@@ -348,6 +348,11 @@ export function createReadingIntakeTools(
         }
 
         const discovery = discoverBundle(vaultPath, slug);
+
+        if (!discovery.folderExists) {
+          return JSON.stringify({ error: `Reading bundle not found: Reading/attachments/${slug}` });
+        }
+
         let excludedPaths: Set<string>;
         try {
           excludedPaths = normalizeExcludedPaths(args.exclude_paths);
@@ -367,10 +372,6 @@ export function createReadingIntakeTools(
         }
 
         selectedSources = selectedSources.filter((source) => !excludedPaths.has(source.path));
-
-        if (!discovery.folderExists) {
-          return JSON.stringify({ error: `Reading bundle not found: Reading/attachments/${slug}` });
-        }
 
         if (selectedSources.length === 0) {
           return JSON.stringify({ error: `No readable sources selected for Reading/attachments/${slug}` });
