@@ -445,10 +445,16 @@ ${rejectedLines || '(none)'}
         if (sourceContent === '(source note not found)') {
           const projectsDir = path.join(vaultPath, 'Projects');
           if (fs.existsSync(projectsDir)) {
-            function findInDir(dir: string): string | null {
+            function findInDir(dir: string, depth = 0): string | null {
+              if (depth > 8) return null;
               for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-                if (entry.isDirectory()) { const r = findInDir(path.join(dir, entry.name)); if (r) return r; }
-                else if (entry.name === `${sourceSlug}.md`) return path.join(dir, entry.name);
+                if (entry.isSymbolicLink()) continue; // skip symlinks to avoid infinite loops
+                if (entry.isDirectory()) {
+                  const r = findInDir(path.join(dir, entry.name), depth + 1);
+                  if (r) return r;
+                } else if (entry.name === `${sourceSlug}.md`) {
+                  return path.join(dir, entry.name);
+                }
               }
               return null;
             }
