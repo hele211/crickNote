@@ -1,5 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  isReadingSourceType,
+  normalizeReadingSourcePath,
+  type ReadingSourceInput,
+  type ReadingSourceType,
+} from './reading-note.js';
 import { resolveVaultPath } from '../utils/paths.js';
 import { logger } from '../utils/logger.js';
 
@@ -41,7 +47,7 @@ async function extractPdf(absPath: string): Promise<string> {
   return data.text;
 }
 
-const TYPE_PRIORITY: Record<string, number> = {
+const TYPE_PRIORITY: Record<ReadingSourceType, number> = {
   notes: 0,
   pdf: 1,
   notebooklm: 2,
@@ -57,14 +63,35 @@ export async function loadSources(
   const loaded: LoadedSource[] = [];
   const warnings: string[] = [];
   let totalTokens = 0;
+  let sessionCapWarningEmitted = false;
+  const validSources: ReadingSourceInput[] = [];
 
-  const sortedSources = [...sources].sort(
+  for (const src of sources) {
+    if (!isReadingSourceType(src.type)) {
+      warnings.push(`Skipping "${src.path}" — source type "${src.type}" is not supported.`);
+      continue;
+    }
+
+    try {
+      validSources.push({
+        type: src.type,
+        path: normalizeReadingSourcePath(src.path),
+      });
+    } catch (err) {
+      warnings.push(`Skipping "${src.path}" — ${(err as Error).message}`);
+    }
+  }
+
+  const sortedSources = [...validSources].sort(
     (a, b) => (TYPE_PRIORITY[a.type] ?? 99) - (TYPE_PRIORITY[b.type] ?? 99)
   );
 
   for (const src of sortedSources) {
     if (totalTokens >= SESSION_TOKEN_CAP) {
-      warnings.push(`Session cap (${SESSION_TOKEN_CAP} tokens) reached — remaining sources skipped. Consolidate key points into fewer source files.`);
+      if (!sessionCapWarningEmitted) {
+        warnings.push(`Session cap (${SESSION_TOKEN_CAP} tokens) reached — remaining sources skipped. Consolidate key points into fewer source files.`);
+        sessionCapWarningEmitted = true;
+      }
       break;
     }
 
@@ -73,13 +100,6 @@ export async function loadSources(
     if (UNSUPPORTED_EXTS.has(ext)) {
       const kind = ext === '.xlsx' || ext === '.csv' ? 'spreadsheet' : 'image';
       warnings.push(`Cannot read ${kind} "${src.path}" — paste key data into a .md source file.`);
-      continue;
-    }
-
-    // Reject paths that escape the attachment folder
-    const normalizedSrcPath = path.normalize(src.path);
-    if (normalizedSrcPath.startsWith('..') || path.isAbsolute(normalizedSrcPath)) {
-      warnings.push(`Skipping "${src.path}" — source paths must be relative to the attachment folder.`);
       continue;
     }
 
@@ -112,7 +132,10 @@ export async function loadSources(
       if (truncated) {
         if (sessionCapHit) {
           warnings.push(`Source "${src.path}" truncated to ${perSourceCap} tokens due to session cap (original: ${estimateTokens(rawText)} tokens).`);
-          warnings.push(`Session cap (${SESSION_TOKEN_CAP} tokens) reached — remaining sources skipped. Consolidate key points into fewer source files.`);
+          if (!sessionCapWarningEmitted) {
+            warnings.push(`Session cap (${SESSION_TOKEN_CAP} tokens) reached — remaining sources skipped. Consolidate key points into fewer source files.`);
+            sessionCapWarningEmitted = true;
+          }
         } else {
           warnings.push(`Source "${src.path}" truncated to ${perSourceCap} tokens (original: ${estimateTokens(rawText)} tokens).`);
         }
