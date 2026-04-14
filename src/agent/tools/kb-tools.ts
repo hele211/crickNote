@@ -295,7 +295,7 @@ export function createKbTools(
           return JSON.stringify({ status: 'skipped', message: 'No targets confirmed. No mapping artifact written.' + (isReadingNote ? ' kb_status set to skipped.' : '') });
         }
 
-        // Runtime validation of action enum
+        // Runtime validation of action enum and slug format
         const validActions = new Set(['update', 'create']);
         for (const t of confirmedTargets) {
           if (!validActions.has(t.action)) {
@@ -303,6 +303,9 @@ export function createKbTools(
           }
           if (t.action === 'create' && !t.kind) {
             return JSON.stringify({ error: `Target "${t.slug}" has action "create" but missing required "kind" field (Concepts|Entities|Methods).` });
+          }
+          if (!isValidSlug(t.slug)) {
+            return JSON.stringify({ error: `Target slug "${t.slug}" contains invalid characters. Use a filename-only slug (no path separators).` });
           }
         }
 
