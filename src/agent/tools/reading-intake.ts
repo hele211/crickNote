@@ -40,6 +40,8 @@ interface MappingArtifactSummary {
   path?: string;
   status?: string;
   pendingTargets: number;
+  needsCleanup?: boolean;
+  cleanupCandidates?: string[];
 }
 
 const TEXT_SOURCE_EXTENSIONS = new Set(['.md', '.txt']);
@@ -233,8 +235,16 @@ function findRelevantMappingArtifact(vaultPath: string, noteRelPath: string, slu
       return b.mtime - a.mtime;
     });
 
-  const active = candidates.find((candidate) => candidate.status === 'confirmed')
-    ?? candidates[0];
+  const confirmedCandidates = candidates.filter((c) => c.status === 'confirmed');
+  if (confirmedCandidates.length > 1) {
+    return {
+      pendingTargets: 0,
+      needsCleanup: true,
+      cleanupCandidates: confirmedCandidates.map((c) => c.relPath),
+    };
+  }
+
+  const active = confirmedCandidates[0] ?? candidates[0];
 
   if (!active) {
     return { pendingTargets: 0 };
@@ -252,6 +262,10 @@ function determinePipelineStep(
   body: string,
   mapping: MappingArtifactSummary
 ): Exclude<ReadingPipelineStep, 'missing_bundle' | 'ready_to_ingest'> {
+  if (mapping.needsCleanup) {
+    return 'needs_mapping_cleanup';
+  }
+
   const baseStep = inferReadingPipelineStep(frontmatter, body);
   if (baseStep === 'kb_apply_in_progress') {
     return 'kb_apply_in_progress';
@@ -527,6 +541,7 @@ export function createReadingIntakeTools(
           mapping_path: mapping.path,
           mapping_status: mapping.status,
           mapping_pending_targets: mapping.pendingTargets,
+          mapping_cleanup_candidates: mapping.cleanupCandidates,
           next_step: nextStep,
           warnings: discovery.warnings,
         });

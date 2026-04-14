@@ -127,6 +127,29 @@ describe('reading pipeline status', () => {
     expect(result.next_step).toBe('done');
   });
 
+  it('returns needs_mapping_cleanup when multiple confirmed mapping artifacts exist', async () => {
+    fs.writeFileSync(
+      path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-il42.md'),
+      readingNote(
+        'title: Test\nstatus: complete\nkb_status: mapped\nsources:\n  - type: notes\n    path: notes.md\n',
+        '# Test\n\n## Claims\n\nFilled claim.\n'
+      )
+    );
+    // Two confirmed artifacts — ambiguous which is active
+    fs.writeFileSync(
+      path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-il42-mapping.md'),
+      '---\nstatus: confirmed\nsource: [[smith-2026-il42]]\n---\n\n## Targets\n\n| Target | Action | State | Review-Queue | Updated |\n|--------|--------|-------|--------------|---------|\n| [[il42-signalling]] | update | pending | | |\n'
+    );
+    fs.writeFileSync(
+      path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-il42-mapping-20260414T120000.md'),
+      '---\nstatus: confirmed\nsource: [[smith-2026-il42]]\n---\n\n## Targets\n\n| Target | Action | State | Review-Queue | Updated |\n|--------|--------|-------|--------------|---------|\n| [[il42-receptor]] | update | pending | | |\n'
+    );
+
+    const result = JSON.parse(await statusTool.execute({ slug: 'smith-2026-il42' }));
+    expect(result.next_step).toBe('needs_mapping_cleanup');
+    expect(result.mapping_cleanup_candidates).toHaveLength(2);
+  });
+
   it('set_reading_note_status returns a pending_edit with the updated status field', async () => {
     const notePath = path.join(vaultPath, 'Reading', 'Threads', 'smith-2026-il42.md');
     fs.writeFileSync(
