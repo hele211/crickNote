@@ -9,6 +9,7 @@ import { createVaultTools } from './tools/vault.js';
 import { createSearchTools } from './tools/search.js';
 import { createTaskTools } from './tools/tasks.js';
 import { createTemplateTools } from './tools/templates.js';
+import { createReadingIntakeTools } from './tools/reading-intake.js';
 import { createContextTools } from './tools/context.js';
 import { createSerialTools } from './tools/serial-tools.js';
 import { createKbTools } from './tools/kb-tools.js';
@@ -72,6 +73,9 @@ export class AgentRuntime {
     for (const tool of createTemplateTools(config.vaultPath, conflictDetector)) {
       this.registry.register(tool);
     }
+    for (const tool of createReadingIntakeTools(config.vaultPath, conflictDetector)) {
+      this.registry.register(tool);
+    }
     for (const tool of createContextTools(config.vaultPath)) {
       this.registry.register(tool);
     }
@@ -83,7 +87,11 @@ export class AgentRuntime {
     }
   }
 
-  async processMessage(userMessage: string, sessionId: string): Promise<RuntimeResponse> {
+  async processMessage(
+    userMessage: string,
+    sessionId: string,
+    onChunk?: (text: string) => void,
+  ): Promise<RuntimeResponse> {
     const db = getDatabase();
 
     // Ensure session exists
@@ -98,12 +106,30 @@ export class AgentRuntime {
       'SELECT role, content, tool_calls, tool_call_id FROM chat_messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT 20'
     ).all(sessionId) as Array<{ role: string; content: string; tool_calls: string | null; tool_call_id: string | null }>;
 
-    const history: Message[] = recentMessages.reverse().map(m => ({
-      role: m.role as 'user' | 'assistant' | 'tool',
-      content: m.content,
-      toolCalls: m.tool_calls ? JSON.parse(m.tool_calls) : undefined,
-      toolCallId: m.tool_call_id ?? undefined,
-    }));
+    const history: Message[] = recentMessages.reverse().map(m => {
+      let content = m.content;
+      // Search results embed full note bodies in a "context" key which can be
+      // 5–15 KB per call.  When replaying history we only need the result
+      // metadata, not the raw text, so strip that field to keep the context
+      // window from ballooning across multi-turn conversations.
+      if (m.role === 'tool' && content.length > 500) {
+        try {
+          const parsed = JSON.parse(content) as Record<string, unknown>;
+          if (typeof parsed.context === 'string') {
+            parsed.context = '[omitted from history]';
+            content = JSON.stringify(parsed);
+          }
+        } catch {
+          // Not JSON — leave as-is.
+        }
+      }
+      return {
+        role: m.role as 'user' | 'assistant' | 'tool',
+        content,
+        toolCalls: m.tool_calls ? JSON.parse(m.tool_calls) : undefined,
+        toolCallId: m.tool_call_id ?? undefined,
+      };
+    });
 
     // Add user message
     history.push({ role: 'user', content: userMessage });
@@ -133,6 +159,9 @@ export class AgentRuntime {
       })) {
         if (chunk.type === 'text' && chunk.text) {
           text += chunk.text;
+          // Only stream the final reply turn — skip intermediate text that
+          // appears before tool calls (the model sometimes narrates its intent).
+          onChunk?.(chunk.text);
         } else if (chunk.type === 'tool_call_start' && chunk.toolCall) {
           toolCallAccumulators.set(chunk.toolCall.id, {
             id: chunk.toolCall.id,
@@ -225,7 +254,10 @@ export class AgentRuntime {
         }
       }
 
-      finalContent = text;
+      // Only overwrite finalContent when this turn produced text.
+      // Tool-call-only turns leave text === '' and should not erase a
+      // previous reply that the model already wrote.
+      if (text) finalContent = text;
     }
 
     // Update session last_active

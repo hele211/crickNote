@@ -127,7 +127,15 @@ export function createWebSocketServer(config: CrickNoteConfig): Promise<WebSocke
         }
         try {
           log.info('Chat message received', { sessionId: client.sessionId, length: (msg.content as string).length });
-          const response = await runtime.processMessage(msg.content, client.sessionId);
+          const response = await runtime.processMessage(
+            msg.content,
+            client.sessionId,
+            (text) => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'chat_chunk', text }));
+              }
+            },
+          );
           // Flatten EditProposal into a shape the plugin can render directly.
           // Strip newContent (large, not needed by UI) and normalize filePath → path.
           const pendingEdits = response.pendingEdits.map(pe => ({

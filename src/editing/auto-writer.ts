@@ -25,7 +25,7 @@ function isFencedSectionAllowed(rel: string): boolean {
 }
 
 function isFrontmatterFieldAllowed(rel: string, field: string): boolean {
-  if (/^Reading\/[^/]+\//.test(rel) && field === 'kb_status') return true;
+  if (/^Reading\/(Papers|Threads)\//.test(rel) && ['status', 'kb_status'].includes(field)) return true;
   if (/^Knowledge\/(Concepts|Entities|Methods)\/(?!_index\.md)/.test(rel) && ['needs_review', 'review_flagged_at'].includes(field)) return true;
   return false;
 }

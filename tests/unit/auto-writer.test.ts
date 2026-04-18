@@ -95,6 +95,7 @@ describe('frontmatterFieldUpdate', () => {
   beforeEach(() => {
     vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ffu-test-'));
     fs.mkdirSync(path.join(vaultPath, 'Reading', 'Papers'), { recursive: true });
+    fs.mkdirSync(path.join(vaultPath, 'Reading', 'Threads'), { recursive: true });
     fs.mkdirSync(path.join(vaultPath, 'Knowledge', 'Concepts'), { recursive: true });
   });
   afterEach(() => { fs.rmSync(vaultPath, { recursive: true, force: true }); });
@@ -106,6 +107,16 @@ describe('frontmatterFieldUpdate', () => {
     const content = fs.readFileSync(filePath, 'utf-8');
     expect(content).toContain('kb_status: mapped');
     expect(content).not.toContain('kb_status: pending');
+    expect(content).toContain('# Body');
+  });
+
+  it('updates status in a Reading/Threads note', () => {
+    const filePath = path.join(vaultPath, 'Reading', 'Threads', 'smith-2026.md');
+    fs.writeFileSync(filePath, '---\ntitle: Test\nstatus: draft\n---\n\n# Body');
+    frontmatterFieldUpdate(filePath, 'status', 'complete', vaultPath);
+    const content = fs.readFileSync(filePath, 'utf-8');
+    expect(content).toContain('status: complete');
+    expect(content).not.toContain('status: draft');
     expect(content).toContain('# Body');
   });
 
@@ -130,5 +141,11 @@ describe('frontmatterFieldUpdate', () => {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, '---\ntitle: x\n---\n');
     expect(() => frontmatterFieldUpdate(filePath, 'needs_review', true, vaultPath)).toThrow('not permitted');
+  });
+
+  it('still rejects unrelated reading-note fields', () => {
+    const filePath = path.join(vaultPath, 'Reading', 'Threads', 'smith-2026.md');
+    fs.writeFileSync(filePath, '---\ntitle: x\nstatus: draft\n---\n');
+    expect(() => frontmatterFieldUpdate(filePath, 'authors', 'Alice', vaultPath)).toThrow('not permitted');
   });
 });

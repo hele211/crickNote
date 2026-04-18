@@ -7,6 +7,48 @@ import { localDateString } from '../utils/date.js';
 
 const contextCache: { [key: string]: { content: string; mtime: number } } = {};
 
+// Cache for the unfinished-KB count so we don't rescan every reading note on
+// every processMessage call.  Keyed by the combined mtime of both reading dirs;
+// invalidates automatically when files are added, removed, or renamed.
+let kbCountCache: { count: number; dirMtimeKey: string } | null = null;
+
+function readingDirMtimeKey(vaultPath: string): string {
+  let key = '';
+  for (const sub of ['Reading/Papers', 'Reading/Threads']) {
+    const dir = path.join(vaultPath, sub);
+    try {
+      key += fs.statSync(dir).mtimeMs.toString() + ':';
+    } catch {
+      key += '0:';
+    }
+  }
+  return key;
+}
+
+function getCachedUnfinishedKbCount(vaultPath: string): number {
+  const mtimeKey = readingDirMtimeKey(vaultPath);
+  if (kbCountCache && kbCountCache.dirMtimeKey === mtimeKey) {
+    return kbCountCache.count;
+  }
+
+  let count = 0;
+  for (const sub of ['Reading/Papers', 'Reading/Threads']) {
+    const dir = path.join(vaultPath, sub);
+    if (!fs.existsSync(dir)) continue;
+    for (const f of fs.readdirSync(dir).filter(n => n.endsWith('.md'))) {
+      try {
+        const fm = matter(fs.readFileSync(path.join(dir, f), 'utf-8')).data as Record<string, unknown>;
+        if (fm['status'] === 'complete' && ['pending', 'mapped', 'merged_with_review'].includes(fm['kb_status'] as string)) {
+          count++;
+        }
+      } catch { /* skip */ }
+    }
+  }
+
+  kbCountCache = { count, dirMtimeKey: mtimeKey };
+  return count;
+}
+
 function cachedReadFile(filePath: string): string | null {
   if (!fs.existsSync(filePath)) return null;
   const mtime = fs.statSync(filePath).mtimeMs;
@@ -39,6 +81,15 @@ IMPORTANT RULES:
 - Be precise with scientific data — never fabricate results.
 - When uncertain, say so and ask the user to clarify.`);
 
+  sections.push(`## Reading Workflow
+
+Preferred reading-note order:
+1. Call reading_pipeline_status first.
+2. If the reading note does not exist yet, call discover_reading_bundle or ingest_reading_bundle.
+3. If the note is ready, call compile_reading_note.
+4. After the user reviews the draft, call set_reading_note_status with status: complete.
+5. Then continue with kb_suggest, kb_write_mapping, and kb_apply.`);
+
   // Layer 2: Agent config (user's core rules)
   if (agentMd) {
     sections.push(`## User-Defined Agent Rules\n\n${agentMd}`);
@@ -69,19 +120,7 @@ IMPORTANT RULES:
       .filter(f => /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
       .sort();
 
-    let unfinishedKbCount = 0;
-    for (const readingSubdir of ['Reading/Papers', 'Reading/Threads']) {
-      const readingDir = path.join(vaultPath, readingSubdir);
-      if (!fs.existsSync(readingDir)) continue;
-      for (const f of fs.readdirSync(readingDir).filter(n => n.endsWith('.md'))) {
-        try {
-          const fm = matter(fs.readFileSync(path.join(readingDir, f), 'utf-8')).data as Record<string, unknown>;
-          if (fm['status'] === 'complete' && ['pending', 'mapped', 'merged_with_review'].includes(fm['kb_status'] as string)) {
-            unfinishedKbCount++;
-          }
-        } catch { /* skip */ }
-      }
-    }
+    const unfinishedKbCount = getCachedUnfinishedKbCount(vaultPath);
 
     if (reports.length === 0) {
       const kbMsg = unfinishedKbCount > 0 ? ` ${unfinishedKbCount} reading note(s) have unfinished KB work.` : '';

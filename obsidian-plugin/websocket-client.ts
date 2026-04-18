@@ -17,6 +17,7 @@ export class CrickNoteWebSocket extends EventEmitter {
   private authenticated = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectEnabled = true;
+  private reconnectDelay = 1000;
   private host: string;
   private port: number;
   private tokenPath: string;
@@ -54,7 +55,13 @@ export class CrickNoteWebSocket extends EventEmitter {
       };
 
       this.ws.onmessage = (event: MessageEvent) => {
-        const msg = JSON.parse(event.data as string);
+        let msg: Record<string, unknown>;
+        try {
+          msg = JSON.parse(event.data as string);
+        } catch {
+          console.error('CrickNote: received malformed WebSocket frame, ignoring');
+          return;
+        }
         this.handleMessage(msg);
       };
 
@@ -106,6 +113,7 @@ export class CrickNoteWebSocket extends EventEmitter {
     switch (msg.type) {
       case 'auth_ok':
         this.authenticated = true;
+        this.reconnectDelay = 1000; // reset backoff on successful connection
         this.emit('connected');
         this.requestStatus();
         break;
@@ -113,6 +121,10 @@ export class CrickNoteWebSocket extends EventEmitter {
       case 'auth_error':
         console.error(`CrickNote auth error: ${msg.reason}`);
         this.emit('auth_error', msg);
+        break;
+
+      case 'chat_chunk':
+        this.emit('chat_chunk', msg);
         break;
 
       case 'chat_response':
@@ -144,11 +156,13 @@ export class CrickNoteWebSocket extends EventEmitter {
 
   private scheduleReconnect(): void {
     if (!this.reconnectEnabled || this.reconnectTimer) return;
+    const delay = this.reconnectDelay;
+    this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (this.reconnectEnabled) {
         this.connect();
       }
-    }, 5000);
+    }, delay);
   }
 }

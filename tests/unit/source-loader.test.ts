@@ -91,4 +91,45 @@ describe('loadSources', () => {
     expect(result.sources[0].path).toBe('notes.md');
     expect(result.sources[1].path).toBe('summary.md');
   });
+
+  it('rejects absolute and traversal source paths', async () => {
+    const result = await loadSources(
+      [
+        { type: 'pdf', path: '../paper.pdf' },
+        { type: 'pdf', path: '/tmp/paper.pdf' },
+      ],
+      'smith-2026-il42',
+      vaultPath
+    );
+
+    expect(result.sources).toHaveLength(0);
+    expect(result.warnings[0]).toContain('relative to the attachment folder');
+    expect(result.warnings[1]).toContain('relative to the attachment folder');
+  });
+
+  it('rejects unknown source types before loading', async () => {
+    const result = await loadSources(
+      [{ type: 'audio', path: 'notes.md' }],
+      'smith-2026-il42',
+      vaultPath
+    );
+
+    expect(result.sources).toHaveLength(0);
+    expect(result.warnings[0]).toContain('source type "audio" is not supported');
+  });
+
+  it('continues loading valid sources when one source is invalid', async () => {
+    const result = await loadSources(
+      [
+        { type: 'notes', path: '../escape.md' },
+        { type: 'notes', path: 'notes.md' },
+      ],
+      'smith-2026-il42',
+      vaultPath
+    );
+
+    expect(result.sources).toHaveLength(1);
+    expect(result.sources[0].path).toBe('notes.md');
+    expect(result.warnings[0]).toContain('relative to the attachment folder');
+  });
 });

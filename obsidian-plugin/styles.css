@@ -39,6 +39,15 @@
   color: var(--text-muted);
 }
 
+/* Obsidian sets `* { user-select: none }` globally. Override for the entire
+   message content tree — the rule must cover descendants too because `*`
+   explicitly overrides inherited values on every child element. */
+.cricknote-content,
+.cricknote-content * {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 .cricknote-content {
   white-space: pre-wrap;
   line-height: 1.5;
@@ -87,6 +96,14 @@
   color: var(--text-error);
   font-size: 0.85em;
   margin-bottom: 4px;
+}
+
+/* Same descendant override as .cricknote-content: `* { user-select: none }`
+   would otherwise block selection of text inside the <pre>. */
+.cricknote-diff,
+.cricknote-diff * {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .cricknote-diff {

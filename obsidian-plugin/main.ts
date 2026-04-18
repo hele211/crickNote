@@ -1,6 +1,6 @@
 import { Plugin, WorkspaceLeaf } from 'obsidian';
 import { ChatView, CHAT_VIEW_TYPE } from './chat-view';
-import { CrickNoteWebSocket, WebSocketOptions } from './websocket-client';
+import { CrickNoteWebSocket } from './websocket-client';
 
 export default class CrickNotePlugin extends Plugin {
   ws: CrickNoteWebSocket | null = null;
@@ -18,13 +18,9 @@ export default class CrickNotePlugin extends Plugin {
       callback: () => this.activateChatView(),
     });
 
-    // Connect to agent service – pass user settings when available, otherwise defaults apply
-    const wsOptions: WebSocketOptions = {};
-    const settings = (this as any).settings;
-    if (settings?.serverHost) wsOptions.host = settings.serverHost;
-    if (settings?.serverPort) wsOptions.port = settings.serverPort;
-    if (settings?.authTokenPath) wsOptions.tokenPath = settings.authTokenPath;
-    this.ws = new CrickNoteWebSocket(this, wsOptions);
+    // Connect to agent service using built-in defaults (127.0.0.1:18790).
+    // Configurable host/port/token will require a proper settings model and UI.
+    this.ws = new CrickNoteWebSocket(this);
     await this.ws.connect();
 
     // Status bar
