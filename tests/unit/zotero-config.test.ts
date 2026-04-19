@@ -44,4 +44,58 @@ describe('Zotero config normalization', () => {
     expect(() => normalizeZoteroConfig({ enabled: true, api_port: 23119, storage_root: home, auto_summarize: true }))
       .toThrow(/storage_root/);
   });
+
+  describe('vault-prefix safety check', () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zotero-cfg-test-'));
+      fs.mkdirSync(path.join(tmpDir, 'vault'));
+      fs.mkdirSync(path.join(tmpDir, 'storage'));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('rejects storage_root equal to vault', async () => {
+      const { normalizeZoteroConfig } = await import('../../src/config/config.js');
+      const vault = path.join(tmpDir, 'vault');
+      expect(() => normalizeZoteroConfig(
+        { enabled: true, api_port: 23119, storage_root: vault, auto_summarize: true },
+        vault
+      )).toThrow(/overlaps/);
+    });
+
+    it('rejects storage_root that is parent of vault', async () => {
+      const { normalizeZoteroConfig } = await import('../../src/config/config.js');
+      const vault = path.join(tmpDir, 'vault');
+      expect(() => normalizeZoteroConfig(
+        { enabled: true, api_port: 23119, storage_root: tmpDir, auto_summarize: true },
+        vault
+      )).toThrow(/overlaps/);
+    });
+
+    it('rejects storage_root inside vault', async () => {
+      const { normalizeZoteroConfig } = await import('../../src/config/config.js');
+      const vault = path.join(tmpDir, 'vault');
+      const storageInsideVault = path.join(vault, 'zotero-storage');
+      fs.mkdirSync(storageInsideVault);
+      expect(() => normalizeZoteroConfig(
+        { enabled: true, api_port: 23119, storage_root: storageInsideVault, auto_summarize: true },
+        vault
+      )).toThrow(/overlaps/);
+    });
+
+    it('accepts storage_root that is a sibling of vault', async () => {
+      const { normalizeZoteroConfig } = await import('../../src/config/config.js');
+      const vault = path.join(tmpDir, 'vault');
+      const storage = path.join(tmpDir, 'storage');
+      const result = normalizeZoteroConfig(
+        { enabled: true, api_port: 23119, storage_root: storage, auto_summarize: true },
+        vault
+      );
+      expect(result.storage_root).toContain('storage');
+    });
+  });
 });

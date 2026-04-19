@@ -11,7 +11,7 @@ export interface ZoteroConfig {
   auto_summarize: boolean;
 }
 
-export function normalizeZoteroConfig(raw: Partial<ZoteroConfig> | undefined): ZoteroConfig {
+export function normalizeZoteroConfig(raw: Partial<ZoteroConfig> | undefined, vaultPath?: string): ZoteroConfig {
   const defaults: ZoteroConfig = {
     enabled: false,
     api_port: 23119,
@@ -36,6 +36,27 @@ export function normalizeZoteroConfig(raw: Partial<ZoteroConfig> | undefined): Z
   }
   if (resolvedRoot === '/' || resolvedRoot === os.homedir()) {
     throw new Error(`Invalid Zotero config: storage_root "${merged.storage_root}" resolves to an unsafe path`);
+  }
+
+  if (vaultPath) {
+    let resolvedVault: string;
+    try {
+      resolvedVault = fs.realpathSync(vaultPath);
+    } catch {
+      resolvedVault = path.resolve(vaultPath);
+    }
+    const sep = path.sep;
+    const rootWithSep = resolvedRoot.endsWith(sep) ? resolvedRoot : resolvedRoot + sep;
+    const vaultWithSep = resolvedVault.endsWith(sep) ? resolvedVault : resolvedVault + sep;
+    if (
+      resolvedRoot === resolvedVault ||
+      vaultWithSep.startsWith(rootWithSep) ||
+      rootWithSep.startsWith(vaultWithSep)
+    ) {
+      throw new Error(
+        `Invalid Zotero config: storage_root "${merged.storage_root}" overlaps with vault path "${vaultPath}"`
+      );
+    }
   }
 
   merged.storage_root = resolvedRoot;
@@ -121,7 +142,7 @@ export function loadConfig(): CrickNoteConfig {
   }
 
   if (raw.zotero !== undefined) {
-    config.zotero = normalizeZoteroConfig(raw.zotero);
+    config.zotero = normalizeZoteroConfig(raw.zotero, config.vaultPath);
   }
 
   cachedConfig = config;

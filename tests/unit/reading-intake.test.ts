@@ -234,8 +234,10 @@ describe('reading intake tools', () => {
     const parsed = matter(result.newContent);
     expect(parsed.data.status).toBe('draft');
     expect(parsed.data.kb_status).toBe('pending');
-    expect(parsed.content).toContain('Existing claim content.');
+    // sources changed → body reset to scaffold
+    expect(parsed.content).not.toContain('Existing claim content.');
     expect(parsed.content).toContain('# Updated title');
+    expect(parsed.content).toContain('## Claims');
   });
 });
 
@@ -543,7 +545,7 @@ describe('effective_sources and downgrade protection', () => {
     expect(result.newContent).toContain('some content');
   });
 
-  it('abstract→PDF upgrade resets status/kb_status and preserves body', async () => {
+  it('abstract→PDF upgrade resets status/kb_status and resets body to scaffold', async () => {
     const vault = makeZoteroVault();
     fs.writeFileSync(path.join(vault, 'Reading/Papers/smith-2026-il42.md'),
       '---\ntitle: T\nauthors: [S]\nyear: 2026\njournal: J\nstatus: complete\nkb_status: mapped\ncitekey: s2026\nsources:\n  - type: notes\n    path: abstract.md\n---\n\n# T\n\n## Claims\n\nsome content');
@@ -556,7 +558,23 @@ describe('effective_sources and downgrade protection', () => {
     expect(result.type).toBe('pending_edit');
     expect(result.newContent).toContain('status: draft');
     expect(result.newContent).toContain('kb_status: pending');
-    expect(result.newContent).toContain('some content');
+    // sources changed → body must be reset to scaffold, not preserve prior content
+    expect(result.newContent).not.toContain('some content');
+    expect(result.newContent).toContain('## Claims');
+  });
+
+  it('sources change resets body to scaffold even when prior body was meaningful', async () => {
+    const vault = makeZoteroVault();
+    fs.writeFileSync(path.join(vault, 'Reading/Papers/smith-2026-il42.md'),
+      '---\ntitle: T\nauthors: [S]\nyear: 2026\njournal: J\nstatus: complete\ncitekey: s2026\nsources:\n  - type: pdf\n    path: old.pdf\n---\n\n# T\n\n## Claims\n\ndetailed analysis');
+    const result = await ingestBundle(vault, {
+      slug: 'smith-2026-il42', title: 'T', authors: ['S'], year: 2026, journal: 'J',
+      citekey: 's2026',
+      sources: [{ type: 'pdf', path: 'paper.pdf' }],
+    });
+    expect(result.type).toBe('pending_edit');
+    expect(result.newContent).not.toContain('detailed analysis');
+    expect(result.newContent).toContain('## Claims');
   });
 
   it('unchanged effective_sources preserves body and syncs H1', async () => {

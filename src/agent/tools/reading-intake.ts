@@ -543,8 +543,10 @@ export function createReadingIntakeTools(
 
         let body: string;
         let templateWarnings: string[] = [];
-        if (exists && hasMeaningfulReadingBody(existingBody)) {
-          body = syncReadingBodyTitle(existingBody, args.title as string);
+        if (!shouldResetWorkflowState) {
+          body = preserveExistingBody(args.title as string, existingBody);
+        } else if (args.zotero_managed === true) {
+          body = buildCreateReadingBody({ title: args.title as string });
         } else {
           const folderName = path.basename(path.dirname(notePath));
           const noteKind: TemplateKind = folderName === 'Threads' ? 'reading-thread' : 'reading-paper';
