@@ -288,7 +288,7 @@ function zoteroFetchItem(vaultPath: string, cfg: () => CrickNoteConfig): ToolHan
         const item = items[0];
         libraryId = item.libraryID === 1 ? undefined : item.libraryID;
         zoteroKey = libraryId ? `${item.libraryID}:${item.itemKey}` : item.itemKey;
-        const keyMap = await jsonRpc(port, 'item.citationkey', [zoteroKey]) as Record<string, string>;
+        const keyMap = await jsonRpc(port, 'item.citationkey', [[zoteroKey]]) as Record<string, string>;
         citekey = keyMap[zoteroKey];
         if (!citekey) return JSON.stringify({ error: `Could not resolve citekey for item "${zoteroKey}"` });
       } else if (args.zotero_key) {
@@ -299,7 +299,7 @@ function zoteroFetchItem(vaultPath: string, cfg: () => CrickNoteConfig): ToolHan
         if (colonIdx > 0) {
           libraryId = parseInt(rawKey.slice(0, colonIdx), 10);
         }
-        const keyMap = await jsonRpc(port, 'item.citationkey', [rawKey]) as Record<string, string>;
+        const keyMap = await jsonRpc(port, 'item.citationkey', [[rawKey]]) as Record<string, string>;
         citekey = keyMap[rawKey];
         if (!citekey) return JSON.stringify({ error: `Could not resolve citekey for item key "${rawKey}"` });
       } else {
