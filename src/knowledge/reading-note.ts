@@ -15,6 +15,8 @@ export interface ReadingNoteMeta {
   year: number;
   journal: string;
   doi?: string;
+  citekey?: string;
+  zotero_key?: string;
   read_date?: string;
   related_projects?: string[];
   status?: string;
@@ -270,6 +272,20 @@ export function buildReadingFrontmatter(
     frontmatter.doi = doi;
   } else {
     delete frontmatter.doi;
+  }
+
+  const citekey = existingString(meta.citekey) ?? existingString(existingFrontmatter.citekey);
+  if (citekey) {
+    frontmatter.citekey = citekey;
+  } else {
+    delete frontmatter.citekey;
+  }
+
+  const zoteroKey = existingString(meta.zotero_key) ?? existingString(existingFrontmatter.zotero_key);
+  if (zoteroKey) {
+    frontmatter.zotero_key = zoteroKey;
+  } else {
+    delete frontmatter.zotero_key;
   }
 
   if (normalizedSources && normalizedSources.length > 0) {

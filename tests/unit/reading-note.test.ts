@@ -182,3 +182,48 @@ describe('buildReadingFrontmatter normalizes DOI', () => {
     expect(fm.doi).toBe('10.1016/j.cell');
   });
 });
+
+describe('buildReadingFrontmatter with Zotero fields', () => {
+  it('includes citekey when provided', () => {
+    const fm = buildReadingFrontmatter(
+      { title: 'T', authors: ['A'], year: 2026, journal: 'J', citekey: 'smith2026' },
+      [{ type: 'pdf', path: 'paper.pdf' }]
+    );
+    expect(fm.citekey).toBe('smith2026');
+  });
+
+  it('includes zotero_key when provided', () => {
+    const fm = buildReadingFrontmatter(
+      { title: 'T', authors: ['A'], year: 2026, journal: 'J', zotero_key: 'ABCD1234' },
+      [{ type: 'pdf', path: 'paper.pdf' }]
+    );
+    expect(fm.zotero_key).toBe('ABCD1234');
+  });
+
+  it('omits citekey/zotero_key when not provided', () => {
+    const fm = buildReadingFrontmatter(
+      { title: 'T', authors: ['A'], year: 2026, journal: 'J' },
+      [{ type: 'pdf', path: 'paper.pdf' }]
+    );
+    expect(fm.citekey).toBeUndefined();
+    expect(fm.zotero_key).toBeUndefined();
+  });
+
+  it('preserves existing zotero_key when new meta omits it (passthrough)', () => {
+    const fm = buildReadingFrontmatter(
+      { title: 'T', authors: ['A'], year: 2026, journal: 'J' },
+      [{ type: 'pdf', path: 'paper.pdf' }],
+      { zotero_key: 'ABCD1234' }
+    );
+    expect(fm.zotero_key).toBe('ABCD1234');
+  });
+
+  it('overwrites existing zotero_key when new meta provides one', () => {
+    const fm = buildReadingFrontmatter(
+      { title: 'T', authors: ['A'], year: 2026, journal: 'J', zotero_key: 'NEW1234' },
+      [{ type: 'pdf', path: 'paper.pdf' }],
+      { zotero_key: 'OLD1234' }
+    );
+    expect(fm.zotero_key).toBe('NEW1234');
+  });
+});
