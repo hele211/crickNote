@@ -1,6 +1,46 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { getDataDir } from '../storage/database.js';
+
+export interface ZoteroConfig {
+  enabled: boolean;
+  api_port: number;
+  storage_root: string;
+  bbt_export_path?: string;
+  auto_summarize: boolean;
+}
+
+export function normalizeZoteroConfig(raw: Partial<ZoteroConfig> | undefined): ZoteroConfig {
+  const defaults: ZoteroConfig = {
+    enabled: false,
+    api_port: 23119,
+    storage_root: path.join(os.homedir(), 'Zotero', 'storage'),
+    auto_summarize: true,
+  };
+  const merged: ZoteroConfig = { ...defaults, ...(raw ?? {}) };
+
+  if (merged.storage_root.startsWith('~/')) {
+    merged.storage_root = path.join(os.homedir(), merged.storage_root.slice(2));
+  }
+
+  if (!Number.isInteger(merged.api_port) || merged.api_port < 1 || merged.api_port > 65535) {
+    throw new Error(`Invalid Zotero config: api_port must be 1–65535, got ${merged.api_port}`);
+  }
+
+  let resolvedRoot: string;
+  try {
+    resolvedRoot = fs.realpathSync(merged.storage_root);
+  } catch {
+    resolvedRoot = path.resolve(merged.storage_root);
+  }
+  if (resolvedRoot === '/' || resolvedRoot === os.homedir()) {
+    throw new Error(`Invalid Zotero config: storage_root "${merged.storage_root}" resolves to an unsafe path`);
+  }
+
+  merged.storage_root = resolvedRoot;
+  return merged;
+}
 
 export interface CrickNoteConfig {
   vaultPath: string;
@@ -16,6 +56,7 @@ export interface CrickNoteConfig {
     host: string;
     port: number;
   };
+  zotero?: ZoteroConfig;
 }
 
 /**
@@ -77,6 +118,10 @@ export function loadConfig(): CrickNoteConfig {
   }
   if (errors.length > 0) {
     throw new Error(`Invalid config at ${configPath}:\n  - ${errors.join('\n  - ')}`);
+  }
+
+  if (raw.zotero !== undefined) {
+    config.zotero = normalizeZoteroConfig(raw.zotero);
   }
 
   cachedConfig = config;
