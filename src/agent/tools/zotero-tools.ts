@@ -37,8 +37,11 @@ export function validateZoteroAttachment(pdfPath: string, storageRoot: string): 
 
   const fd = fs.openSync(realPdf, 'r');
   const magic = Buffer.alloc(4);
-  fs.readSync(fd, magic, 0, 4, 0);
-  fs.closeSync(fd);
+  try {
+    fs.readSync(fd, magic, 0, 4, 0);
+  } finally {
+    fs.closeSync(fd);
+  }
   if (magic.toString('ascii') !== '%PDF') throw new Error('Not a PDF (magic bytes check failed)');
 
   const MB = 1024 * 1024;
