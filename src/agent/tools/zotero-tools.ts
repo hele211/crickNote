@@ -393,12 +393,154 @@ function zoteroFetchFallback(args: Record<string, unknown>, exportPath: string):
   return JSON.stringify(result);
 }
 
+// ─── Slug validation ──────────────────────────────────────────────────────────
+
+const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
+
+// ─── zotero_prepare_bundle ────────────────────────────────────────────────────
+
+function zoteroPrepareBundleTool(vaultPath: string, cfg: () => CrickNoteConfig): ToolHandler {
+  return {
+    definition: {
+      name: 'zotero_prepare_bundle',
+      description: 'Create the vault attachment directory and copy the PDF (or write abstract.md) for Zotero ingestion.',
+      parameters: {
+        type: 'object',
+        properties: {
+          slug: { type: 'string', description: 'Note slug (kebab-case)' },
+          pdf_path: { type: 'string', description: 'Validated absolute path from zotero_fetch_item' },
+          abstract: { type: 'string', description: 'Used only in abstract-only mode (no pdf_path)' },
+        },
+        required: ['slug'],
+      },
+    },
+    execute: async (args) => {
+      const config = cfg();
+      const z = getZoteroConfig(config);
+      if ('error' in z) return JSON.stringify(z);
+
+      const slug = args.slug as string;
+      if (!SLUG_RE.test(slug)) return JSON.stringify({ error: 'Invalid slug format.' });
+
+      const bundleDir = path.join(vaultPath, 'Reading', 'attachments', slug);
+      const markerPath = path.join(bundleDir, '.zotero-bundle');
+      const pdfPath = typeof args.pdf_path === 'string' && args.pdf_path ? args.pdf_path : undefined;
+      const abstract = typeof args.abstract === 'string' && args.abstract ? args.abstract : undefined;
+
+      const dirExists = fs.existsSync(bundleDir);
+      const hasMarker = dirExists && fs.existsSync(markerPath);
+
+      if (dirExists && !hasMarker) {
+        return JSON.stringify({ error: `Pre-existing manual bundle at Reading/attachments/${slug}/ — remove or rename it before using Zotero ingestion.` });
+      }
+
+      let existingMarkerFiles: Record<string, string> = {};
+      if (hasMarker) {
+        existingMarkerFiles = readMarker(markerPath)?.files ?? {};
+      }
+
+      if (!dirExists) {
+        fs.mkdirSync(bundleDir, { recursive: true });
+      }
+
+      const filesCreated: string[] = [];
+      const mode = pdfPath ? 'pdf' : 'abstract';
+
+      if (mode === 'pdf') {
+        // TOCTOU guard: validate again before copy
+        try {
+          validateZoteroAttachment(pdfPath!, (z as ZoteroConfig).storage_root);
+        } catch (e) {
+          if (!dirExists) try { fs.rmdirSync(bundleDir); } catch { /* ignore */ }
+          return JSON.stringify({ error: (e as Error).message });
+        }
+
+        const destPdf = path.join(bundleDir, 'paper.pdf');
+        if (fs.existsSync(destPdf)) {
+          const existingHash = sha256File(destPdf);
+          const sourceHash = sha256File(pdfPath!);
+          if (existingHash !== sourceHash) {
+            if (!dirExists) try { fs.rmdirSync(bundleDir); } catch { /* ignore */ }
+            return JSON.stringify({ error: `paper.pdf already exists with different content. Delete or rename it before re-running.` });
+          }
+          // Matching hash — skip write (don't add to filesCreated)
+        } else {
+          // Atomic copy via temp file
+          const tmpPath = destPdf + '.tmp';
+          fs.copyFileSync(pdfPath!, tmpPath);
+          fs.renameSync(tmpPath, destPdf);
+          filesCreated.push('paper.pdf');
+        }
+
+        const pdfHash = sha256File(destPdf);
+        const mergedFiles = { ...existingMarkerFiles, 'paper.pdf': pdfHash };
+        try {
+          writeMarker(markerPath, mergedFiles);
+        } catch {
+          for (const f of filesCreated) {
+            try { fs.unlinkSync(path.join(bundleDir, f)); } catch { /* best effort */ }
+          }
+          if (!dirExists) {
+            try {
+              if (fs.readdirSync(bundleDir).length === 0) fs.rmdirSync(bundleDir);
+            } catch { /* ignore */ }
+          }
+          return JSON.stringify({ error: 'Failed to write .zotero-bundle marker. Bundle rolled back.' });
+        }
+
+        return JSON.stringify({ source_type: 'pdf', source_path: 'paper.pdf', files_created_this_run: filesCreated });
+
+      } else {
+        // Abstract-only mode
+        if (!abstract) {
+          if (!dirExists) try { fs.rmdirSync(bundleDir); } catch { /* ignore */ }
+          return JSON.stringify({ error: 'Either pdf_path or abstract must be provided.' });
+        }
+
+        const destAbstract = path.join(bundleDir, 'abstract.md');
+        const abstractContent = `# Abstract\n\n${abstract}`;
+        if (fs.existsSync(destAbstract)) {
+          const existingHash = sha256File(destAbstract);
+          const sourceHash = sha256Text(abstractContent);
+          if (existingHash !== sourceHash) {
+            if (!dirExists) try { fs.rmdirSync(bundleDir); } catch { /* ignore */ }
+            return JSON.stringify({ error: 'abstract.md already exists with different content.' });
+          }
+          // Matching hash — skip write
+        } else {
+          fs.writeFileSync(destAbstract, abstractContent, 'utf-8');
+          filesCreated.push('abstract.md');
+        }
+
+        const abstractHash = sha256File(destAbstract);
+        const mergedFiles = { ...existingMarkerFiles, 'abstract.md': abstractHash };
+        try {
+          writeMarker(markerPath, mergedFiles);
+        } catch {
+          for (const f of filesCreated) {
+            try { fs.unlinkSync(path.join(bundleDir, f)); } catch { /* best effort */ }
+          }
+          if (!dirExists) {
+            try {
+              if (fs.readdirSync(bundleDir).length === 0) fs.rmdirSync(bundleDir);
+            } catch { /* ignore */ }
+          }
+          return JSON.stringify({ error: 'Failed to write .zotero-bundle marker. Bundle rolled back.' });
+        }
+
+        return JSON.stringify({ source_type: 'notes', source_path: 'abstract.md', files_created_this_run: filesCreated });
+      }
+    },
+  };
+}
+
 // ─── Tool factory ─────────────────────────────────────────────────────────────
 
 export function createZoteroTools(vaultPath: string): ToolHandler[] {
   function cfg(): CrickNoteConfig { return loadConfig(); }
   return [
     zoteroFetchItem(vaultPath, cfg),
-    // zoteroPrepareBundleTool and zoteroCleanupBundleTool added in Tasks 12+13
+    zoteroPrepareBundleTool(vaultPath, cfg),
+    // zoteroCleanupBundleTool added in Task 13
   ];
 }

@@ -340,3 +340,108 @@ describe('zotero_fetch_item — no identifier', () => {
     expect(result.error).toMatch(/required/i);
   });
 });
+
+// ─── zotero_prepare_bundle tests ─────────────────────────────────────────────
+
+async function getPrepareTool(vaultPath: string) {
+  const { createZoteroTools } = await import('../../src/agent/tools/zotero-tools.js');
+  return createZoteroTools(vaultPath).find((t: { definition: { name: string } }) => t.definition.name === 'zotero_prepare_bundle')!;
+}
+
+describe('zotero_prepare_bundle', () => {
+  let vault: string;
+  beforeEach(() => {
+    vault = fs.mkdtempSync(path.join(os.tmpdir(), 'cn-vault-'));
+  });
+  afterEach(() => {
+    fs.rmSync(vault, { recursive: true, force: true });
+  });
+
+  it('rejects invalid slug format (../evil)', async () => {
+    const tool = await getPrepareTool(vault);
+    const result = JSON.parse(await tool.execute({ slug: '../evil' }));
+    expect(result.error).toMatch(/invalid slug/i);
+  });
+
+  it('rejects invalid slug format (Smith_2026)', async () => {
+    const tool = await getPrepareTool(vault);
+    const result = JSON.parse(await tool.execute({ slug: 'Smith_2026' }));
+    expect(result.error).toMatch(/invalid slug/i);
+  });
+
+  it('creates dir, copies PDF, writes marker, returns source_type pdf', async () => {
+    const pdfSrc = path.join(os.tmpdir(), `test-${Date.now()}.pdf`);
+    fs.writeFileSync(pdfSrc, Buffer.from('%PDF-test-content'));
+    const tool = await getPrepareTool(vault);
+    const result = JSON.parse(await tool.execute({
+      slug: 'smith-2026-il42',
+      pdf_path: pdfSrc,
+    }));
+    expect(result.source_type).toBe('pdf');
+    expect(result.source_path).toBe('paper.pdf');
+    expect(result.files_created_this_run).toContain('paper.pdf');
+    expect(fs.existsSync(path.join(vault, 'Reading/attachments/smith-2026-il42/paper.pdf'))).toBe(true);
+    expect(fs.existsSync(path.join(vault, 'Reading/attachments/smith-2026-il42/.zotero-bundle'))).toBe(true);
+    fs.unlinkSync(pdfSrc);
+  });
+
+  it('idempotent: same PDF already present with matching SHA → files_created_this_run is empty', async () => {
+    const pdfSrc = path.join(os.tmpdir(), `test-${Date.now()}.pdf`);
+    fs.writeFileSync(pdfSrc, Buffer.from('%PDF-idempotent'));
+    const tool = await getPrepareTool(vault);
+    await tool.execute({ slug: 'smith-2026-il42', pdf_path: pdfSrc });
+    const result = JSON.parse(await tool.execute({ slug: 'smith-2026-il42', pdf_path: pdfSrc }));
+    expect(result.files_created_this_run).toEqual([]);
+    fs.unlinkSync(pdfSrc);
+  });
+
+  it('errors if paper.pdf already exists with different content', async () => {
+    const pdfSrc = path.join(os.tmpdir(), `test-${Date.now()}.pdf`);
+    fs.writeFileSync(pdfSrc, Buffer.from('%PDF-original'));
+    const tool = await getPrepareTool(vault);
+    await tool.execute({ slug: 'smith-2026-il42', pdf_path: pdfSrc });
+    fs.writeFileSync(pdfSrc, Buffer.from('%PDF-different-content'));
+    const result = JSON.parse(await tool.execute({ slug: 'smith-2026-il42', pdf_path: pdfSrc }));
+    expect(result.error).toMatch(/already exists/i);
+    fs.unlinkSync(pdfSrc);
+  });
+
+  it('abstract-only mode writes abstract.md with correct format', async () => {
+    const tool = await getPrepareTool(vault);
+    const result = JSON.parse(await tool.execute({
+      slug: 'who-2026-report',
+      abstract: 'This is the abstract text.',
+    }));
+    expect(result.source_type).toBe('notes');
+    expect(result.source_path).toBe('abstract.md');
+    const written = fs.readFileSync(
+      path.join(vault, 'Reading/attachments/who-2026-report/abstract.md'), 'utf-8'
+    );
+    expect(written).toBe('# Abstract\n\nThis is the abstract text.');
+  });
+
+  it('prefers PDF over abstract when both provided', async () => {
+    const pdfSrc = path.join(os.tmpdir(), `test-${Date.now()}.pdf`);
+    fs.writeFileSync(pdfSrc, Buffer.from('%PDF-both-mode'));
+    const tool = await getPrepareTool(vault);
+    const result = JSON.parse(await tool.execute({
+      slug: 'smith-2026-both',
+      pdf_path: pdfSrc,
+      abstract: 'Some abstract',
+    }));
+    expect(result.source_type).toBe('pdf');
+    fs.unlinkSync(pdfSrc);
+  });
+
+  it('refuses to overwrite a non-Zotero bundle directory (no marker)', async () => {
+    const dir = path.join(vault, 'Reading/attachments/smith-2026-manual');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'paper.pdf'), '%PDF-manual');
+    const tool = await getPrepareTool(vault);
+    const result = JSON.parse(await tool.execute({
+      slug: 'smith-2026-manual',
+      abstract: 'Some abstract',
+    }));
+    expect(result.error).toMatch(/pre-existing manual bundle/i);
+  });
+});
