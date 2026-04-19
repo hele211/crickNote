@@ -342,3 +342,70 @@ describe('ingest_reading_bundle — template integration', () => {
     expect(parsed.content).toContain('This paper claims stuff.');
   });
 });
+
+describe('ingest_reading_bundle — Zotero fields and note_rel_path', () => {
+  it('does not warn about .zotero-bundle in the bundle directory', async () => {
+    const vault = fs.mkdtempSync(path.join(os.tmpdir(), 'cn-vault-'));
+    const slug = 'smith-2026-test';
+    const bundleDir = path.join(vault, 'Reading', 'attachments', slug);
+    fs.mkdirSync(bundleDir, { recursive: true });
+    fs.mkdirSync(path.join(vault, 'Reading', 'Papers'), { recursive: true });
+    fs.writeFileSync(path.join(bundleDir, 'paper.pdf'), '%PDF-test');
+    fs.writeFileSync(path.join(bundleDir, '.zotero-bundle'), JSON.stringify({ created_by: 'zotero_prepare_bundle', files: {} }));
+    const tools = createReadingIntakeTools(vault);
+    const discoverTool = tools.find(t => t.definition.name === 'discover_reading_bundle')!;
+    const result = JSON.parse(await discoverTool.execute({ slug }));
+    // Should not have a warning mentioning .zotero-bundle
+    const warnings = result.warnings ?? [];
+    expect(warnings.every((w: string) => !w.includes('.zotero-bundle'))).toBe(true);
+  });
+
+  it('emits note_rel_path in pending_edit meta when zotero_managed is true', async () => {
+    const vault = fs.mkdtempSync(path.join(os.tmpdir(), 'cn-vault-'));
+    const slug = 'smith-2026-il42';
+    const bundleDir = path.join(vault, 'Reading', 'attachments', slug);
+    fs.mkdirSync(bundleDir, { recursive: true });
+    fs.mkdirSync(path.join(vault, 'Reading', 'Papers'), { recursive: true });
+    fs.writeFileSync(path.join(bundleDir, 'paper.pdf'), '%PDF-test');
+    const tools = createReadingIntakeTools(vault);
+    const ingestTool = tools.find(t => t.definition.name === 'ingest_reading_bundle')!;
+    const result = JSON.parse(await ingestTool.execute({
+      slug,
+      title: 'IL-42 Paper',
+      authors: ['Smith J'],
+      year: 2026,
+      journal: 'Cell',
+      sources: [{ type: 'pdf', path: 'paper.pdf' }],
+      zotero_managed: true,
+      zotero_files_created: ['paper.pdf'],
+    }));
+    expect(result.type).toBe('pending_edit');
+    expect(result.meta).toBeDefined();
+    expect(result.meta.note_rel_path).toBe(`Reading/Papers/${slug}.md`);
+    expect(result.meta.zotero_slug).toBe(slug);
+    expect(result.meta.zotero_files_created).toEqual(['paper.pdf']);
+    // note_rel_path must NOT start with /
+    expect(result.meta.note_rel_path.startsWith('/')).toBe(false);
+  });
+
+  it('does NOT emit note_rel_path when zotero_managed is false/absent', async () => {
+    const vault = fs.mkdtempSync(path.join(os.tmpdir(), 'cn-vault-'));
+    const slug = 'smith-2026-normal';
+    const bundleDir = path.join(vault, 'Reading', 'attachments', slug);
+    fs.mkdirSync(bundleDir, { recursive: true });
+    fs.mkdirSync(path.join(vault, 'Reading', 'Papers'), { recursive: true });
+    fs.writeFileSync(path.join(bundleDir, 'paper.pdf'), '%PDF-test');
+    const tools = createReadingIntakeTools(vault);
+    const ingestTool = tools.find(t => t.definition.name === 'ingest_reading_bundle')!;
+    const result = JSON.parse(await ingestTool.execute({
+      slug,
+      title: 'Normal Paper',
+      authors: ['Jones A'],
+      year: 2025,
+      journal: 'Nature',
+      sources: [{ type: 'pdf', path: 'paper.pdf' }],
+    }));
+    expect(result.type).toBe('pending_edit');
+    expect(result.meta).toBeUndefined();
+  });
+});

@@ -46,7 +46,7 @@ interface MappingArtifactSummary {
 }
 
 const TEXT_SOURCE_EXTENSIONS = new Set(['.md', '.txt']);
-const IGNORED_BUNDLE_FILES = new Set(['.ds_store']);
+const IGNORED_BUNDLE_FILES = new Set(['.ds_store', '.zotero-bundle']);
 
 function normalizeBundleSlug(value: unknown): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -350,6 +350,14 @@ export function createReadingIntakeTools(
               description: 'Optional source paths to exclude from the discovered bundle',
               items: { type: 'string' },
             },
+            citekey: { type: 'string', description: 'Zotero citekey (optional)' },
+            zotero_key: { type: 'string', description: 'Zotero item key (optional, e.g. ABCD1234 or 12345:ABCD1234)' },
+            zotero_managed: { type: 'boolean', description: 'Set true when called from Zotero flow' },
+            zotero_files_created: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Files written by zotero_prepare_bundle this run',
+            },
           },
           required: ['slug', 'title', 'authors', 'year', 'journal'],
         },
@@ -450,6 +458,8 @@ export function createReadingIntakeTools(
               journal: args.journal as string,
               doi: args.doi as string | undefined,
               related_projects: args.related_projects as string[] | undefined,
+              citekey: args.citekey as string | undefined,
+              zotero_key: args.zotero_key as string | undefined,
               status: shouldResetWorkflowState ? 'draft' : undefined,
               kb_status: shouldResetWorkflowState ? 'pending' : undefined,
             },
@@ -484,13 +494,27 @@ export function createReadingIntakeTools(
         }
         const newContent = matter.stringify(body, frontmatter);
 
-        return JSON.stringify({
+        const resultPayload: Record<string, unknown> = {
           type: 'pending_edit',
           operation: exists ? 'update' : 'create',
           path: notePath,
           newContent,
           warnings: templateWarnings,
-        });
+        };
+
+        if (args.zotero_managed === true) {
+          const resolvedVaultPath = fs.realpathSync(vaultPath);
+          const noteRelPath = notePath.startsWith(resolvedVaultPath + path.sep)
+            ? notePath.slice(resolvedVaultPath.length + 1).replace(/\\/g, '/')
+            : notePath;
+          resultPayload.meta = {
+            zotero_slug: slug,
+            zotero_files_created: Array.isArray(args.zotero_files_created) ? args.zotero_files_created : [],
+            note_rel_path: noteRelPath,
+          };
+        }
+
+        return JSON.stringify(resultPayload);
       },
     },
     {
