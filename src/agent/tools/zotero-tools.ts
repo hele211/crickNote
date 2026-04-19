@@ -230,12 +230,175 @@ function writeMarker(markerPath: string, files: Record<string, string>): void {
   fs.writeFileSync(markerPath, JSON.stringify(marker, null, 2));
 }
 
+// ─── zotero_fetch_item ────────────────────────────────────────────────────────
+
+function zoteroFetchItem(vaultPath: string, cfg: () => CrickNoteConfig): ToolHandler {
+  return {
+    definition: {
+      name: 'zotero_fetch_item',
+      description: 'Fetch metadata and PDF path from Zotero via Better BibTeX JSON-RPC.',
+      parameters: {
+        type: 'object',
+        properties: {
+          citekey: { type: 'string', description: 'Zotero citekey (e.g., smith2026)' },
+          doi: { type: 'string', description: 'DOI (normalized automatically)' },
+          zotero_key: { type: 'string', description: 'Item key: bare (ABCD1234) for personal library or group-prefixed (12345:ABCD1234)' },
+          selected_attachment_id: { type: 'string', description: 'Re-call with this to select a specific PDF attachment' },
+        },
+      },
+    },
+    execute: async (args) => {
+      const config = cfg();
+      const z = getZoteroConfig(config);
+      if ('error' in z) return JSON.stringify(z);
+
+      const port = (z as ZoteroConfig).api_port;
+      const storageRoot = (z as ZoteroConfig).storage_root;
+      const live = await apiReady(port);
+
+      if (!live) {
+        const bbtExportPath = (z as ZoteroConfig).bbt_export_path;
+        if (bbtExportPath) {
+          return zoteroFetchFallback(args as Record<string, unknown>, bbtExportPath);
+        }
+        return JSON.stringify({ error: 'Zotero is not running, or Better BibTeX is not installed. Please open Zotero and install the Better BibTeX plugin (https://retorque.re/zotero-better-bibtex/).' });
+      }
+
+      let citekey: string | undefined;
+      let zoteroKey: string | undefined;
+      let libraryId: number | undefined;
+
+      if (args.citekey) {
+        // Path A — citekey provided directly
+        citekey = args.citekey as string;
+      } else if (args.doi) {
+        // Path B — DOI provided
+        const normalized = normalizeDoi(args.doi as string);
+        const items = await jsonRpc(port, 'item.search', [[['DOI', 'is', normalized]]]) as Array<{ itemKey: string; libraryID: number }>;
+        if (!Array.isArray(items) || items.length === 0) {
+          return JSON.stringify({ error: `No Zotero item found for DOI "${normalized}"` });
+        }
+        if (items.length > 1) {
+          const candidates = items.slice(0, 3).map(i => ({
+            zotero_key: i.libraryID === 1 ? i.itemKey : `${i.libraryID}:${i.itemKey}`,
+            title: '', year: 0, journal: '',
+          }));
+          return JSON.stringify({ status: 'needs_item_selection', candidates });
+        }
+        const item = items[0];
+        libraryId = item.libraryID === 1 ? undefined : item.libraryID;
+        zoteroKey = libraryId ? `${item.libraryID}:${item.itemKey}` : item.itemKey;
+        const keyMap = await jsonRpc(port, 'item.citationkey', [zoteroKey]) as Record<string, string>;
+        citekey = keyMap[zoteroKey];
+        if (!citekey) return JSON.stringify({ error: `Could not resolve citekey for item "${zoteroKey}"` });
+      } else if (args.zotero_key) {
+        // Path C — item key provided
+        const rawKey = args.zotero_key as string;
+        zoteroKey = rawKey;
+        const colonIdx = rawKey.indexOf(':');
+        if (colonIdx > 0) {
+          libraryId = parseInt(rawKey.slice(0, colonIdx), 10);
+        }
+        const keyMap = await jsonRpc(port, 'item.citationkey', [rawKey]) as Record<string, string>;
+        citekey = keyMap[rawKey];
+        if (!citekey) return JSON.stringify({ error: `Could not resolve citekey for item key "${rawKey}"` });
+      } else {
+        return JSON.stringify({ error: 'At least one of citekey, doi, or zotero_key is required.' });
+      }
+
+      // Fetch metadata via item.export
+      const exportParams: unknown[] = [[citekey], 'Better CSL JSON'];
+      if (libraryId) exportParams.push(libraryId);
+      const exportRaw = await jsonRpc(port, 'item.export', exportParams) as string;
+
+      let cslItems: CslItem[];
+      try {
+        cslItems = JSON.parse(exportRaw) as CslItem[];
+      } catch {
+        return JSON.stringify({ error: 'Failed to parse CSL JSON from Zotero item.export' });
+      }
+      if (!Array.isArray(cslItems) || cslItems.length === 0) {
+        return JSON.stringify({ error: `No CSL data returned for citekey "${citekey}"` });
+      }
+
+      // Validate CSL fields early so title/author/year errors take priority
+      const cslValidation = normalizeCsl(cslItems[0], citekey, undefined, zoteroKey);
+      if ('error' in cslValidation) return JSON.stringify(cslValidation);
+
+      // Fetch attachments
+      const attParams: unknown[] = [citekey];
+      if (libraryId) attParams.push(libraryId);
+      const attachments = await jsonRpc(port, 'item.attachments', attParams) as BbtAttachment[];
+
+      // PDF selection
+      let pdfPath: string | undefined;
+      const pdfResult = selectPdf(
+        Array.isArray(attachments) ? attachments : [],
+        args.selected_attachment_id as string | undefined
+      );
+
+      if (typeof pdfResult === 'string') {
+        // Validate PDF attachment
+        try {
+          validateZoteroAttachment(pdfResult, storageRoot);
+          pdfPath = pdfResult;
+        } catch (e) {
+          return JSON.stringify({ error: (e as Error).message });
+        }
+      } else if ('status' in pdfResult) {
+        // Multiple PDFs — needs disambiguation
+        return JSON.stringify(pdfResult);
+      } else if ('error' in pdfResult) {
+        // No PDF — check for abstract
+        if (!cslItems[0].abstract) {
+          return JSON.stringify(pdfResult);
+        }
+        pdfPath = undefined; // abstract-only mode
+      }
+
+      const result = normalizeCsl(cslItems[0], citekey, pdfPath, zoteroKey);
+      return JSON.stringify(result);
+    },
+  };
+}
+
+function zoteroFetchFallback(args: Record<string, unknown>, exportPath: string): string {
+  if (!args.citekey && !args.doi) {
+    return JSON.stringify({ error: 'Fallback mode requires citekey or DOI; item-key lookup requires a live Zotero connection.' });
+  }
+  let library: (CslItem & { id?: string })[];
+  try {
+    library = JSON.parse(fs.readFileSync(exportPath, 'utf-8')) as (CslItem & { id?: string })[];
+  } catch {
+    return JSON.stringify({ error: `Failed to read BBT export at "${exportPath}"` });
+  }
+  if (!Array.isArray(library)) return JSON.stringify({ error: 'BBT export is not a JSON array.' });
+
+  let item: (CslItem & { id?: string }) | undefined;
+  if (args.citekey) {
+    item = library.find(i => i.id === args.citekey);
+  } else if (args.doi) {
+    const needle = normalizeDoi(args.doi as string);
+    const matches = library.filter(i => i.DOI && normalizeDoi(i.DOI) === needle);
+    if (matches.length > 1) return JSON.stringify({ error: 'Multiple entries match DOI in export; re-run with citekey to disambiguate.' });
+    item = matches[0];
+  }
+
+  if (!item) return JSON.stringify({ error: 'Item not found in BBT export.' });
+  if (!item.abstract) {
+    return JSON.stringify({ error: 'No PDF attached and no abstract available. Cannot ingest without at least one readable source. Open Zotero, add an abstract or attach a PDF, then retry.' });
+  }
+
+  const result = normalizeCsl(item, (args.citekey as string) ?? '', undefined, undefined);
+  return JSON.stringify(result);
+}
+
 // ─── Tool factory ─────────────────────────────────────────────────────────────
 
 export function createZoteroTools(vaultPath: string): ToolHandler[] {
   function cfg(): CrickNoteConfig { return loadConfig(); }
-
-  // Placeholder — tools added in Tasks 11, 12, 13
-  const tools: ToolHandler[] = [];
-  return tools;
+  return [
+    zoteroFetchItem(vaultPath, cfg),
+    // zoteroPrepareBundleTool and zoteroCleanupBundleTool added in Tasks 12+13
+  ];
 }
