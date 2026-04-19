@@ -208,6 +208,12 @@ function chooseString(primary: string | undefined, fallback: unknown, defaultVal
   return existingString(primary) ?? existingString(fallback) ?? defaultValue;
 }
 
+export function normalizeDoi(doi: string): string {
+  return doi
+    .toLowerCase()
+    .replace(/^https?:\/\/doi\.org\//, '');
+}
+
 export function buildReadingFrontmatter(
   meta: ReadingNoteMeta,
   sources?: ReadingSourceInput[],

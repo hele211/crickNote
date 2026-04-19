@@ -4,6 +4,7 @@ import {
   buildReadingFrontmatter,
   hasMeaningfulReadingBody,
   normalizeReadingSources,
+  normalizeDoi,
   readingSourcesEqual,
   slugifyReadingTitle,
 } from '../../src/knowledge/reading-note.js';
@@ -127,5 +128,27 @@ describe('readingSourcesEqual (order-insensitive)', () => {
     const a = [{ type: 'pdf' as const, path: 'paper.pdf' }];
     const b = [{ type: 'pdf' as const, path: 'paper.pdf' }, { type: 'notes' as const, path: 'notes.md' }];
     expect(readingSourcesEqual(a, b)).toBe(false);
+  });
+});
+
+describe('normalizeDoi', () => {
+  it('lowercases the input', () => {
+    expect(normalizeDoi('10.1016/J.Cell')).toBe('10.1016/j.cell');
+  });
+
+  it('strips https://doi.org/ prefix', () => {
+    expect(normalizeDoi('https://doi.org/10.1016/j.cell.2026.01.001')).toBe('10.1016/j.cell.2026.01.001');
+  });
+
+  it('strips http://doi.org/ prefix', () => {
+    expect(normalizeDoi('http://doi.org/10.1016/j.cell')).toBe('10.1016/j.cell');
+  });
+
+  it('handles mixed case with prefix', () => {
+    expect(normalizeDoi('https://doi.org/10.1016/J.Cell.2026')).toBe('10.1016/j.cell.2026');
+  });
+
+  it('returns bare DOI unchanged (already normalized)', () => {
+    expect(normalizeDoi('10.1016/j.cell')).toBe('10.1016/j.cell');
   });
 });
