@@ -224,6 +224,9 @@ export class AgentRuntime {
             if (parsed.reservation && typeof parsed.reservation === 'object') {
               Object.assign(meta, parsed.reservation); // adds project_id, prefix
             }
+            if (parsed.meta && typeof parsed.meta === 'object' && !Array.isArray(parsed.meta)) {
+              Object.assign(meta, parsed.meta);
+            }
             const proposal = this.safeWriter.proposeEdit(absolutePath, parsed.newContent, userMessage, sessionId, meta);
             const toolWarnings = Array.isArray(parsed.warnings) ? (parsed.warnings as string[]) : [];
             pendingEdits.push({ editId: proposal.editId, proposal, warnings: toolWarnings });
@@ -240,6 +243,7 @@ export class AgentRuntime {
               operation: parsed.operation,
               editId: proposal.editId,
               hasConflict: proposal.hasConflict,
+              ...(typeof parsed.message === 'string' && parsed.message ? { message: parsed.message } : {}),
             });
             history.push({ role: 'tool', content: toolResult, toolCallId: tc.id });
             db.prepare('INSERT INTO chat_messages (session_id, role, content, tool_call_id, timestamp) VALUES (?, ?, ?, ?, ?)')
