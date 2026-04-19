@@ -151,4 +151,34 @@ describe('normalizeDoi', () => {
   it('returns bare DOI unchanged (already normalized)', () => {
     expect(normalizeDoi('10.1016/j.cell')).toBe('10.1016/j.cell');
   });
+
+  it('strips dx.doi.org resolver prefix', () => {
+    expect(normalizeDoi('https://dx.doi.org/10.1016/j.cell')).toBe('10.1016/j.cell');
+  });
+
+  it('strips doi: prefix', () => {
+    expect(normalizeDoi('doi:10.1016/j.cell')).toBe('10.1016/j.cell');
+  });
+
+  it('trims surrounding whitespace', () => {
+    expect(normalizeDoi('  10.1016/j.cell  ')).toBe('10.1016/j.cell');
+  });
+
+  it('returns empty string for empty input', () => {
+    expect(normalizeDoi('')).toBe('');
+  });
+
+  it('strips query string from DOI URL', () => {
+    expect(normalizeDoi('https://doi.org/10.1016/j.cell?foo=bar')).toBe('10.1016/j.cell');
+  });
+});
+
+describe('buildReadingFrontmatter normalizes DOI', () => {
+  it('buildReadingFrontmatter normalizes the doi field', () => {
+    const fm = buildReadingFrontmatter(
+      { title: 'T', authors: ['A'], year: 2026, journal: 'J', doi: 'https://doi.org/10.1016/J.Cell' },
+      [{ type: 'pdf', path: 'paper.pdf' }]
+    );
+    expect(fm.doi).toBe('10.1016/j.cell');
+  });
 });

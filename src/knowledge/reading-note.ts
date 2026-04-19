@@ -208,10 +208,25 @@ function chooseString(primary: string | undefined, fallback: unknown, defaultVal
   return existingString(primary) ?? existingString(fallback) ?? defaultValue;
 }
 
+const DOI_RESOLVER_HOSTS = new Set(['doi.org', 'dx.doi.org']);
+
 export function normalizeDoi(doi: string): string {
-  return doi
-    .toLowerCase()
-    .replace(/^https?:\/\/doi\.org\//, '');
+  const trimmed = doi.trim().toLowerCase();
+  if (!trimmed) return '';
+
+  // Handle URL form: https://doi.org/... or https://dx.doi.org/...
+  try {
+    const url = new URL(trimmed);
+    if ((url.protocol === 'http:' || url.protocol === 'https:')
+        && DOI_RESOLVER_HOSTS.has(url.hostname)) {
+      return decodeURIComponent(url.pathname.replace(/^\/+/, ''));
+    }
+  } catch {
+    // Not a valid URL — fall through to string-based stripping
+  }
+
+  // Handle doi: prefix (e.g. "doi:10.1016/j.cell")
+  return trimmed.replace(/^doi:\s*/, '');
 }
 
 export function buildReadingFrontmatter(
@@ -249,7 +264,8 @@ export function buildReadingFrontmatter(
     tags,
   };
 
-  const doi = existingString(meta.doi) ?? existingString(existingFrontmatter.doi);
+  const rawDoi = existingString(meta.doi) ?? existingString(existingFrontmatter.doi);
+  const doi = rawDoi ? normalizeDoi(rawDoi) : undefined;
   if (doi) {
     frontmatter.doi = doi;
   } else {
