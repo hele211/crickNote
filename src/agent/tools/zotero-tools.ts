@@ -534,6 +534,99 @@ function zoteroPrepareBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
   };
 }
 
+// ─── zotero_cleanup_bundle ────────────────────────────────────────────────────
+
+function zoteroCleanupBundleTool(vaultPath: string, cfg: () => CrickNoteConfig): ToolHandler {
+  return {
+    definition: {
+      name: 'zotero_cleanup_bundle',
+      description: 'Remove vault attachment files created by zotero_prepare_bundle on cancel. Hash-gated to prevent destroying user-modified files.',
+      parameters: {
+        type: 'object',
+        properties: {
+          slug: { type: 'string' },
+          files: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Scoped cleanup: only these files are candidates. Omit for full marker-based cleanup.',
+          },
+        },
+        required: ['slug'],
+      },
+    },
+    execute: async (args) => {
+      const config = cfg();
+      const z = getZoteroConfig(config);
+      if ('error' in z) return JSON.stringify(z);
+
+      const slug = args.slug as string;
+      const bundleDir = path.join(vaultPath, 'Reading', 'attachments', slug);
+      const markerPath = path.join(bundleDir, '.zotero-bundle');
+
+      if (!fs.existsSync(markerPath)) {
+        return JSON.stringify({ error: 'No .zotero-bundle marker found. Refusing to operate on an unmanaged directory.' });
+      }
+
+      const marker = readMarker(markerPath);
+      if (!marker) return JSON.stringify({ error: 'Failed to read .zotero-bundle marker.' });
+
+      const scopedFiles: Set<string> | undefined = Array.isArray(args.files)
+        ? new Set(args.files as string[])
+        : undefined;
+
+      const deleted: string[] = [];
+      const skipped: string[] = [];
+      const surviving: Record<string, string> = {};
+
+      for (const [filename, storedHash] of Object.entries(marker.files)) {
+        const filePath = path.join(bundleDir, filename);
+        const inScope = scopedFiles === undefined || scopedFiles.has(filename);
+
+        if (!fs.existsSync(filePath)) {
+          // Ghost entry — drop from marker regardless of scope
+          continue;
+        }
+
+        if (!inScope) {
+          // Out-of-scope: preserve in surviving marker
+          surviving[filename] = storedHash;
+          continue;
+        }
+
+        const currentHash = sha256File(filePath);
+        if (currentHash !== storedHash) {
+          // Hash mismatch — user modified, keep it
+          skipped.push(filename);
+          surviving[filename] = storedHash;
+          continue;
+        }
+
+        fs.unlinkSync(filePath);
+        deleted.push(filename);
+      }
+
+      // Rewrite or delete marker
+      if (Object.keys(surviving).length > 0) {
+        writeMarker(markerPath, surviving);
+      } else {
+        try { fs.unlinkSync(markerPath); } catch { /* best effort */ }
+      }
+
+      // Remove directory if now empty
+      let dirRemoved = false;
+      try {
+        const remaining = fs.readdirSync(bundleDir);
+        if (remaining.length === 0) {
+          fs.rmdirSync(bundleDir);
+          dirRemoved = true;
+        }
+      } catch { /* dir may already be gone */ }
+
+      return JSON.stringify({ deleted, skipped, dir_removed: dirRemoved });
+    },
+  };
+}
+
 // ─── Tool factory ─────────────────────────────────────────────────────────────
 
 export function createZoteroTools(vaultPath: string): ToolHandler[] {
@@ -541,6 +634,6 @@ export function createZoteroTools(vaultPath: string): ToolHandler[] {
   return [
     zoteroFetchItem(vaultPath, cfg),
     zoteroPrepareBundleTool(vaultPath, cfg),
-    // zoteroCleanupBundleTool added in Task 13
+    zoteroCleanupBundleTool(vaultPath, cfg),
   ];
 }

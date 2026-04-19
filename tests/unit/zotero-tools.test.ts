@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { validateZoteroAttachment } from '../../src/agent/tools/zotero-tools.js';
 
 // ─── HTTP mock for JSON-RPC ───────────────────────────────────────────────────
@@ -443,5 +444,99 @@ describe('zotero_prepare_bundle', () => {
       abstract: 'Some abstract',
     }));
     expect(result.error).toMatch(/pre-existing manual bundle/i);
+  });
+});
+
+// ─── zotero_cleanup_bundle tests ─────────────────────────────────────────────
+
+function computeHash(filePath: string): string {
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function writeTestMarker(dir: string, files: Record<string, string>): void {
+  fs.writeFileSync(
+    path.join(dir, '.zotero-bundle'),
+    JSON.stringify({ created_by: 'zotero_prepare_bundle', files }, null, 2)
+  );
+}
+
+async function getCleanupTool(vaultPath: string) {
+  const { createZoteroTools } = await import('../../src/agent/tools/zotero-tools.js');
+  return createZoteroTools(vaultPath).find((t: { definition: { name: string } }) => t.definition.name === 'zotero_cleanup_bundle')!;
+}
+
+describe('zotero_cleanup_bundle', () => {
+  let vault: string;
+  beforeEach(() => {
+    vault = fs.mkdtempSync(path.join(os.tmpdir(), 'cn-vault-'));
+  });
+  afterEach(() => {
+    fs.rmSync(vault, { recursive: true, force: true });
+  });
+
+  it('refuses to operate when .zotero-bundle is absent', async () => {
+    const dir = path.join(vault, 'Reading/attachments/test-slug');
+    fs.mkdirSync(dir, { recursive: true });
+    const result = JSON.parse(await (await getCleanupTool(vault)).execute({ slug: 'test-slug' }));
+    expect(result.error).toMatch(/marker/i);
+  });
+
+  it('scoped cleanup: deletes only hash-matching files in the files list; out-of-scope files untouched', async () => {
+    const dir = path.join(vault, 'Reading/attachments/test-slug');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'paper.pdf'), '%PDF-content');
+    fs.writeFileSync(path.join(dir, 'abstract.md'), '# Abstract\n\ntext');
+    const pdfHash = computeHash(path.join(dir, 'paper.pdf'));
+    const absHash = computeHash(path.join(dir, 'abstract.md'));
+    writeTestMarker(dir, { 'paper.pdf': pdfHash, 'abstract.md': absHash });
+
+    const result = JSON.parse(await (await getCleanupTool(vault)).execute({ slug: 'test-slug', files: ['paper.pdf'] }));
+    expect(result.deleted).toContain('paper.pdf');
+    expect(fs.existsSync(path.join(dir, 'paper.pdf'))).toBe(false);
+    expect(fs.existsSync(path.join(dir, 'abstract.md'))).toBe(true);
+    // Marker rewritten with only abstract.md
+    const marker = JSON.parse(fs.readFileSync(path.join(dir, '.zotero-bundle'), 'utf-8'));
+    expect(marker.files['abstract.md']).toBeDefined();
+    expect(marker.files['paper.pdf']).toBeUndefined();
+  });
+
+  it('full cleanup (no files param): deletes all hash-matching marker entries, removes dir if empty', async () => {
+    const dir = path.join(vault, 'Reading/attachments/test-slug2');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'paper.pdf'), '%PDF-content');
+    const pdfHash = computeHash(path.join(dir, 'paper.pdf'));
+    writeTestMarker(dir, { 'paper.pdf': pdfHash });
+
+    const result = JSON.parse(await (await getCleanupTool(vault)).execute({ slug: 'test-slug2' }));
+    expect(result.deleted).toContain('paper.pdf');
+    expect(fs.existsSync(dir)).toBe(false);
+  });
+
+  it('hash mismatch: user-modified file is skipped and preserved in marker', async () => {
+    const dir = path.join(vault, 'Reading/attachments/test-slug3');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'paper.pdf'), '%PDF-original');
+    const originalHash = computeHash(path.join(dir, 'paper.pdf'));
+    writeTestMarker(dir, { 'paper.pdf': originalHash });
+    // User modifies file
+    fs.writeFileSync(path.join(dir, 'paper.pdf'), '%PDF-modified-by-user');
+
+    const result = JSON.parse(await (await getCleanupTool(vault)).execute({ slug: 'test-slug3' }));
+    expect(result.skipped).toContain('paper.pdf');
+    expect(fs.existsSync(path.join(dir, 'paper.pdf'))).toBe(true);
+    // Marker still has the entry (hash-mismatch means ownership preserved)
+    const marker = JSON.parse(fs.readFileSync(path.join(dir, '.zotero-bundle'), 'utf-8'));
+    expect(marker.files['paper.pdf']).toBeDefined();
+  });
+
+  it('ghost entry (file already deleted): dropped from rewritten marker', async () => {
+    const dir = path.join(vault, 'Reading/attachments/test-slug4');
+    fs.mkdirSync(dir, { recursive: true });
+    writeTestMarker(dir, { 'paper.pdf': 'some-hash' }); // file not present on disk
+    const result = JSON.parse(await (await getCleanupTool(vault)).execute({ slug: 'test-slug4' }));
+    // No entries remain → marker deleted, dir removed
+    expect(fs.existsSync(path.join(dir, '.zotero-bundle'))).toBe(false);
+    expect(fs.existsSync(dir)).toBe(false);
+    expect(result.deleted ?? []).not.toContain('paper.pdf'); // already absent, not "deleted"
   });
 });
