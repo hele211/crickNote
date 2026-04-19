@@ -138,7 +138,7 @@ export class AgentRuntime {
       .run(sessionId, 'user', userMessage, Date.now());
 
     // Assemble system prompt
-    const systemPrompt = assembleSystemPrompt(this.config.vaultPath, this.registry.getDefinitions());
+    const systemPrompt = assembleSystemPrompt(this.config.vaultPath, this.registry.getDefinitions(), this.config);
 
     // Agent loop: call LLM, execute tools, repeat until done
     const allToolCalls: ToolCall[] = [];

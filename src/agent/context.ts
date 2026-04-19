@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import matter from 'gray-matter';
 import { loadAgentConfig } from '../config/config.js';
+import type { CrickNoteConfig } from '../config/config.js';
 import type { ToolDefinition } from './providers/base.js';
 import { localDateString } from '../utils/date.js';
 
@@ -63,9 +64,13 @@ function cachedReadFile(filePath: string): string | null {
 
 export function assembleSystemPrompt(
   vaultPath: string,
-  tools: ToolDefinition[]
+  tools: ToolDefinition[],
+  config?: CrickNoteConfig
 ): string {
   const { agentMd, soulMd, skills } = loadAgentConfig(vaultPath);
+
+  const autoSummarize = config?.zotero?.auto_summarize ?? true;
+  const zoteroEnabled = config?.zotero?.enabled ?? false;
 
   const sections: string[] = [];
 
@@ -83,12 +88,34 @@ IMPORTANT RULES:
 
   sections.push(`## Reading Workflow
 
-Preferred reading-note order:
+Preferred reading-note order (vault-native bundle):
 1. Call reading_pipeline_status first.
 2. If the reading note does not exist yet, call discover_reading_bundle or ingest_reading_bundle.
 3. If the note is ready, call compile_reading_note.
 4. After the user reviews the draft, call set_reading_note_status with status: complete.
-5. Then continue with kb_suggest, kb_write_mapping, and kb_apply.`);
+5. Then continue with kb_suggest, kb_write_mapping, and kb_apply.${zoteroEnabled ? `
+
+## Zotero Reading Workflow
+
+When the user says "ingest <identifier> from Zotero" or "summarise <identifier> from my Zotero":
+1. Call zotero_fetch_item with the identifier (citekey, doi, or zotero_key).
+   - If it returns needs_item_selection: present the candidates to the user, re-call with zotero_key.
+   - If it returns needs_attachment_selection: present the PDF list, re-call with selected_attachment_id.
+2. Derive slug: <slug_prefix from output>-<year>-<slugifyReadingTitle(title)>. Never derive from citekey.
+3. Check for existing notes: if both Reading/Papers/<slug>.md and Reading/Threads/<slug>.md exist, stop with an error.
+4. Narrate: "Copying PDF to vault at Reading/attachments/<slug>/paper.pdf…" (or abstract variant).
+5. Call zotero_prepare_bundle({ slug, pdf_path? }) → capture files_created_this_run.
+6. Call ingest_reading_bundle with all metadata fields + citekey + zotero_key (if present) + zotero_managed: true + zotero_files_created: <files_created_this_run>.
+7. CANCEL FLOW: After any scaffold edit_cancelled event that contains zotero_slug:
+   - If zotero_files_created is non-empty → call zotero_cleanup_bundle({ slug: zotero_slug, files: zotero_files_created }).
+   - If zotero_files_created is empty → call vault_read(note_rel_path from event):
+     * Note found → bundle belongs to confirmed prior note; skip cleanup.
+     * Note absent → call zotero_cleanup_bundle({ slug: zotero_slug }) with no files (full cleanup).
+   - Always prompt the user to click Continue after scaffold cancel so cleanup executes.
+8. After scaffold confirmed, use note_rel_path (from pending_edit meta, vault-relative) for ALL follow-up tool calls. Never use the absolute pending_edit.path.
+${autoSummarize
+  ? '9. auto_summarize is ON: proceed to compile_reading_note({ path: note_rel_path }) automatically. Then call vault_write with the returned content → second pending_edit. Append: "Note: PDF extraction is capped at 20 pages. If longer, review the summary manually."'
+  : '9. auto_summarize is OFF: stop after scaffold confirmation. Report the note path and offer to summarize on demand. Only call compile_reading_note if the user explicitly asks.'}` : ''}`);
 
   // Layer 2: Agent config (user's core rules)
   if (agentMd) {
