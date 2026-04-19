@@ -10,6 +10,7 @@ import {
   hasCreateHeadings,
   hasMeaningfulReadingBody,
   inferReadingPipelineStep,
+  normalizeDoi,
   normalizeReadingSourcePath,
   normalizeReadingSources,
   readingSourcesEqual,
@@ -283,6 +284,44 @@ function determinePipelineStep(
   return baseStep;
 }
 
+interface CollisionCheckResult {
+  action: 'proceed' | 'stop';
+  error?: string;
+}
+
+function checkSlugCollision(
+  existingFrontmatter: Record<string, unknown>,
+  incomingArgs: { citekey?: unknown; doi?: unknown; zotero_key?: unknown }
+): CollisionCheckResult {
+  const existingZoteroKey = typeof existingFrontmatter.zotero_key === 'string' ? existingFrontmatter.zotero_key : undefined;
+  const incomingZoteroKey = typeof incomingArgs.zotero_key === 'string' && incomingArgs.zotero_key ? incomingArgs.zotero_key : undefined;
+  const existingDoi = typeof existingFrontmatter.doi === 'string' ? normalizeDoi(existingFrontmatter.doi) : undefined;
+  const incomingDoi = typeof incomingArgs.doi === 'string' && incomingArgs.doi ? normalizeDoi(incomingArgs.doi) : undefined;
+  const existingCitekey = typeof existingFrontmatter.citekey === 'string' ? existingFrontmatter.citekey : undefined;
+  const incomingCitekey = typeof incomingArgs.citekey === 'string' && incomingArgs.citekey ? incomingArgs.citekey : undefined;
+
+  // Tier 1: zotero_key — only a shared identifier if BOTH sides have it
+  if (existingZoteroKey && incomingZoteroKey) {
+    if (existingZoteroKey === incomingZoteroKey) return { action: 'proceed' };
+    return { action: 'stop', error: `Slug collision: existing note has zotero_key "${existingZoteroKey}" but incoming item has zotero_key "${incomingZoteroKey}". These are different papers. Resolve manually.` };
+  }
+
+  // Tier 2: DOI — only a shared identifier if both sides have one
+  if (existingDoi && incomingDoi) {
+    if (existingDoi === incomingDoi) return { action: 'proceed' };
+    return { action: 'stop', error: `Slug collision: existing note has doi "${existingDoi}" but incoming item has doi "${incomingDoi}". These are different papers. Resolve manually.` };
+  }
+
+  // Tier 3: citekey
+  if (existingCitekey && incomingCitekey) {
+    if (existingCitekey === incomingCitekey) return { action: 'proceed' };
+    return { action: 'stop', error: `Slug collision: existing note has citekey "${existingCitekey}" but incoming has citekey "${incomingCitekey}". No stronger ID to confirm they are the same paper. Resolve manually.` };
+  }
+
+  // Tier 4: no shared identifier
+  return { action: 'stop', error: `Slug collision: a note already exists at this slug but shares no common identifier (zotero_key, doi, citekey) with the incoming item. Resolve manually or use a different slug.` };
+}
+
 export function createReadingIntakeTools(
   vaultPath: string,
   conflictDetector?: ConflictDetector
@@ -413,6 +452,13 @@ export function createReadingIntakeTools(
           }
         }
 
+        // Duplicate-slug guard: slug in both Papers and Threads
+        const papersPath = resolveVaultPath(vaultPath, path.posix.join('Reading', 'Papers', `${slug}.md`));
+        const threadsPath = resolveVaultPath(vaultPath, path.posix.join('Reading', 'Threads', `${slug}.md`));
+        if (fs.existsSync(papersPath) && fs.existsSync(threadsPath)) {
+          return JSON.stringify({ error: `Slug "${slug}" found in both Reading/Papers/ and Reading/Threads/. Resolve the duplicate manually before proceeding.` });
+        }
+
         // Use an existing thread note if one is already present, otherwise default to Papers
         const existingNoteRef = findReadingNoteBySlug(vaultPath, slug);
         let notePath: string;
@@ -434,6 +480,17 @@ export function createReadingIntakeTools(
           const parsed = matter(existingContent);
           existingFrontmatter = parsed.data as Record<string, unknown>;
           existingBody = parsed.content;
+        }
+
+        if (exists) {
+          const collision = checkSlugCollision(existingFrontmatter as Record<string, unknown>, {
+            citekey: args.citekey,
+            doi: args.doi,
+            zotero_key: args.zotero_key,
+          });
+          if (collision.action === 'stop') {
+            return JSON.stringify({ error: collision.error });
+          }
         }
 
         let existingSources: ReadingSourceInput[] | undefined;

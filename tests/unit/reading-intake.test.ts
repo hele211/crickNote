@@ -115,6 +115,7 @@ describe('reading intake tools', () => {
       'read_date: 2026-04-10\n' +
       'status: complete\n' +
       'kb_status: mapped\n' +
+      'citekey: smith2026il42\n' +
       'sources:\n' +
       '  - type: notes\n' +
       '    path: old-notes.md\n' +
@@ -137,6 +138,7 @@ describe('reading intake tools', () => {
       journal: 'Nature Immunology',
       related_projects: ['P001'],
       sources: [{ type: 'notes', path: 'old-notes.md' }],
+      citekey: 'smith2026il42',
     }));
 
     expect(result.type).toBe('pending_edit');
@@ -166,6 +168,7 @@ describe('reading intake tools', () => {
       'read_date: 2026-04-10\n' +
       'status: complete\n' +
       'kb_status: mapped\n' +
+      'citekey: smith2026il42\n' +
       '---\n\n' +
       '# Old title\n\n' +
       '## Claims\n\n' +
@@ -185,6 +188,7 @@ describe('reading intake tools', () => {
       year: 2026,
       journal: 'Nature Immunology',
       sources: [{ type: 'pdf', path: 'paper.pdf' }],
+      citekey: 'smith2026il42',
     }));
 
     const parsed = matter(result.newContent);
@@ -205,6 +209,7 @@ describe('reading intake tools', () => {
       'read_date: 2026-04-10\n' +
       'status: complete\n' +
       'kb_status: merged\n' +
+      'citekey: smith2026il42\n' +
       'sources:\n' +
       '  - type: notes\n' +
       '    path: old-notes.md\n' +
@@ -223,6 +228,7 @@ describe('reading intake tools', () => {
       year: 2026,
       journal: 'Nature Immunology',
       sources: [{ type: 'pdf', path: 'paper.pdf' }],
+      citekey: 'smith2026il42',
     }));
 
     const parsed = matter(result.newContent);
@@ -407,5 +413,110 @@ describe('ingest_reading_bundle — Zotero fields and note_rel_path', () => {
     }));
     expect(result.type).toBe('pending_edit');
     expect(result.meta).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Helpers for duplicate-slug and collision-check tests
+// ---------------------------------------------------------------------------
+
+function makeZoteroVault(slug: string = 'smith-2026-il42'): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cn-vault-'));
+  for (const sub of ['Reading/Papers', 'Reading/Threads', `Reading/attachments/${slug}`]) {
+    fs.mkdirSync(path.join(dir, sub), { recursive: true });
+  }
+  fs.writeFileSync(path.join(dir, `Reading/attachments/${slug}/paper.pdf`), '%PDF-test');
+  return dir;
+}
+
+async function ingestBundle(vaultPath: string, args: object): Promise<Record<string, unknown>> {
+  const tools = createReadingIntakeTools(vaultPath);
+  const ingestTool = tools.find(t => t.definition.name === 'ingest_reading_bundle')!;
+  return JSON.parse(await ingestTool.execute(args));
+}
+
+const BASE_ARGS = {
+  slug: 'smith-2026-il42',
+  title: 'T',
+  authors: ['S'],
+  year: 2026,
+  journal: 'J',
+  sources: [{ type: 'pdf', path: 'paper.pdf' }],
+};
+
+describe('duplicate-slug detection', () => {
+  it('errors when slug exists in both Papers and Threads', async () => {
+    const vault = makeZoteroVault();
+    fs.writeFileSync(path.join(vault, 'Reading/Papers/smith-2026-il42.md'), '---\ntitle: A\n---\n');
+    fs.writeFileSync(path.join(vault, 'Reading/Threads/smith-2026-il42.md'), '---\ntitle: B\n---\n');
+    const result = await ingestBundle(vault, BASE_ARGS);
+    expect(result.error).toMatch(/both Reading\/Papers.*Reading\/Threads/);
+  });
+});
+
+describe('collision-check tiers', () => {
+  it('zotero_key match → proceed silently (same paper)', async () => {
+    const vault = makeZoteroVault();
+    fs.writeFileSync(path.join(vault, 'Reading/Papers/smith-2026-il42.md'),
+      '---\ntitle: Old T\nzotero_key: ABCD1234\n---\n');
+    const result = await ingestBundle(vault, { ...BASE_ARGS, zotero_key: 'ABCD1234', zotero_managed: true, zotero_files_created: [] });
+    expect(result.type).toBe('pending_edit');
+  });
+
+  it('zotero_key mismatch → stop and ask user', async () => {
+    const vault = makeZoteroVault();
+    fs.writeFileSync(path.join(vault, 'Reading/Papers/smith-2026-il42.md'),
+      '---\ntitle: Old T\nzotero_key: OTHER123\n---\n');
+    const result = await ingestBundle(vault, { ...BASE_ARGS, zotero_key: 'ABCD1234' });
+    expect(result.error).toMatch(/zotero_key/i);
+  });
+
+  it('DOI match (no zotero_key on either side) → proceed silently', async () => {
+    const vault = makeZoteroVault();
+    fs.writeFileSync(path.join(vault, 'Reading/Papers/smith-2026-il42.md'),
+      '---\ntitle: Old T\ndoi: "10.1016/j.cell"\n---\n');
+    const result = await ingestBundle(vault, { ...BASE_ARGS, doi: 'https://doi.org/10.1016/j.cell' });
+    expect(result.type).toBe('pending_edit');
+  });
+
+  it('DOI mismatch → stop and ask user', async () => {
+    const vault = makeZoteroVault();
+    fs.writeFileSync(path.join(vault, 'Reading/Papers/smith-2026-il42.md'),
+      '---\ntitle: Old T\ndoi: "10.9999/other"\n---\n');
+    const result = await ingestBundle(vault, { ...BASE_ARGS, doi: '10.1016/j.cell' });
+    expect(result.error).toMatch(/doi/i);
+  });
+
+  it('citekey match, no stronger ID → proceed silently (weak identity)', async () => {
+    const vault = makeZoteroVault();
+    fs.writeFileSync(path.join(vault, 'Reading/Papers/smith-2026-il42.md'),
+      '---\ntitle: Old T\ncitekey: smith2026\n---\n');
+    const result = await ingestBundle(vault, { ...BASE_ARGS, citekey: 'smith2026' });
+    expect(result.type).toBe('pending_edit');
+  });
+
+  it('citekey mismatch, no stronger ID → stop and ask user', async () => {
+    const vault = makeZoteroVault();
+    fs.writeFileSync(path.join(vault, 'Reading/Papers/smith-2026-il42.md'),
+      '---\ntitle: Old T\ncitekey: jones2025\n---\n');
+    const result = await ingestBundle(vault, { ...BASE_ARGS, citekey: 'smith2026' });
+    expect(result.error).toMatch(/citekey/i);
+  });
+
+  it('no shared identifier → stop and ask user (slug-match only)', async () => {
+    const vault = makeZoteroVault();
+    fs.writeFileSync(path.join(vault, 'Reading/Papers/smith-2026-il42.md'),
+      '---\ntitle: Old T\n---\n');
+    const result = await ingestBundle(vault, { ...BASE_ARGS, zotero_managed: true });
+    expect(result.error).toMatch(/slug/i);
+  });
+
+  it('existing note has zotero_key but fetched item has none (Path A) → falls through to DOI tier', async () => {
+    const vault = makeZoteroVault();
+    fs.writeFileSync(path.join(vault, 'Reading/Papers/smith-2026-il42.md'),
+      '---\ntitle: Old T\nzotero_key: ABCD1234\ndoi: "10.1016/j.cell"\n---\n');
+    // No zotero_key in args (Path A), but DOI matches
+    const result = await ingestBundle(vault, { ...BASE_ARGS, doi: '10.1016/j.cell' });
+    expect(result.type).toBe('pending_edit');
   });
 });
