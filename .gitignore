@@ -10,3 +10,4 @@ obsidian-plugin/main.js
 obsidian-plugin/styles.css.map
 coverage/
 .DS_Store
+.worktrees/
