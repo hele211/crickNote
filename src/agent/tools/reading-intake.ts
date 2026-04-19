@@ -502,7 +502,21 @@ export function createReadingIntakeTools(
           existingSources = undefined;
         }
 
-        const sourcesChanged = exists && !readingSourcesEqual(existingSources, selectedSources);
+        let effectiveSources = selectedSources;
+        let downgradeMessage: string | undefined;
+
+        if (exists && existingSources) {
+          const existingHasPdf = existingSources.some(s => s.type === 'pdf');
+          const incomingIsNotesOnly = selectedSources.every(s => s.type !== 'pdf');
+
+          if (existingHasPdf && incomingIsNotesOnly) {
+            // Downgrade attempt: keep existing sources
+            effectiveSources = existingSources;
+            downgradeMessage = 'Existing PDF source preserved; abstract-only rerun would downgrade it. Provide a PDF to upgrade.';
+          }
+        }
+
+        const sourcesChanged = exists && !readingSourcesEqual(existingSources, effectiveSources);
         const shouldResetWorkflowState = !hasMeaningfulReadingBody(existingBody) || sourcesChanged;
 
         let frontmatter: Record<string, unknown>;
@@ -520,7 +534,7 @@ export function createReadingIntakeTools(
               status: shouldResetWorkflowState ? 'draft' : undefined,
               kb_status: shouldResetWorkflowState ? 'pending' : undefined,
             },
-            selectedSources,
+            effectiveSources,
             existingFrontmatter
           );
         } catch (err) {
@@ -558,6 +572,10 @@ export function createReadingIntakeTools(
           newContent,
           warnings: templateWarnings,
         };
+
+        if (typeof downgradeMessage === 'string') {
+          resultPayload.message = downgradeMessage;
+        }
 
         if (args.zotero_managed === true) {
           const resolvedVaultPath = fs.realpathSync(vaultPath);

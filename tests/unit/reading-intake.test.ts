@@ -520,3 +520,57 @@ describe('collision-check tiers', () => {
     expect(result.type).toBe('pending_edit');
   });
 });
+
+describe('effective_sources and downgrade protection', () => {
+  it('abstract-only rerun against existing PDF source preserves PDF source and emits message', async () => {
+    const vault = makeZoteroVault();
+    // Write existing note with PDF source and meaningful body
+    fs.writeFileSync(path.join(vault, 'Reading/Papers/smith-2026-il42.md'),
+      '---\ntitle: T\nauthors: [S]\nyear: 2026\njournal: J\ncitekey: s2026\nsources:\n  - type: pdf\n    path: paper.pdf\n---\n\n# T\n\n## Claims\n\nsome content');
+    // Set up abstract.md for the abstract-only rerun
+    fs.writeFileSync(path.join(vault, 'Reading/attachments/smith-2026-il42/abstract.md'), '# Abstract\n\nsome abstract');
+    const result = await ingestBundle(vault, {
+      slug: 'smith-2026-il42', title: 'T', authors: ['S'], year: 2026, journal: 'J',
+      citekey: 's2026',
+      sources: [{ type: 'notes', path: 'abstract.md' }],
+      zotero_managed: true, zotero_files_created: [],
+    });
+    expect(result.type).toBe('pending_edit');
+    // message must be present and mention pdf
+    expect(typeof result.message).toBe('string');
+    expect((result.message as string).toLowerCase()).toContain('pdf');
+    // effective_sources unchanged → body must be preserved
+    expect(result.newContent).toContain('some content');
+  });
+
+  it('abstract→PDF upgrade resets status/kb_status and preserves body', async () => {
+    const vault = makeZoteroVault();
+    fs.writeFileSync(path.join(vault, 'Reading/Papers/smith-2026-il42.md'),
+      '---\ntitle: T\nauthors: [S]\nyear: 2026\njournal: J\nstatus: complete\nkb_status: mapped\ncitekey: s2026\nsources:\n  - type: notes\n    path: abstract.md\n---\n\n# T\n\n## Claims\n\nsome content');
+    const result = await ingestBundle(vault, {
+      slug: 'smith-2026-il42', title: 'T', authors: ['S'], year: 2026, journal: 'J',
+      citekey: 's2026',
+      sources: [{ type: 'pdf', path: 'paper.pdf' }],
+      zotero_managed: true, zotero_files_created: ['paper.pdf'],
+    });
+    expect(result.type).toBe('pending_edit');
+    expect(result.newContent).toContain('status: draft');
+    expect(result.newContent).toContain('kb_status: pending');
+    expect(result.newContent).toContain('some content');
+  });
+
+  it('unchanged effective_sources preserves body and syncs H1', async () => {
+    const vault = makeZoteroVault();
+    fs.writeFileSync(path.join(vault, 'Reading/Papers/smith-2026-il42.md'),
+      '---\ntitle: Old Title\nauthors: [S]\nyear: 2026\njournal: J\nstatus: complete\ncitekey: s2026\nsources:\n  - type: pdf\n    path: paper.pdf\n---\n\n# Old Title\n\n## Claims\n\nsome content');
+    const result = await ingestBundle(vault, {
+      slug: 'smith-2026-il42', title: 'New Title', authors: ['S'], year: 2026, journal: 'J',
+      citekey: 's2026',
+      sources: [{ type: 'pdf', path: 'paper.pdf' }],
+    });
+    expect(result.type).toBe('pending_edit');
+    expect(result.newContent).toContain('some content');
+    expect(result.newContent).toContain('# New Title');
+    expect(result.newContent).toContain('status: complete');
+  });
+});
