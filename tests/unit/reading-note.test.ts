@@ -4,6 +4,7 @@ import {
   buildReadingFrontmatter,
   hasMeaningfulReadingBody,
   normalizeReadingSources,
+  readingSourcesEqual,
   slugifyReadingTitle,
 } from '../../src/knowledge/reading-note.js';
 
@@ -106,5 +107,25 @@ describe('hasMeaningfulReadingBody — custom template sections', () => {
   it('ignores HTML comments when evaluating content', () => {
     const body = `\n# Some Paper\n\n## Claims\n<!-- placeholder -->\n## Reasoning\n## Evidence\n## Assumptions\n## Takeaways\n## Extensions\n`;
     expect(hasMeaningfulReadingBody(body)).toBe(false);
+  });
+});
+
+describe('readingSourcesEqual (order-insensitive)', () => {
+  it('treats reordered identical sources as equal', () => {
+    const a = [{ type: 'pdf' as const, path: 'paper.pdf' }, { type: 'notes' as const, path: 'abstract.md' }];
+    const b = [{ type: 'notes' as const, path: 'abstract.md' }, { type: 'pdf' as const, path: 'paper.pdf' }];
+    expect(readingSourcesEqual(a, b)).toBe(true);
+  });
+
+  it('detects genuinely different sources', () => {
+    const a = [{ type: 'pdf' as const, path: 'paper.pdf' }];
+    const b = [{ type: 'notes' as const, path: 'abstract.md' }];
+    expect(readingSourcesEqual(a, b)).toBe(false);
+  });
+
+  it('treats different lengths as unequal', () => {
+    const a = [{ type: 'pdf' as const, path: 'paper.pdf' }];
+    const b = [{ type: 'pdf' as const, path: 'paper.pdf' }, { type: 'notes' as const, path: 'notes.md' }];
+    expect(readingSourcesEqual(a, b)).toBe(false);
   });
 });

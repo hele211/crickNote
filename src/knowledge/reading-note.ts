@@ -132,14 +132,11 @@ export function readingSourcesEqual(
   const normalizedLeft = left ? normalizeReadingSources(left) : [];
   const normalizedRight = right ? normalizeReadingSources(right) : [];
 
-  if (normalizedLeft.length !== normalizedRight.length) {
-    return false;
-  }
+  if (normalizedLeft.length !== normalizedRight.length) return false;
 
-  return normalizedLeft.every((source, index) =>
-    source.type === normalizedRight[index]?.type
-    && source.path === normalizedRight[index]?.path
-  );
+  const makeKey = (s: ReadingSourceInput) => `${s.type}:${s.path}`;
+  const leftKeys = new Set(normalizedLeft.map(makeKey));
+  return normalizedRight.every(s => leftKeys.has(makeKey(s)));
 }
 
 function normalizeFrontmatterString(value: unknown): string | undefined {
