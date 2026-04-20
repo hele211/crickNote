@@ -16,6 +16,7 @@ vi.mock('node:http', () => {
         const chunks: string[] = [];
         const req = {
           on: vi.fn(),
+          setTimeout: vi.fn(),
           write: vi.fn((data: string) => { chunks.push(data); }),
           end: vi.fn(() => {
             const body = chunks.join('');
@@ -166,18 +167,28 @@ describe('zotero_fetch_item — Path B (DOI)', () => {
     mockResponses = {};
   });
 
-  it('returns needs_item_selection when multiple items match DOI', async () => {
+  it('returns needs_item_selection with metadata when multiple items match DOI', async () => {
     mockResponses = {
       'api.ready': { result: true },
       'item.search': { result: [
         { itemKey: 'KEY1', libraryID: 1 },
         { itemKey: 'KEY2', libraryID: 1 },
       ]},
+      'item.citationkey': { result: { 'KEY1': 'smith2026', 'KEY2': 'jones2025' } },
+      'item.export': { result: JSON.stringify([{
+        title: 'Test Title',
+        author: [{ family: 'Smith', given: 'J' }],
+        issued: { 'date-parts': [[2026]] },
+        'container-title': 'Cell',
+      }]) },
     };
     const tool = await getZoteroFetchTool();
     const result = JSON.parse(await tool.execute({ doi: '10.1016/j.cell' }));
     expect(result.status).toBe('needs_item_selection');
     expect(result.candidates.length).toBe(2);
+    expect(result.candidates[0].title).toBe('Test Title');
+    expect(result.candidates[0].year).toBe(2026);
+    expect(result.candidates[0].journal).toBe('Cell');
   });
 
   it('uses bare key for personal library (libraryID=1)', async () => {
@@ -434,6 +445,18 @@ describe('zotero_prepare_bundle', () => {
     fs.unlinkSync(pdfSrc);
   });
 
+  it('rejects a symlinked bundle directory', async () => {
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'cn-outside-'));
+    const attachmentsDir = path.join(vault, 'Reading', 'attachments');
+    fs.mkdirSync(attachmentsDir, { recursive: true });
+    const link = path.join(attachmentsDir, 'evil-slug');
+    fs.symlinkSync(target, link);
+    const tool = await getPrepareTool(vault);
+    const result = JSON.parse(await tool.execute({ slug: 'evil-slug', abstract: 'test' }));
+    expect(result.error).toMatch(/symlink/i);
+    fs.rmSync(target, { recursive: true, force: true });
+  });
+
   it('refuses to overwrite a non-Zotero bundle directory (no marker)', async () => {
     const dir = path.join(vault, 'Reading/attachments/smith-2026-manual');
     fs.mkdirSync(dir, { recursive: true });
@@ -538,5 +561,60 @@ describe('zotero_cleanup_bundle', () => {
     expect(fs.existsSync(path.join(dir, '.zotero-bundle'))).toBe(false);
     expect(fs.existsSync(dir)).toBe(false);
     expect(result.deleted ?? []).not.toContain('paper.pdf'); // already absent, not "deleted"
+  });
+
+  it('rejects invalid slug (path traversal attempt)', async () => {
+    const result = JSON.parse(await (await getCleanupTool(vault)).execute({ slug: '../evil' }));
+    expect(result.error).toMatch(/invalid slug/i);
+  });
+
+  it('rejects a symlinked bundle directory that resolves outside vault', async () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'cn-outside-'));
+    fs.writeFileSync(path.join(outside, '.zotero-bundle'), JSON.stringify({ created_by: 'zotero_prepare_bundle', files: {} }));
+    const attachmentsDir = path.join(vault, 'Reading', 'attachments');
+    fs.mkdirSync(attachmentsDir, { recursive: true });
+    const link = path.join(attachmentsDir, 'evil-slug');
+    fs.symlinkSync(outside, link);
+    const result = JSON.parse(await (await getCleanupTool(vault)).execute({ slug: 'evil-slug' }));
+    expect(result.error).toMatch(/symlink/i);
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+
+  it('rejects a symlinked bundle directory even when target is inside vault', async () => {
+    const attachmentsDir = path.join(vault, 'Reading', 'attachments');
+    const realTarget = path.join(vault, 'Reading', 'attachments', 'real-slug');
+    fs.mkdirSync(realTarget, { recursive: true });
+    fs.writeFileSync(path.join(realTarget, '.zotero-bundle'), JSON.stringify({ created_by: 'zotero_prepare_bundle', files: {} }));
+    const link = path.join(attachmentsDir, 'linked-slug');
+    fs.symlinkSync(realTarget, link);
+    const result = JSON.parse(await (await getCleanupTool(vault)).execute({ slug: 'linked-slug' }));
+    expect(result.error).toMatch(/symlink/i);
+  });
+
+  it('rejects spoofed marker (wrong created_by)', async () => {
+    const dir = path.join(vault, 'Reading/attachments/legit-slug');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.zotero-bundle'),
+      JSON.stringify({ created_by: 'attacker', files: { 'paper.pdf': 'abc' } }, null, 2)
+    );
+    const result = JSON.parse(await (await getCleanupTool(vault)).execute({ slug: 'legit-slug' }));
+    expect(result.error).toMatch(/zotero_prepare_bundle/i);
+  });
+
+  it('skips marker entries with path-traversal filenames', async () => {
+    const dir = path.join(vault, 'Reading/attachments/safe-slug');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'paper.pdf'), '%PDF-content');
+    const pdfHash = computeHash(path.join(dir, 'paper.pdf'));
+    // Marker has a traversal filename alongside a valid one
+    fs.writeFileSync(
+      path.join(dir, '.zotero-bundle'),
+      JSON.stringify({ created_by: 'zotero_prepare_bundle', files: { '../outside.txt': 'x', 'paper.pdf': pdfHash } }, null, 2)
+    );
+    const result = JSON.parse(await (await getCleanupTool(vault)).execute({ slug: 'safe-slug' }));
+    expect(result.skipped).toContain('../outside.txt');
+    // paper.pdf should still be deleted normally
+    expect(result.deleted).toContain('paper.pdf');
   });
 });
