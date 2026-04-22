@@ -174,7 +174,56 @@ function loadTemplate(
   };
 }
 
-// Public API (Validate/Merge/Substitute added in later tasks)
+// Step 2: Validate
+
+function validateTemplate(
+  kind: TemplateKind,
+  templateFrontmatter: Record<string, unknown>,
+  templateBody: string,
+  warnings: string[],
+): Error | null {
+  const contract = TEMPLATE_CONTRACTS[kind];
+  const protectedFields = PROTECTED_FIELDS[kind];
+
+  // template_version checks
+  if (templateFrontmatter.template_version === undefined || templateFrontmatter.template_version === null) {
+    warnings.push('Template has no version; may be outdated');
+  } else if (
+    typeof templateFrontmatter.template_version === 'number'
+    && templateFrontmatter.template_version < CURRENT_CONTRACT_VERSION
+  ) {
+    warnings.push(`Template version ${templateFrontmatter.template_version} may be missing required sections`);
+  }
+
+  // Protected field collision warnings
+  for (const field of protectedFields) {
+    if (field in templateFrontmatter) {
+      warnings.push(`Template field '${field}' was ignored - CrickNote owns it.`);
+    }
+  }
+
+  // Required AUTO-GENERATED markers
+  if (contract.requiredBodyMarkers) {
+    for (const marker of contract.requiredBodyMarkers) {
+      if (!templateBody.includes(marker)) {
+        return new Error(`Template for '${kind}' is missing required marker: ${marker}`);
+      }
+    }
+  }
+
+  // Required headings
+  if (contract.requiredHeadings) {
+    for (const heading of contract.requiredHeadings) {
+      if (!new RegExp(`^## ${heading}\\s*$`, 'm').test(templateBody)) {
+        return new Error(`Template for '${kind}' is missing required heading: ## ${heading}`);
+      }
+    }
+  }
+
+  return null;
+}
+
+// Public API (Merge/Substitute added in Task 4)
 
 export async function renderNoteTemplate({
   vaultPath,
@@ -191,9 +240,15 @@ export async function renderNoteTemplate({
   const loadResult = loadTemplate(vaultPath, kind, context);
   if (loadResult instanceof Error) throw loadResult;
 
-  const { templateBody, templateUsed, warnings } = loadResult;
+  const { templateFrontmatter, templateBody, templateUsed, warnings } = loadResult;
 
-  // Steps 2-4 (Validate, Merge, Substitute) wired in Tasks 3 and 4
+  // Step 2: Validate (only for file templates)
+  if (templateUsed === 'file') {
+    const err = validateTemplate(kind, templateFrontmatter, templateBody, warnings);
+    if (err) throw err;
+  }
+
+  // Steps 3 & 4 stubbed — Merge and Substitute added in Task 4
   return {
     frontmatter: { ...protectedFrontmatter },
     body: templateBody,
