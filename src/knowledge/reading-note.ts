@@ -107,14 +107,10 @@ export function hasCreateHeadings(body: string): boolean {
 }
 
 export function hasMeaningfulReadingBody(body: string): boolean {
-  const escapedHeadings = CREATE_SECTION_HEADINGS.map((heading) => heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  const placeholderOnly = body
+  const stripped = body
     .replace(/^# .+$/gm, '')
-    .replace(new RegExp(`^## (${escapedHeadings.join('|')})\\s*$`, 'gm'), '')
-    .replace(/^<!--[\s\S]*?-->$/gm, '')
-    .trim();
-
-  return placeholderOnly.length > 0;
+    .replace(/<!--[\s\S]*?-->/gm, '');
+  return stripped.split(/^## .+$/gm).some(section => section.trim().length > 0);
 }
 
 export function syncReadingBodyTitle(body: string, title: string): string {
