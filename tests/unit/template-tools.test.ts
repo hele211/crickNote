@@ -135,3 +135,79 @@ describe('template tools', () => {
     expect(parsed.data.kb_status).toBe('pending');
   });
 });
+
+describe('create_reading_note — template integration', () => {
+  let vaultPath: string;
+  let detector: ConflictDetector;
+
+  beforeEach(() => {
+    vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), 'cricknote-tpl-reading-'));
+    fs.mkdirSync(path.join(vaultPath, 'Reading', 'Papers'), { recursive: true });
+    detector = new ConflictDetector();
+  });
+
+  afterEach(() => {
+    fs.rmSync(vaultPath, { recursive: true, force: true });
+  });
+
+  it('returns warnings array (builtin warning when no templates folder)', async () => {
+    const { createTemplateTools } = await import('../../src/agent/tools/templates.js');
+    const tool = createTemplateTools(vaultPath, detector).find(t => t.definition.name === 'create_reading_note')!;
+    const r = JSON.parse(await tool.execute({
+      title: 'IL-42 Review',
+      authors: ['Smith'],
+      year: 2026,
+      journal: 'Nature',
+    }));
+    expect(r.type).toBe('pending_edit');
+    expect(Array.isArray(r.warnings)).toBe(true);
+  });
+
+  it('applies custom template field when template file present', async () => {
+    fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'reading-paper.md'),
+      `---\ntemplate_version: 1\nlab_relevance:\n---\n\n# {{title}}\n\n## Claims\n## Reasoning\n## Evidence\n## Assumptions\n## Takeaways\n## Extensions\n`
+    );
+    const { createTemplateTools } = await import('../../src/agent/tools/templates.js');
+    const tool = createTemplateTools(vaultPath, detector).find(t => t.definition.name === 'create_reading_note')!;
+    const r = JSON.parse(await tool.execute({
+      title: 'IL-42 Review',
+      authors: ['Smith'],
+      year: 2026,
+      journal: 'Nature',
+    }));
+    const parsed = matter(r.newContent);
+    expect(parsed.data.lab_relevance).toBeNull();
+    expect(parsed.data.cricknote_template).toBe('reading-paper');
+  });
+
+  it('preserves meaningful existing body without applying template', async () => {
+    const existingPath = path.join(vaultPath, 'Reading', 'Papers', 'il-42-review.md');
+    fs.writeFileSync(
+      existingPath,
+      matter.stringify(
+        '\n# IL-42 Review\n\n## Claims\nThis paper claims stuff.\n## Reasoning\n## Evidence\n## Assumptions\n## Takeaways\n## Extensions\n',
+        { title: 'IL-42 Review', authors: ['Smith'], year: 2026, journal: 'Nature' }
+      )
+    );
+    fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'reading-paper.md'),
+      `---\ntemplate_version: 1\nlab_relevance:\n---\n\n# {{title}}\n\n## Claims\n## Reasoning\n## Evidence\n## Assumptions\n## Takeaways\n## Extensions\n`
+    );
+    const { createTemplateTools } = await import('../../src/agent/tools/templates.js');
+    const tool = createTemplateTools(vaultPath, detector).find(t => t.definition.name === 'create_reading_note')!;
+    const r = JSON.parse(await tool.execute({
+      title: 'IL-42 Review',
+      authors: ['Smith'],
+      year: 2026,
+      journal: 'Nature',
+    }));
+    const parsed = matter(r.newContent);
+    // Body was preserved — should still contain existing content
+    expect(parsed.content).toContain('This paper claims stuff.');
+    // Template was NOT applied (body was meaningful) — lab_relevance should not appear
+    expect(parsed.data.lab_relevance).toBeUndefined();
+  });
+});

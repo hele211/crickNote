@@ -14,6 +14,7 @@ import {
   type ReadingSourceInput,
 } from '../../knowledge/reading-note.js';
 import { resolveVaultPath } from '../../utils/paths.js';
+import { renderNoteTemplate, type RenderResult } from '../../templates/template-loader.js';
 
 export function createTemplateTools(vaultPath: string, conflictDetector?: ConflictDetector): ToolHandler[] {
   return [
@@ -75,7 +76,7 @@ export function createTemplateTools(vaultPath: string, conflictDetector?: Confli
           existingBody = parsed.content;
         }
 
-        let fmData: Record<string, unknown>;
+        let fmData: Record<string, unknown>; // must be let — template integration may reassign
         try {
           fmData = buildReadingFrontmatter(
             {
@@ -94,12 +95,29 @@ export function createTemplateTools(vaultPath: string, conflictDetector?: Confli
         } catch (err) {
           return JSON.stringify({ error: (err as Error).message });
         }
-        const body = (exists && hasMeaningfulReadingBody(existingBody))
-          ? syncReadingBodyTitle(existingBody, args.title as string)
-          : buildCreateReadingBody({ title: args.title as string });
+        let body: string;
+        let warnings: string[] = [];
+        if (exists && hasMeaningfulReadingBody(existingBody)) {
+          body = syncReadingBodyTitle(existingBody, args.title as string);
+        } else {
+          let renderResult: RenderResult;
+          try {
+            renderResult = await renderNoteTemplate({
+              vaultPath,
+              kind: 'reading-paper',
+              protectedFrontmatter: fmData,
+              context: { title: args.title as string },
+            });
+          } catch (err) {
+            return JSON.stringify({ error: (err as Error).message });
+          }
+          fmData = renderResult.frontmatter;
+          body = renderResult.body;
+          warnings = renderResult.warnings;
+        }
         const newContent = matter.stringify(body, fmData);
 
-        return JSON.stringify({ type: 'pending_edit', operation: exists ? 'update' : 'create', path: notePath, newContent });
+        return JSON.stringify({ type: 'pending_edit', operation: exists ? 'update' : 'create', path: notePath, newContent, warnings });
       },
     },
   ];
