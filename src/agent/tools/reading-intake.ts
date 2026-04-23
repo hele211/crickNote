@@ -20,6 +20,7 @@ import {
   type ReadingSourceType,
 } from '../../knowledge/reading-note.js';
 import { resolveVaultPath } from '../../utils/paths.js';
+import { renderNoteTemplate, type RenderResult, type TemplateKind } from '../../templates/template-loader.js';
 
 interface DiscoveredBundleFile {
   path: string;
@@ -459,7 +460,28 @@ export function createReadingIntakeTools(
           return JSON.stringify({ error: (err as Error).message });
         }
 
-        const body = preserveExistingBody(args.title as string, existingBody);
+        let body: string;
+        let templateWarnings: string[] = [];
+        if (exists && hasMeaningfulReadingBody(existingBody)) {
+          body = syncReadingBodyTitle(existingBody, args.title as string);
+        } else {
+          const folderName = path.basename(path.dirname(notePath));
+          const noteKind: TemplateKind = folderName === 'Threads' ? 'reading-thread' : 'reading-paper';
+          let renderResult: RenderResult;
+          try {
+            renderResult = await renderNoteTemplate({
+              vaultPath,
+              kind: noteKind,
+              protectedFrontmatter: frontmatter,
+              context: { title: args.title as string },
+            });
+          } catch (err) {
+            return JSON.stringify({ error: (err as Error).message });
+          }
+          frontmatter = renderResult.frontmatter;
+          body = renderResult.body;
+          templateWarnings = renderResult.warnings;
+        }
         const newContent = matter.stringify(body, frontmatter);
 
         return JSON.stringify({
@@ -467,6 +489,7 @@ export function createReadingIntakeTools(
           operation: exists ? 'update' : 'create',
           path: notePath,
           newContent,
+          warnings: templateWarnings,
         });
       },
     },
