@@ -235,6 +235,7 @@ function mergeTemplate(
   const customFields: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(templateFrontmatter)) {
     if (key === 'template_version') continue;
+    if (key === 'cricknote_template') continue; // loader-managed; never taken from template
     if (!protectedFields.includes(key)) {
       customFields[key] = value;
     }
@@ -258,7 +259,7 @@ function substituteBody(
 ): string {
   const warned = new Set<string>();
   return body.replace(/\{\{(\w+)\}\}/g, (match, key: string) => {
-    if (key in context) return context[key];
+    if (Object.hasOwn(context, key)) return context[key];
     if (!warned.has(key)) {
       warned.add(key);
       warnings.push(`Template contains unknown placeholder {{${key}}} - left unchanged.`);
