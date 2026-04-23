@@ -223,7 +223,51 @@ function validateTemplate(
   return null;
 }
 
-// Public API (Merge/Substitute added in Task 4)
+// Step 3: Merge
+
+function mergeTemplate(
+  kind: TemplateKind,
+  templateFrontmatter: Record<string, unknown>,
+  protectedFrontmatter: Record<string, unknown>,
+): Record<string, unknown> {
+  const protectedFields = PROTECTED_FIELDS[kind];
+
+  const customFields: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(templateFrontmatter)) {
+    if (key === 'template_version') continue;
+    if (!protectedFields.includes(key)) {
+      customFields[key] = value;
+    }
+  }
+
+  const merged: Record<string, unknown> = { ...customFields, ...protectedFrontmatter };
+
+  if (kind === 'reading-paper' || kind === 'reading-thread') {
+    merged.cricknote_template = kind;
+  }
+
+  return merged;
+}
+
+// Step 4: Substitute
+
+function substituteBody(
+  body: string,
+  context: Record<string, string>,
+  warnings: string[],
+): string {
+  const warned = new Set<string>();
+  return body.replace(/\{\{(\w+)\}\}/g, (match, key: string) => {
+    if (key in context) return context[key];
+    if (!warned.has(key)) {
+      warned.add(key);
+      warnings.push(`Template contains unknown placeholder {{${key}}} - left unchanged.`);
+    }
+    return match;
+  });
+}
+
+// Public API
 
 export async function renderNoteTemplate({
   vaultPath,
@@ -248,11 +292,11 @@ export async function renderNoteTemplate({
     if (err) throw err;
   }
 
-  // Steps 3 & 4 stubbed — Merge and Substitute added in Task 4
-  return {
-    frontmatter: { ...protectedFrontmatter },
-    body: templateBody,
-    warnings,
-    templateUsed,
-  };
+  // Step 3: Merge
+  const frontmatter = mergeTemplate(kind, templateFrontmatter, protectedFrontmatter);
+
+  // Step 4: Substitute (body only — never inside frontmatter values)
+  const body = substituteBody(templateBody, context, warnings);
+
+  return { frontmatter, body, warnings, templateUsed };
 }

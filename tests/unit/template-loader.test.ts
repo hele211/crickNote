@@ -188,3 +188,145 @@ describe('renderNoteTemplate — Validate step', () => {
     expect(result.warnings).toHaveLength(0);
   });
 });
+
+describe('renderNoteTemplate — Merge step', () => {
+  let vaultPath: string;
+
+  beforeEach(() => {
+    vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), 'cricknote-tpl-merge-'));
+    fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(vaultPath, { recursive: true, force: true });
+  });
+
+  it('custom template fields appear in merged frontmatter', async () => {
+    const { renderNoteTemplate } = await import('../../src/templates/template-loader.js');
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'experiment.md'),
+      `---\ntemplate_version: 1\ncell_line: HEK293\npassage_number:\n---\n\n# {{title}}\n\n## {{date}} - Start\n`
+    );
+    const result = await renderNoteTemplate({
+      vaultPath,
+      kind: 'experiment',
+      protectedFrontmatter: { note_kind: 'experiment', id: 'CM001', title: 'T', status: 'draft' },
+      context: { title: 'T', date: '2026-01-01' },
+    });
+    expect(result.frontmatter.cell_line).toBe('HEK293');
+    expect(result.frontmatter.passage_number).toBeNull();
+  });
+
+  it('protected fields always win over template fields', async () => {
+    const { renderNoteTemplate } = await import('../../src/templates/template-loader.js');
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'experiment.md'),
+      `---\ntemplate_version: 1\nid: SHOULD-BE-IGNORED\ncell_line: HEK293\n---\n\n# {{title}}\n\n## {{date}} - Start\n`
+    );
+    const result = await renderNoteTemplate({
+      vaultPath,
+      kind: 'experiment',
+      protectedFrontmatter: { note_kind: 'experiment', id: 'CM001', title: 'T' },
+      context: { title: 'T', date: '2026-01-01' },
+    });
+    expect(result.frontmatter.id).toBe('CM001');
+    expect(result.frontmatter.cell_line).toBe('HEK293');
+  });
+
+  it('template_version is stripped from created note frontmatter', async () => {
+    const { renderNoteTemplate } = await import('../../src/templates/template-loader.js');
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'experiment.md'),
+      `---\ntemplate_version: 1\ncell_line:\n---\n\n# {{title}}\n\n## {{date}} - Start\n`
+    );
+    const result = await renderNoteTemplate({
+      vaultPath,
+      kind: 'experiment',
+      protectedFrontmatter: { note_kind: 'experiment' },
+      context: { title: 'T', date: '2026-01-01' },
+    });
+    expect(result.frontmatter.template_version).toBeUndefined();
+  });
+
+  it('cricknote_template injected for reading-paper and reading-thread only', async () => {
+    const { renderNoteTemplate } = await import('../../src/templates/template-loader.js');
+
+    const paperResult = await renderNoteTemplate({
+      vaultPath,
+      kind: 'reading-paper',
+      protectedFrontmatter: { title: 'T' },
+      context: { title: 'T' },
+    });
+    expect(paperResult.frontmatter.cricknote_template).toBe('reading-paper');
+
+    const expResult = await renderNoteTemplate({
+      vaultPath,
+      kind: 'experiment',
+      protectedFrontmatter: { note_kind: 'experiment' },
+      context: { title: 'T', date: '2026-01-01' },
+    });
+    expect(expResult.frontmatter.cricknote_template).toBeUndefined();
+  });
+});
+
+describe('renderNoteTemplate — Substitute step', () => {
+  let vaultPath: string;
+
+  beforeEach(() => {
+    vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), 'cricknote-tpl-sub-'));
+    fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(vaultPath, { recursive: true, force: true });
+  });
+
+  it('substitutes known placeholders in body', async () => {
+    const { renderNoteTemplate } = await import('../../src/templates/template-loader.js');
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'experiment.md'),
+      `---\ntemplate_version: 1\n---\n\n# {{title}}\n\n## {{date}} - Start\n\n## ID: {{id}}\n`
+    );
+    const result = await renderNoteTemplate({
+      vaultPath,
+      kind: 'experiment',
+      protectedFrontmatter: { note_kind: 'experiment' },
+      context: { title: 'My Exp', date: '2026-04-22', id: 'CM001' },
+    });
+    expect(result.body).toContain('# My Exp');
+    expect(result.body).toContain('## 2026-04-22 - Start');
+    expect(result.body).toContain('## ID: CM001');
+  });
+
+  it('warns and leaves unknown placeholders unchanged in body', async () => {
+    const { renderNoteTemplate } = await import('../../src/templates/template-loader.js');
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'experiment.md'),
+      `---\ntemplate_version: 1\n---\n\n# {{title}}\n\n## {{cell_line}} protocol\n`
+    );
+    const result = await renderNoteTemplate({
+      vaultPath,
+      kind: 'experiment',
+      protectedFrontmatter: {},
+      context: { title: 'T', date: '2026-01-01' },
+    });
+    expect(result.body).toContain('{{cell_line}}');
+    expect(result.warnings.some(w => w.includes('{{cell_line}}'))).toBe(true);
+  });
+
+  it('does not substitute placeholders inside frontmatter values', async () => {
+    const { renderNoteTemplate } = await import('../../src/templates/template-loader.js');
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'experiment.md'),
+      `---\ntemplate_version: 1\ncell_line: "{{cell_line}}"\n---\n\n# {{title}}\n`
+    );
+    const result = await renderNoteTemplate({
+      vaultPath,
+      kind: 'experiment',
+      protectedFrontmatter: {},
+      context: { title: 'T', date: '2026-01-01', cell_line: 'HEK293' },
+    });
+    expect(result.body).toContain('# T');
+    expect(result.frontmatter.cell_line).toBe('{{cell_line}}');
+  });
+});
