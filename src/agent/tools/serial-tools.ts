@@ -8,7 +8,7 @@ import { validatePrefix, getNextSerial } from '../../storage/serial.js';
 import { resolveVaultPath } from '../../utils/paths.js';
 import { fencedSectionUpdate } from '../../editing/auto-writer.js';
 import { logger } from '../../utils/logger.js';
-import { renderNoteTemplate, type RenderResult } from '../../templates/template-loader.js';
+import { renderNoteTemplate, loadAndValidateTemplate, type RenderResult, type LoadResult, type TemplateKind } from '../../templates/template-loader.js';
 
 const log = logger.child('serial-tools');
 const RESERVED_PREFIXES = new Set(['PR', 'P']);
@@ -87,6 +87,15 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
     }
 
     return { prefix, folderPath };
+  }
+
+  function validateTemplateBeforeAllocation(
+    kind: TemplateKind,
+    context: Record<string, string>,
+  ): LoadResult | string {
+    const result = loadAndValidateTemplate(vaultPath, kind, context);
+    if (result instanceof Error) return result.message;
+    return result;
   }
 
   return [
@@ -221,12 +230,16 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         const rawPrefix = (args.prefix as string).toUpperCase();
         try { validatePrefix(rawPrefix); } catch (e) { return JSON.stringify({ error: (e as Error).message }); }
 
-        // Validate template before any state mutations so a bad template doesn't leave a stale reservation
+        // Validate and load template before any state mutations so a bad template doesn't leave a stale reservation
         const today = new Date().toISOString().slice(0, 10);
-        try {
-          await renderNoteTemplate({ vaultPath, kind: 'project-index', protectedFrontmatter: {}, context: { title, date: today } });
-        } catch (err) {
-          return JSON.stringify({ error: (err as Error).message });
+        const projectTemplate = validateTemplateBeforeAllocation('project-index', {
+          title,
+          date: today,
+          id: 'P000',
+          prefix: rawPrefix,
+        });
+        if (typeof projectTemplate === 'string') {
+          return JSON.stringify({ error: projectTemplate });
         }
 
         database.prepare('DELETE FROM prefix_reservations WHERE expires_at < ?').run(Date.now());
@@ -262,7 +275,8 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
             vaultPath,
             kind: 'project-index',
             protectedFrontmatter: fmData,
-            context: { title, date: today },
+            context: { title, date: today, id: projectId, prefix: rawPrefix },
+            preloadedTemplate: projectTemplate,
           });
         } catch (err) {
           return JSON.stringify({ error: (err as Error).message });
@@ -345,10 +359,19 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
           if (seriesFm.data.project_id !== projectId) return JSON.stringify({ error: `Series ${seriesId} belongs to project ${seriesFm.data.project_id}, not ${projectId}.` });
         }
 
+        const today = new Date().toISOString().slice(0, 10);
+        const experimentTemplate = validateTemplateBeforeAllocation('experiment', {
+          title: args.title as string,
+          date: today,
+          id: `${prefix}000`,
+          project_id: projectId,
+        });
+        if (typeof experimentTemplate === 'string') {
+          return JSON.stringify({ error: experimentTemplate });
+        }
         const serial = getNextSerial(prefix, database);
         const expId = `${prefix}${serial}`;
         const slug = (args.title as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-        const today = new Date().toISOString().slice(0, 10);
         const samples = (args.samples as Array<{ name: string; condition: string }> | undefined) ?? [];
         const reagents = (args.reagents as string[] | undefined) ?? [];
 
@@ -367,6 +390,7 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
             kind: 'experiment',
             protectedFrontmatter: fmData,
             context: { title: args.title as string, date: today, id: expId, project_id: projectId },
+            preloadedTemplate: experimentTemplate,
           });
         } catch (err) {
           return JSON.stringify({ error: (err as Error).message });
@@ -449,11 +473,15 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
           }
         }
 
-        // Validate template before allocating serial so a bad template doesn't cause a serial gap
-        try {
-          await renderNoteTemplate({ vaultPath, kind: 'series', protectedFrontmatter: {}, context: { title: args.title as string, objective: (args.objective as string | undefined) ?? 'TODO', project_id: projectId } });
-        } catch (err) {
-          return JSON.stringify({ error: (err as Error).message });
+        // Validate and load template before allocating serial so a bad template doesn't cause a serial gap
+        const seriesTemplate = validateTemplateBeforeAllocation('series', {
+          title: args.title as string,
+          objective: (args.objective as string | undefined) ?? 'TODO',
+          id: `${prefix}S000`,
+          project_id: projectId,
+        });
+        if (typeof seriesTemplate === 'string') {
+          return JSON.stringify({ error: seriesTemplate });
         }
         const serial = getNextSerial(`${prefix}-S`, database);
         const seriesId = `${prefix}S${serial}`;
@@ -475,6 +503,7 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
             kind: 'series',
             protectedFrontmatter: fmData,
             context: { title: args.title as string, objective: (args.objective as string | undefined) ?? 'TODO', id: seriesId, project_id: projectId },
+            preloadedTemplate: seriesTemplate,
           });
         } catch (err) {
           return JSON.stringify({ error: (err as Error).message });
@@ -515,10 +544,17 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
       },
       execute: async (args) => {
         const database = db();
+        const today = new Date().toISOString().slice(0, 10);
+        const protocolTemplate = validateTemplateBeforeAllocation('protocol', {
+          title: args.title as string,
+          id: 'PR000',
+        });
+        if (typeof protocolTemplate === 'string') {
+          return JSON.stringify({ error: protocolTemplate });
+        }
         const serial = getNextSerial('protocol', database);
         const protId = `PR${serial}`;
         const slug = (args.title as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-        const today = new Date().toISOString().slice(0, 10);
         const fmData: Record<string, unknown> = { note_kind: 'protocol', id: protId, title: args.title as string, version: 1, category: args.category as string, created: today, last_updated: today };
         if (args.derived_from) fmData.derived_from = `[[${args.derived_from as string}]]`;
         let renderResult: RenderResult;
@@ -528,6 +564,7 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
             kind: 'protocol',
             protectedFrontmatter: fmData,
             context: { title: args.title as string, id: protId },
+            preloadedTemplate: protocolTemplate,
           });
         } catch (err) {
           return JSON.stringify({ error: (err as Error).message });

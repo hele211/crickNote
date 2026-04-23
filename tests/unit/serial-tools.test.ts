@@ -469,6 +469,24 @@ describe('create_experiment and create_protocol — template integration', () =>
     expect(r.warnings.some((w: string) => w.includes("'id'") && w.includes('ignored'))).toBe(true);
   });
 
+  it('create_experiment does not consume a serial when template rendering fails', async () => {
+    fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'experiment.md'),
+      `---\nkey: [oops\n---\n\n# {{title}}\n`
+    );
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_experiment')!;
+
+    const failed = JSON.parse(await tool.execute({
+      project_id: 'P001',
+      title: 'My Experiment',
+      experiment_type: 'western-blot',
+    }));
+    expect(failed.error).toMatch(/invalid YAML/i);
+    expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('CM') as { next_val: number }).next_val).toBe(1);
+  });
+
   it('create_protocol returns warnings:[] and uses builtin body when no templates', async () => {
     const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
     const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_protocol')!;
@@ -491,6 +509,26 @@ describe('create_experiment and create_protocol — template integration', () =>
     const parsed = matter(r.newContent);
     expect(parsed.content).toContain('<!-- AUTO-GENERATED: experiment-log -->');
     expect(parsed.content).toContain('<!-- AUTO-GENERATED: project-summary -->');
+  });
+
+  it('create_project substitutes generated id and prefix placeholders', async () => {
+    fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'project-index.md'),
+      `---\ntemplate_version: 1\n---\n\n# {{title}}\n\nProject ID: {{id}}\nPrefix: {{prefix}}\n\n<!-- AUTO-GENERATED: experiment-log -->\n## Experiment Log\n| Series | ID | Name | Status | Created |\n|--------|-----|------|--------|---------|\n<!-- END AUTO-GENERATED: experiment-log -->\n\n<!-- AUTO-GENERATED: project-summary -->\n## Project Summary\n(auto-updated)\n<!-- END AUTO-GENERATED: project-summary -->\n`
+    );
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
+
+    const r = JSON.parse(await tool.execute({ title: 'My Project', prefix: 'XY' }));
+    expect(r.warnings).toEqual([]);
+    const parsed = matter(r.newContent);
+    expect(parsed.data.id).toBe('P001');
+    expect(parsed.data.prefix).toBe('XY');
+    expect(parsed.content).toContain('Project ID: P001');
+    expect(parsed.content).toContain('Prefix: XY');
+    expect(parsed.content).not.toContain('{{id}}');
+    expect(parsed.content).not.toContain('{{prefix}}');
   });
 
   it('create_series returns warnings array and body has AUTO-GENERATED experiment-list', async () => {
@@ -530,5 +568,48 @@ describe('create_experiment and create_protocol — template integration', () =>
     const endIdx = parsed.content.indexOf('<!-- END AUTO-GENERATED: experiment-list -->');
     const rowIdx = parsed.content.indexOf('| CM001 |');
     expect(rowIdx).toBeLessThan(endIdx);
+  });
+
+  it('create_project does not consume a serial when template rendering fails', async () => {
+    fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
+    // Unique key name avoids gray-matter's parse-error cache stale-hit from sibling tests
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'project-index.md'),
+      `---\ncreate_project_bad: [oops\n---\n\n# {{title}}\n`
+    );
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
+    const failed = JSON.parse(await tool.execute({ title: 'My Project', prefix: 'XY' }));
+    expect(failed.error).toMatch(/invalid YAML/i);
+    expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('project') as { next_val: number }).next_val).toBe(1);
+  });
+
+  it('create_series does not consume a serial when template rendering fails', async () => {
+    fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
+    // Unique key name avoids gray-matter's parse-error cache stale-hit from sibling tests
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'series.md'),
+      `---\ncreate_series_bad: [oops\n---\n\n# {{title}}\n`
+    );
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_series')!;
+    const failed = JSON.parse(await tool.execute({ project_id: 'P001', title: 'My Series' }));
+    expect(failed.error).toMatch(/invalid YAML/i);
+    expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('CM-S') as { next_val: number }).next_val).toBe(1);
+  });
+
+  it('create_protocol does not consume a serial when template rendering fails', async () => {
+    fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
+    // Unique key name avoids gray-matter's parse-error cache stale-hit from sibling tests
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'protocol.md'),
+      `---\ncreate_protocol_bad: [oops\n---\n\n# {{title}}\n`
+    );
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_protocol')!;
+    fs.mkdirSync(path.join(vaultPath, 'Protocols'), { recursive: true });
+    const failed = JSON.parse(await tool.execute({ title: 'Western Blot', category: 'gel' }));
+    expect(failed.error).toMatch(/invalid YAML/i);
+    expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('protocol') as { next_val: number }).next_val).toBe(1);
   });
 });

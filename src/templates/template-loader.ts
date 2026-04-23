@@ -99,7 +99,7 @@ const DEFAULT_BODY_RENDERERS: Record<TemplateKind, (ctx: Record<string, string>)
 const MISSING_TEMPLATES_WARNING =
   "Editable templates are missing; built-in template used. Re-run setup or wait for 'cricknote templates init' in a later release.";
 
-interface LoadResult {
+export interface LoadResult {
   templateFrontmatter: Record<string, unknown>;
   templateBody: string;
   templateUsed: 'file' | 'builtin';
@@ -270,35 +270,59 @@ function substituteBody(
 
 // Public API
 
+export function loadAndValidateTemplate(
+  vaultPath: string,
+  kind: TemplateKind,
+  placeholderContext: Record<string, string>,
+): LoadResult | Error {
+  const loadResult = loadTemplate(vaultPath, kind, placeholderContext);
+  if (loadResult instanceof Error) return loadResult;
+  if (loadResult.templateUsed === 'file') {
+    const err = validateTemplate(kind, loadResult.templateFrontmatter, loadResult.templateBody, loadResult.warnings);
+    if (err) return err;
+  }
+  return loadResult;
+}
+
 export async function renderNoteTemplate({
   vaultPath,
   kind,
   protectedFrontmatter,
   context,
+  preloadedTemplate,
 }: {
   vaultPath: string;
   kind: TemplateKind;
   protectedFrontmatter: Record<string, unknown>;
   context: Record<string, string>;
+  preloadedTemplate?: LoadResult;
 }): Promise<RenderResult> {
-  // Step 1: Load
-  const loadResult = loadTemplate(vaultPath, kind, context);
-  if (loadResult instanceof Error) throw loadResult;
+  let templateFrontmatter: Record<string, unknown>;
+  let templateBody: string;
+  let templateUsed: 'file' | 'builtin';
+  const warnings: string[] = [];
 
-  const { templateFrontmatter, templateBody, templateUsed, warnings } = loadResult;
-
-  // Step 2: Validate (only for file templates)
-  if (templateUsed === 'file') {
-    const err = validateTemplate(kind, templateFrontmatter, templateBody, warnings);
-    if (err) throw err;
+  if (preloadedTemplate) {
+    ({ templateFrontmatter, templateBody, templateUsed } = preloadedTemplate);
+    // Preserve structural load warnings (e.g. missing-templates notice for builtins)
+    warnings.push(...preloadedTemplate.warnings);
+    if (templateUsed === 'file') {
+      // Re-run validate to collect structural warnings; already passed once so this won't throw
+      validateTemplate(kind, templateFrontmatter, templateBody, warnings);
+    }
+  } else {
+    const loadResult = loadTemplate(vaultPath, kind, context);
+    if (loadResult instanceof Error) throw loadResult;
+    ({ templateFrontmatter, templateBody, templateUsed } = loadResult);
+    warnings.push(...loadResult.warnings);
+    if (templateUsed === 'file') {
+      const err = validateTemplate(kind, templateFrontmatter, templateBody, warnings);
+      if (err) throw err;
+    }
   }
 
-  // Step 3: Merge
   const frontmatter = mergeTemplate(kind, templateFrontmatter, protectedFrontmatter);
-
-  // Step 4: Substitute (body only — never inside frontmatter values)
   const body = substituteBody(templateBody, context, warnings);
-
   return { frontmatter, body, warnings, templateUsed };
 }
 
@@ -497,7 +521,8 @@ These six headings must stay - they drive the KB pipeline:
 |-------------|-------------|
 | \`{{title}}\` | All kinds |
 | \`{{date}}\` | experiment, project-index |
-| \`{{id}}\` | All kinds (pass in context) |
+| \`{{id}}\` | experiment, project-index, series, protocol |
+| \`{{prefix}}\` | project-index |
 | \`{{project_id}}\` | experiment, series |
 | \`{{objective}}\` | series |
 
