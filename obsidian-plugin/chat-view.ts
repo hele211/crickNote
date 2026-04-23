@@ -7,7 +7,7 @@ interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: number;
-  pendingEdits?: Array<{ editId: string; path: string; diff: string; hasConflict: boolean }>;
+  pendingEdits?: Array<{ editId: string; path: string; diff: string; hasConflict: boolean; warnings: string[] }>;
 }
 
 export class ChatView extends ItemView {
@@ -268,6 +268,13 @@ export class ChatView extends ItemView {
     for (const edit of pendingEdits) {
       const editEl = msgEl.createDiv({ cls: 'cricknote-pending-edit' });
       editEl.createDiv({ cls: 'cricknote-edit-path', text: edit.path });
+
+      if (edit.warnings && edit.warnings.length > 0) {
+        const warningsEl = editEl.createDiv({ cls: 'cricknote-template-warnings' });
+        for (const warning of edit.warnings) {
+          warningsEl.createDiv({ cls: 'cricknote-template-warning', text: `Warning: ${warning}` });
+        }
+      }
 
       if (edit.hasConflict) {
         editEl.createDiv({ cls: 'cricknote-conflict-warning', text: 'Conflict detected — file was modified since last read' });

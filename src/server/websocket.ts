@@ -143,6 +143,7 @@ export function createWebSocketServer(config: CrickNoteConfig): Promise<WebSocke
             path: path.relative(realVaultPath, pe.proposal.filePath),
             diff: pe.proposal.diff,
             hasConflict: pe.proposal.hasConflict,
+            warnings: pe.warnings,
           }));
           log.info('Chat response sent', {
             sessionId: client.sessionId,

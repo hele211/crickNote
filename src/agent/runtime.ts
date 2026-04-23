@@ -23,6 +23,7 @@ const log = logger.child('runtime');
 interface PendingEdit {
   editId: string;
   proposal: EditProposal;
+  warnings: string[];
 }
 
 export interface RuntimeResponse {
@@ -224,7 +225,8 @@ export class AgentRuntime {
               Object.assign(meta, parsed.reservation); // adds project_id, prefix
             }
             const proposal = this.safeWriter.proposeEdit(absolutePath, parsed.newContent, userMessage, sessionId, meta);
-            pendingEdits.push({ editId: proposal.editId, proposal });
+            const toolWarnings = Array.isArray(parsed.warnings) ? (parsed.warnings as string[]) : [];
+            pendingEdits.push({ editId: proposal.editId, proposal, warnings: toolWarnings });
 
             if (parsed.reservation && typeof parsed.reservation === 'object') {
               const { project_id } = parsed.reservation as { project_id: string };
