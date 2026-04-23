@@ -5,6 +5,7 @@ import { saveConfig, PROVIDER_PRESETS, type CrickNoteConfig } from '../config/co
 import { generateToken, getTokenPath } from '../server/auth.js';
 import { getDatabase, getDataDir, closeDatabase } from '../storage/database.js';
 import { rebuildKnowledgeIndex } from '../knowledge/index-builder.js';
+import { DEFAULT_TEMPLATE_FILES } from '../templates/template-loader.js';
 
 const VAULT_DIRS = [
   'Projects', 'Protocols',
@@ -24,6 +25,18 @@ export function ensureVaultScaffold(vaultPath: string): void {
 
   for (const kind of ['Concepts', 'Entities', 'Methods'] as const) {
     rebuildKnowledgeIndex(kind, vaultPath);
+  }
+
+  // Scaffold Agent/templates/ with default files — never overwrite existing files
+  const templatesDir = path.join(vaultPath, 'Agent', 'templates');
+  if (!fs.existsSync(templatesDir)) {
+    fs.mkdirSync(templatesDir, { recursive: true });
+  }
+  for (const [filename, content] of Object.entries(DEFAULT_TEMPLATE_FILES)) {
+    const filePath = path.join(templatesDir, filename);
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, content, 'utf-8');
+    }
   }
 }
 
