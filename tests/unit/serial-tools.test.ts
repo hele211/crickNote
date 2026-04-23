@@ -412,3 +412,72 @@ describe('update_series_table', () => {
     expect(r.error).toContain('not found');
   });
 });
+
+describe('create_experiment and create_protocol — template integration', () => {
+  let db: Database.Database;
+  let vaultPath: string;
+
+  beforeEach(() => {
+    db = new Database(':memory:');
+    runMigrations(db);
+    vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), 'st-tpl-'));
+    // Project folder must start with projectId- so resolveProject('P001') can find it
+    fs.mkdirSync(path.join(vaultPath, 'Projects', 'P001-CM'), { recursive: true });
+    fs.writeFileSync(
+      path.join(vaultPath, 'Projects', 'P001-CM', '_index.md'),
+      matter.stringify('\n', { note_kind: 'project', id: 'P001', prefix: 'CM', title: 'CM Project', status: 'active', created: '2026-01-01' })
+    );
+    db.prepare('INSERT INTO serial_counters (scope, next_val, project_id) VALUES (?, ?, ?)').run('CM', 1, 'P001');
+    db.prepare('INSERT INTO serial_counters (scope, next_val, project_id) VALUES (?, ?, ?)').run('CM-S', 1, 'P001');
+    // Permanent reservation (far-future expiry) so resolveProject does not auto-heal against a foreign reservation
+    db.prepare('INSERT INTO prefix_reservations (prefix, project_id, expires_at) VALUES (?, ?, ?)').run('CM', 'P001', 9999999999999);
+  });
+
+  afterEach(() => { db.close(); fs.rmSync(vaultPath, { recursive: true, force: true }); });
+
+  it('create_experiment returns warnings:[] when no template file is present', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_experiment')!;
+    const r = JSON.parse(await tool.execute({
+      project_id: 'P001',
+      title: 'My Experiment',
+      experiment_type: 'western-blot',
+    }));
+    expect(r.type).toBe('pending_edit');
+    expect(Array.isArray(r.warnings)).toBe(true);
+    // No templates folder — builtin used, warning about missing templates
+    expect(r.warnings.some((w: string) => w.includes('Editable templates are missing'))).toBe(true);
+  });
+
+  it('create_experiment applies custom template fields and warns on protected field', async () => {
+    fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'experiment.md'),
+      `---\ntemplate_version: 1\ncell_line: HEK293\nid: BAD\n---\n\n# {{title}}\n\n## {{date}} - Start\n`
+    );
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_experiment')!;
+    const r = JSON.parse(await tool.execute({
+      project_id: 'P001',
+      title: 'My Experiment',
+      experiment_type: 'western-blot',
+    }));
+    expect(r.type).toBe('pending_edit');
+    const parsed = matter(r.newContent);
+    expect(parsed.data.cell_line).toBe('HEK293');
+    expect(parsed.data.id).toBe('CM001'); // protected field wins
+    expect(r.warnings.some((w: string) => w.includes("'id'") && w.includes('ignored'))).toBe(true);
+  });
+
+  it('create_protocol returns warnings:[] and uses builtin body when no templates', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_protocol')!;
+    fs.mkdirSync(path.join(vaultPath, 'Protocols'), { recursive: true });
+    const r = JSON.parse(await tool.execute({ title: 'Western Blot', category: 'gel' }));
+    expect(r.type).toBe('pending_edit');
+    expect(Array.isArray(r.warnings)).toBe(true);
+    const parsed = matter(r.newContent);
+    expect(parsed.content).toContain('## Materials');
+    expect(parsed.content).toContain('## Procedure');
+  });
+});

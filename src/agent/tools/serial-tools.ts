@@ -8,6 +8,7 @@ import { validatePrefix, getNextSerial } from '../../storage/serial.js';
 import { resolveVaultPath } from '../../utils/paths.js';
 import { fencedSectionUpdate } from '../../editing/auto-writer.js';
 import { logger } from '../../utils/logger.js';
+import { renderNoteTemplate, type RenderResult } from '../../templates/template-loader.js';
 
 const log = logger.child('serial-tools');
 const RESERVED_PREFIXES = new Set(['PR', 'P']);
@@ -342,8 +343,18 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         if (args.protocol) fmData.protocol = `[[${args.protocol as string}]]`;
         if (args.series) fmData.series = args.series as string;
 
-        const body = `\n# ${args.title as string}\n\n## ${today} - Initial Setup\n\nTODO: Record experiment here.\n`;
-        const newContent = matter.stringify(body, fmData);
+        let renderResult: RenderResult;
+        try {
+          renderResult = await renderNoteTemplate({
+            vaultPath,
+            kind: 'experiment',
+            protectedFrontmatter: fmData,
+            context: { title: args.title as string, date: today },
+          });
+        } catch (err) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+        const newContent = matter.stringify(renderResult.body, renderResult.frontmatter);
         const fileName = `${expId}-${slug}.md`;
         let absPath: string;
         try {
@@ -351,7 +362,7 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         } catch {
           return JSON.stringify({ error: 'Resolved experiment path is outside the vault.' });
         }
-        return JSON.stringify({ type: 'pending_edit', operation: 'create_experiment', path: absPath, newContent });
+        return JSON.stringify({ type: 'pending_edit', operation: 'create_experiment', path: absPath, newContent, warnings: renderResult.warnings });
       },
     },
 
@@ -470,15 +481,25 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         const today = new Date().toISOString().slice(0, 10);
         const fmData: Record<string, unknown> = { note_kind: 'protocol', id: protId, title: args.title as string, version: 1, category: args.category as string, created: today, last_updated: today };
         if (args.derived_from) fmData.derived_from = `[[${args.derived_from as string}]]`;
-        const body = `\n# ${args.title as string}\n\n## Materials\n\n## Procedure\n\n## Notes\n`;
-        const newContent = matter.stringify(body, fmData);
+        let renderResult: RenderResult;
+        try {
+          renderResult = await renderNoteTemplate({
+            vaultPath,
+            kind: 'protocol',
+            protectedFrontmatter: fmData,
+            context: { title: args.title as string },
+          });
+        } catch (err) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+        const newContent = matter.stringify(renderResult.body, renderResult.frontmatter);
         let absPath: string;
         try {
           absPath = resolveVaultPath(vaultPath, path.join('Protocols', `${protId}-${slug}.md`));
         } catch {
           return JSON.stringify({ error: 'Resolved protocol path is outside the vault.' });
         }
-        return JSON.stringify({ type: 'pending_edit', operation: 'create_protocol', path: absPath, newContent });
+        return JSON.stringify({ type: 'pending_edit', operation: 'create_protocol', path: absPath, newContent, warnings: renderResult.warnings });
       },
     },
 
