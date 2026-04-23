@@ -349,7 +349,7 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
             vaultPath,
             kind: 'experiment',
             protectedFrontmatter: fmData,
-            context: { title: args.title as string, date: today },
+            context: { title: args.title as string, date: today, id: expId, project_id: projectId },
           });
         } catch (err) {
           return JSON.stringify({ error: (err as Error).message });
@@ -487,7 +487,7 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
             vaultPath,
             kind: 'protocol',
             protectedFrontmatter: fmData,
-            context: { title: args.title as string },
+            context: { title: args.title as string, id: protId },
           });
         } catch (err) {
           return JSON.stringify({ error: (err as Error).message });
