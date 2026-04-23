@@ -469,6 +469,27 @@ describe('create_experiment and create_protocol — template integration', () =>
     expect(r.warnings.some((w: string) => w.includes("'id'") && w.includes('ignored'))).toBe(true);
   });
 
+  it('create_experiment emits each structural warning exactly once (no duplicates from preload path)', async () => {
+    fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
+    // Template with no version and a protected-field collision — both produce structural warnings
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'experiment.md'),
+      `---\nid: BAD\n---\n\n# {{title}}\n`
+    );
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_experiment')!;
+    const r = JSON.parse(await tool.execute({
+      project_id: 'P001',
+      title: 'My Experiment',
+      experiment_type: 'western-blot',
+    }));
+    expect(r.type).toBe('pending_edit');
+    const idWarnings = (r.warnings as string[]).filter((w: string) => w.includes("'id'") && w.includes('ignored'));
+    expect(idWarnings).toHaveLength(1);
+    const versionWarnings = (r.warnings as string[]).filter((w: string) => w.includes('no version'));
+    expect(versionWarnings).toHaveLength(1);
+  });
+
   it('create_experiment does not consume a serial when template rendering fails', async () => {
     fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
     fs.writeFileSync(

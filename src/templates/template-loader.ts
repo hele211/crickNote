@@ -304,12 +304,9 @@ export async function renderNoteTemplate({
 
   if (preloadedTemplate) {
     ({ templateFrontmatter, templateBody, templateUsed } = preloadedTemplate);
-    // Preserve structural load warnings (e.g. missing-templates notice for builtins)
+    // Structural warnings (version, protected-field collisions, missing-templates) were already
+    // collected by loadAndValidateTemplate; copy them directly to avoid emitting them twice.
     warnings.push(...preloadedTemplate.warnings);
-    if (templateUsed === 'file') {
-      // Re-run validate to collect structural warnings; already passed once so this won't throw
-      validateTemplate(kind, templateFrontmatter, templateBody, warnings);
-    }
   } else {
     const loadResult = loadTemplate(vaultPath, kind, context);
     if (loadResult instanceof Error) throw loadResult;
