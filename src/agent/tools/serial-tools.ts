@@ -221,6 +221,14 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         const rawPrefix = (args.prefix as string).toUpperCase();
         try { validatePrefix(rawPrefix); } catch (e) { return JSON.stringify({ error: (e as Error).message }); }
 
+        // Validate template before any state mutations so a bad template doesn't leave a stale reservation
+        const today = new Date().toISOString().slice(0, 10);
+        try {
+          await renderNoteTemplate({ vaultPath, kind: 'project-index', protectedFrontmatter: {}, context: { title, date: today } });
+        } catch (err) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+
         database.prepare('DELETE FROM prefix_reservations WHERE expires_at < ?').run(Date.now());
 
         const existingCounter = database.prepare('SELECT project_id FROM serial_counters WHERE scope = ?').get(rawPrefix) as { project_id: string | null } | undefined;
@@ -246,7 +254,6 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
 
         const slug = title.replace(/[^a-zA-Z0-9]+/g, '') || 'Untitled';
         const folderName = `${projectId}-${slug}`;
-        const today = new Date().toISOString().slice(0, 10);
         const fmData: Record<string, unknown> = { note_kind: 'project', id: projectId, prefix: rawPrefix, title, status: 'active', created: today };
         if (args.description) fmData.description = args.description as string;
         let renderResult: RenderResult;
@@ -442,6 +449,12 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
           }
         }
 
+        // Validate template before allocating serial so a bad template doesn't cause a serial gap
+        try {
+          await renderNoteTemplate({ vaultPath, kind: 'series', protectedFrontmatter: {}, context: { title: args.title as string, objective: (args.objective as string | undefined) ?? 'TODO', project_id: projectId } });
+        } catch (err) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
         const serial = getNextSerial(`${prefix}-S`, database);
         const seriesId = `${prefix}S${serial}`;
         const slug = (args.title as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
