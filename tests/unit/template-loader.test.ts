@@ -330,3 +330,54 @@ describe('renderNoteTemplate — Substitute step', () => {
     expect(result.frontmatter.cell_line).toBe('{{cell_line}}');
   });
 });
+
+describe('DEFAULT_TEMPLATE_FILES', () => {
+  it('exports a file for every TemplateKind plus README', async () => {
+    const { DEFAULT_TEMPLATE_FILES } = await import('../../src/templates/template-loader.js');
+    const expected = [
+      'experiment.md',
+      'project-index.md',
+      'series.md',
+      'protocol.md',
+      'reading-paper.md',
+      'reading-thread.md',
+      'README.md',
+    ];
+    for (const filename of expected) {
+      expect(DEFAULT_TEMPLATE_FILES[filename], `missing ${filename}`).toBeTruthy();
+    }
+  });
+
+  it('experiment.md default template has template_version and custom field stubs', async () => {
+    const { DEFAULT_TEMPLATE_FILES } = await import('../../src/templates/template-loader.js');
+    const content = DEFAULT_TEMPLATE_FILES['experiment.md'];
+    expect(content).toContain('template_version: 1');
+    expect(content).toContain('cell_line:');
+    expect(content).toContain('{{title}}');
+    expect(content).toContain('{{date}}');
+  });
+
+  it('reading-paper.md default template has all 6 required headings', async () => {
+    const { DEFAULT_TEMPLATE_FILES } = await import('../../src/templates/template-loader.js');
+    const content = DEFAULT_TEMPLATE_FILES['reading-paper.md'];
+    for (const heading of ['Claims', 'Reasoning', 'Evidence', 'Assumptions', 'Takeaways', 'Extensions']) {
+      expect(content).toContain(`## ${heading}`);
+    }
+  });
+
+  it('project-index.md default template has all AUTO-GENERATED markers', async () => {
+    const { DEFAULT_TEMPLATE_FILES } = await import('../../src/templates/template-loader.js');
+    const content = DEFAULT_TEMPLATE_FILES['project-index.md'];
+    expect(content).toContain('<!-- AUTO-GENERATED: experiment-log -->');
+    expect(content).toContain('<!-- END AUTO-GENERATED: experiment-log -->');
+    expect(content).toContain('<!-- AUTO-GENERATED: project-summary -->');
+    expect(content).toContain('<!-- END AUTO-GENERATED: project-summary -->');
+  });
+
+  it('series.md default template has AUTO-GENERATED experiment-list markers', async () => {
+    const { DEFAULT_TEMPLATE_FILES } = await import('../../src/templates/template-loader.js');
+    const content = DEFAULT_TEMPLATE_FILES['series.md'];
+    expect(content).toContain('<!-- AUTO-GENERATED: experiment-list -->');
+    expect(content).toContain('<!-- END AUTO-GENERATED: experiment-list -->');
+  });
+});

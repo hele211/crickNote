@@ -301,3 +301,215 @@ export async function renderNoteTemplate({
 
   return { frontmatter, body, warnings, templateUsed };
 }
+
+// Default template content (used by setup scaffolding)
+
+export const DEFAULT_TEMPLATE_FILES: Record<string, string> = {
+  'experiment.md': `---
+template_version: 1
+
+# CrickNote automatically adds:
+# note_kind, id, project_id, title, experiment_type,
+# samples, reagents, status, created, attachments,
+# protocol (if provided), series (if provided)
+
+# Add your own fields below:
+cell_line:
+passage_number:
+linked_paper:
+---
+
+# {{title}}
+
+## {{date}} - Initial Setup
+
+## Hypothesis
+
+## Materials
+
+## Protocol Steps
+
+## Observations
+
+## Results
+
+## Next Steps
+`,
+
+  'project-index.md': `---
+template_version: 1
+
+# CrickNote automatically adds:
+# note_kind, id, prefix, title, status, created,
+# description (if provided)
+
+# Add your own fields below:
+pi_name:
+grant_id:
+---
+
+<!-- AUTO-GENERATED: experiment-log -->
+## Experiment Log
+| Series | ID | Name | Status | Created |
+|--------|-----|------|--------|---------|
+<!-- END AUTO-GENERATED: experiment-log -->
+
+<!-- AUTO-GENERATED: project-summary -->
+## Project Summary
+(auto-updated)
+<!-- END AUTO-GENERATED: project-summary -->
+
+## Related Knowledge Concepts
+
+## Related Reading
+
+## Related Protocols
+
+## Open Questions
+`,
+
+  'series.md': `---
+template_version: 1
+
+# CrickNote automatically adds:
+# note_kind, id, project_id, title, objective, status, created
+
+# Add your own fields below:
+---
+
+# {{title}}
+
+## Objective
+{{objective}}
+
+<!-- AUTO-GENERATED: experiment-list -->
+## Experiments
+| ID | Name | Status | Created |
+|----|------|--------|---------|
+<!-- END AUTO-GENERATED: experiment-list -->
+
+## Summary
+`,
+
+  'protocol.md': `---
+template_version: 1
+
+# CrickNote automatically adds:
+# note_kind, id, title, version, category, created, last_updated,
+# derived_from (if provided)
+
+# Add your own fields below:
+equipment:
+safety_notes:
+---
+
+# {{title}}
+
+## Materials
+
+## Procedure
+
+## Notes
+
+## Troubleshooting
+`,
+
+  'reading-paper.md': `---
+template_version: 1
+
+# CrickNote automatically adds:
+# title, authors, year, journal, read_date,
+# status, kb_status, tags, doi, sources,
+# cricknote_template
+
+# Add your own fields below:
+lab_relevance:
+---
+
+# {{title}}
+
+## Claims
+## Reasoning
+## Evidence
+## Assumptions
+## Takeaways
+## Extensions
+`,
+
+  'reading-thread.md': `---
+template_version: 1
+
+# CrickNote automatically adds:
+# title, authors, year, journal, read_date,
+# status, kb_status, tags, doi, sources,
+# cricknote_template
+
+# Add your own fields below:
+thread_topic:
+---
+
+# {{title}}
+
+## Claims
+## Reasoning
+## Evidence
+## Assumptions
+## Takeaways
+## Extensions
+`,
+
+  'README.md': `# CrickNote Templates
+
+Edit these files to customize note layout for your lab.
+
+## What you control
+
+- **Body:** Add, rename, or reorder sections. Keep the sections CrickNote requires (see below).
+- **Custom frontmatter fields:** Add any YAML fields below the comment line in each template. They appear in every note of that type.
+
+## What CrickNote controls
+
+Each template has a comment block listing fields CrickNote writes automatically.
+Do not add these as YAML keys - they will be ignored.
+
+## Required sections (do not remove)
+
+### \`project-index.md\` and \`series.md\`
+These comment markers must stay in the body - CrickNote uses them for automated updates:
+- \`<!-- AUTO-GENERATED: experiment-log -->\` / \`<!-- END AUTO-GENERATED: experiment-log -->\`
+- \`<!-- AUTO-GENERATED: project-summary -->\` / \`<!-- END AUTO-GENERATED: project-summary -->\`
+- \`<!-- AUTO-GENERATED: experiment-list -->\` / \`<!-- END AUTO-GENERATED: experiment-list -->\`
+
+### \`reading-paper.md\` and \`reading-thread.md\`
+These six headings must stay - they drive the KB pipeline:
+\`\`\`
+## Claims
+## Reasoning
+## Evidence
+## Assumptions
+## Takeaways
+## Extensions
+\`\`\`
+
+## Placeholders
+
+| Placeholder | Available in |
+|-------------|-------------|
+| \`{{title}}\` | All kinds |
+| \`{{date}}\` | experiment, project-index |
+| \`{{id}}\` | All kinds (pass in context) |
+| \`{{project_id}}\` | experiment, series |
+| \`{{objective}}\` | series |
+
+## What happens when templates have problems
+
+| Situation | Behaviour |
+|-----------|-----------|
+| \`Agent/templates/\` folder missing | Built-in template used; warning shown |
+| Template file absent | Built-in template used; warning shown |
+| Template file has invalid YAML | Note creation stops; error reported |
+| Template defines a CrickNote-owned field | Field ignored; warning shown |
+| Required section missing | Note creation stops; error reported |
+| Unknown placeholder \`{{xyz}}\` | Left as-is; warning shown |
+`,
+};
