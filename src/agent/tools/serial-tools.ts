@@ -249,15 +249,25 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         const today = new Date().toISOString().slice(0, 10);
         const fmData: Record<string, unknown> = { note_kind: 'project', id: projectId, prefix: rawPrefix, title, status: 'active', created: today };
         if (args.description) fmData.description = args.description as string;
-        const body = `\n<!-- AUTO-GENERATED: experiment-log -->\n## Experiment Log\n| Series | ID | Name | Status | Created |\n|--------|-----|------|--------|----------|\n<!-- END AUTO-GENERATED: experiment-log -->\n\n<!-- AUTO-GENERATED: project-summary -->\n## Project Summary\n(auto-updated)\n<!-- END AUTO-GENERATED: project-summary -->\n\n## Related Knowledge Concepts\n\n## Related Reading\n\n## Related Protocols\n\n## Open Questions\n`;
-        const newContent = matter.stringify(body, fmData);
+        let renderResult: RenderResult;
+        try {
+          renderResult = await renderNoteTemplate({
+            vaultPath,
+            kind: 'project-index',
+            protectedFrontmatter: fmData,
+            context: { title, date: today },
+          });
+        } catch (err) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+        const newContent = matter.stringify(renderResult.body, renderResult.frontmatter);
         let absPath: string;
         try {
           absPath = resolveVaultPath(vaultPath, path.join('Projects', folderName, '_index.md'));
         } catch {
           return JSON.stringify({ error: 'Resolved project path is outside the vault.' });
         }
-        return JSON.stringify({ type: 'pending_edit', operation: 'create_project', path: absPath, newContent, reservation: { project_id: projectId, prefix: rawPrefix } });
+        return JSON.stringify({ type: 'pending_edit', operation: 'create_project', path: absPath, newContent, reservation: { project_id: projectId, prefix: rawPrefix }, warnings: renderResult.warnings });
       },
     },
 
@@ -445,8 +455,25 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         const experimentListRows = validatedExperimentIds.length > 0
           ? validatedExperimentIds.map(id => `| ${id} | (see note) | draft | ${today} |`).join('\n')
           : '';
-        const body = `\n# ${args.title as string}\n\n## Objective\n${(args.objective as string | undefined) ?? 'TODO'}\n\n<!-- AUTO-GENERATED: experiment-list -->\n## Experiments\n| ID | Name | Status | Created |\n|----|------|--------|----------|\n${experimentListRows}\n<!-- END AUTO-GENERATED: experiment-list -->\n\n## Summary\n<!-- User-owned synthesis -->\n`;
-        const newContent = matter.stringify(body, fmData);
+        let renderResult: RenderResult;
+        try {
+          renderResult = await renderNoteTemplate({
+            vaultPath,
+            kind: 'series',
+            protectedFrontmatter: fmData,
+            context: { title: args.title as string, objective: (args.objective as string | undefined) ?? 'TODO', id: seriesId, project_id: projectId },
+          });
+        } catch (err) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+        let body = renderResult.body;
+        if (experimentListRows.length > 0) {
+          body = body.replace(
+            '<!-- END AUTO-GENERATED: experiment-list -->',
+            `${experimentListRows}\n<!-- END AUTO-GENERATED: experiment-list -->`
+          );
+        }
+        const newContent = matter.stringify(body, renderResult.frontmatter);
         const fileName = `${seriesId}-${slug}.md`;
         let absPath: string;
         try {
@@ -454,7 +481,7 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         } catch {
           return JSON.stringify({ error: 'Resolved series path is outside the vault.' });
         }
-        return JSON.stringify({ type: 'pending_edit', operation: 'create_series', path: absPath, newContent, series_id: seriesId });
+        return JSON.stringify({ type: 'pending_edit', operation: 'create_series', path: absPath, newContent, series_id: seriesId, warnings: renderResult.warnings });
       },
     },
 

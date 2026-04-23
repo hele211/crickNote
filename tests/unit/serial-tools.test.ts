@@ -480,4 +480,55 @@ describe('create_experiment and create_protocol — template integration', () =>
     expect(parsed.content).toContain('## Materials');
     expect(parsed.content).toContain('## Procedure');
   });
+
+  it('create_project returns warnings array and body has AUTO-GENERATED markers', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
+    // create_project allocates its own reservation — do NOT pre-insert one or the tool will reject it as a collision
+    const r = JSON.parse(await tool.execute({ title: 'My Project', prefix: 'XY' }));
+    expect(r.type).toBe('pending_edit');
+    expect(Array.isArray(r.warnings)).toBe(true);
+    const parsed = matter(r.newContent);
+    expect(parsed.content).toContain('<!-- AUTO-GENERATED: experiment-log -->');
+    expect(parsed.content).toContain('<!-- AUTO-GENERATED: project-summary -->');
+  });
+
+  it('create_series returns warnings array and body has AUTO-GENERATED experiment-list', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_series')!;
+    const r = JSON.parse(await tool.execute({
+      project_id: 'P001',
+      title: 'My Series',
+      objective: 'Test objective',
+    }));
+    expect(r.type).toBe('pending_edit');
+    expect(Array.isArray(r.warnings)).toBe(true);
+    const parsed = matter(r.newContent);
+    expect(parsed.content).toContain('<!-- AUTO-GENERATED: experiment-list -->');
+    expect(parsed.content).toContain('<!-- END AUTO-GENERATED: experiment-list -->');
+  });
+
+  it('create_series injects experiment rows into AUTO-GENERATED block when experiments provided', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    // Create an experiment file so validation passes
+    fs.writeFileSync(
+      path.join(vaultPath, 'Projects', 'P001-CM', 'CM001-my-exp.md'),
+      matter.stringify('\n# My Exp\n', { note_kind: 'experiment', id: 'CM001', project_id: 'P001' })
+    );
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_series')!;
+    const r = JSON.parse(await tool.execute({
+      project_id: 'P001',
+      title: 'My Series',
+      objective: 'Test',
+      experiments: ['CM001'],
+    }));
+    expect(r.type).toBe('pending_edit');
+    const parsed = matter(r.newContent);
+    expect(parsed.content).toContain('| CM001 |');
+    expect(parsed.content).toContain('<!-- END AUTO-GENERATED: experiment-list -->');
+    // Rows must appear BEFORE the END marker
+    const endIdx = parsed.content.indexOf('<!-- END AUTO-GENERATED: experiment-list -->');
+    const rowIdx = parsed.content.indexOf('| CM001 |');
+    expect(rowIdx).toBeLessThan(endIdx);
+  });
 });
