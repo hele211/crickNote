@@ -148,10 +148,6 @@ Preferred reading-note order:
     sections.push(`## This Week's Plan\n\n${weekPlan}`);
   }
 
-  // Layer 7: Tool definitions summary
-  const toolSummary = tools.map(t => `- ${t.name}: ${t.description}`).join('\n');
-  sections.push(`## Available Tools\n\n${toolSummary}`);
-
   return sections.join('\n\n---\n\n');
 }
 
