@@ -629,12 +629,16 @@ function zoteroPrepareBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
         const destPdf = path.join(bundleDir, 'paper.pdf');
         const sourceHash = sha256File(pdfPath!);
         if (fs.existsSync(destPdf)) {
+          if (fs.lstatSync(destPdf).isSymbolicLink()) {
+            if (!dirExists) try { fs.rmdirSync(bundleDir); } catch { /* ignore */ }
+            return JSON.stringify({ error: 'paper.pdf is a symlink — delete it and re-run to create a vault-owned copy.' });
+          }
           const existingHash = sha256File(destPdf);
           if (existingHash !== sourceHash) {
             if (!dirExists) try { fs.rmdirSync(bundleDir); } catch { /* ignore */ }
             return JSON.stringify({ error: `paper.pdf already exists with different content. Delete or rename it before re-running.` });
           }
-          // Matching hash — skip copy (don't add to filesCreated)
+          // Matching hash and not a symlink — skip copy (don't add to filesCreated)
         } else {
           const tmpPdf = destPdf + '.tmp';
           try {
