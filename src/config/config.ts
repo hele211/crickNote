@@ -30,6 +30,18 @@ export function normalizeZoteroConfig(raw: Partial<ZoteroConfig> | undefined, va
     throw new Error(`Invalid Zotero config: api_port must be 1–65535, got ${merged.api_port}`);
   }
 
+  if (!merged.vault_pdf_dir || merged.vault_pdf_dir.trim() === '') {
+    throw new Error(`Invalid Zotero config: vault_pdf_dir must not be empty`);
+  }
+  if (path.isAbsolute(merged.vault_pdf_dir)) {
+    throw new Error(`Invalid Zotero config: vault_pdf_dir must be a relative path, got "${merged.vault_pdf_dir}"`);
+  }
+  const normalizedPdfDir = path.normalize(merged.vault_pdf_dir);
+  if (normalizedPdfDir.startsWith('..')) {
+    throw new Error(`Invalid Zotero config: vault_pdf_dir must not escape the vault, got "${merged.vault_pdf_dir}"`);
+  }
+  merged.vault_pdf_dir = normalizedPdfDir;
+
   let resolvedRoot: string;
   try {
     resolvedRoot = fs.realpathSync(merged.storage_root);

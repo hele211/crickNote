@@ -29,6 +29,10 @@ export interface SourceLoadResult {
   totalTokens: number;
 }
 
+export interface SourceResolveOptions {
+  externalPdfRoots?: string[];
+}
+
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 }
@@ -47,6 +51,66 @@ async function extractPdf(absPath: string): Promise<string> {
   return data.text;
 }
 
+function pathInside(child: string, parent: string): boolean {
+  return child === parent || child.startsWith(parent + path.sep);
+}
+
+function realpathIfExists(filePath: string): string | null {
+  try {
+    return fs.realpathSync(filePath);
+  } catch {
+    return null;
+  }
+}
+
+function normalizedExternalRoots(options: SourceResolveOptions): string[] {
+  return (options.externalPdfRoots ?? [])
+    .map((root) => realpathIfExists(root) ?? path.resolve(root))
+    .filter((root) => root !== '/' && root.length > 1);
+}
+
+export function resolveReadingSourceFile(
+  vaultPath: string,
+  sourceSlug: string,
+  sourcePath: string,
+  options: SourceResolveOptions = {},
+  bundleBaseDir = 'Reading/attachments'
+): string {
+  const relativeSource = normalizeReadingSourcePath(sourcePath);
+  const relPath = path.join(bundleBaseDir, sourceSlug, relativeSource);
+
+  let realVault: string;
+  try {
+    realVault = fs.realpathSync(vaultPath);
+  } catch {
+    realVault = path.resolve(vaultPath);
+  }
+
+  const absPath = path.resolve(realVault, relPath);
+  if (!pathInside(absPath, realVault)) {
+    throw new Error(`Path traversal rejected: "${relativeSource}" resolves outside the vault.`);
+  }
+
+  const realTarget = realpathIfExists(absPath);
+  if (realTarget && !pathInside(realTarget, realVault)) {
+    const ext = path.extname(relativeSource).toLowerCase();
+    const allowedExternalRoot = ext === '.pdf'
+      ? normalizedExternalRoots(options).find((root) => pathInside(realTarget, root))
+      : undefined;
+
+    if (!allowedExternalRoot) {
+      throw new Error(`Path traversal rejected: "${relativeSource}" resolves outside the vault via a symlink.`);
+    }
+  }
+
+  // Reuse the central resolver for normal vault-local sources and missing paths.
+  if (!realTarget || pathInside(realTarget, realVault)) {
+    return resolveVaultPath(vaultPath, relPath);
+  }
+
+  return absPath;
+}
+
 const TYPE_PRIORITY: Record<ReadingSourceType, number> = {
   notes: 0,
   pdf: 1,
@@ -58,7 +122,8 @@ const TYPE_PRIORITY: Record<ReadingSourceType, number> = {
 export async function loadSources(
   sources: Array<{ type: string; path: string }>,
   sourceSlug: string,
-  vaultPath: string
+  vaultPath: string,
+  options: SourceResolveOptions = {}
 ): Promise<SourceLoadResult> {
   const loaded: LoadedSource[] = [];
   const warnings: string[] = [];
@@ -105,9 +170,9 @@ export async function loadSources(
 
     let absPath: string;
     try {
-      absPath = resolveVaultPath(vaultPath, path.join('Reading', 'attachments', sourceSlug, src.path));
-    } catch {
-      warnings.push(`Skipping "${src.path}" — path resolves outside vault.`);
+      absPath = resolveReadingSourceFile(vaultPath, sourceSlug, src.path, options);
+    } catch (err) {
+      warnings.push(`Skipping "${src.path}" — ${(err as Error).message}`);
       continue;
     }
 

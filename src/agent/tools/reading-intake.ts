@@ -20,8 +20,10 @@ import {
   type ReadingPipelineStep,
   type ReadingSourceType,
 } from '../../knowledge/reading-note.js';
+import { resolveReadingSourceFile } from '../../knowledge/source-loader.js';
 import { resolveVaultPath } from '../../utils/paths.js';
 import { renderNoteTemplate, type RenderResult, type TemplateKind } from '../../templates/template-loader.js';
+import { loadConfig } from '../../config/config.js';
 
 interface DiscoveredBundleFile {
   path: string;
@@ -48,6 +50,15 @@ interface MappingArtifactSummary {
 
 const TEXT_SOURCE_EXTENSIONS = new Set(['.md', '.txt']);
 const IGNORED_BUNDLE_FILES = new Set(['.ds_store', '.zotero-bundle']);
+
+function configuredZoteroStorageRoots(): string[] {
+  try {
+    const z = loadConfig().zotero;
+    return z?.enabled && z.storage_root ? [z.storage_root] : [];
+  } catch {
+    return [];
+  }
+}
 
 function normalizeBundleSlug(value: unknown): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -77,8 +88,18 @@ function classifyBundleFile(fileName: string): { type: ReadingSourceType; readab
   return { type: 'other', readable: false };
 }
 
+function getBundleBaseDir(): string {
+  try {
+    const cfg = loadConfig();
+    return cfg.zotero?.vault_pdf_dir ?? 'Reading/attachments';
+  } catch {
+    return 'Reading/attachments';
+  }
+}
+
 function discoverBundle(vaultPath: string, slug: string): BundleDiscoveryResult {
-  const bundlePath = resolveVaultPath(vaultPath, path.join('Reading', 'attachments', slug));
+  const bundleBaseDir = getBundleBaseDir();
+  const bundlePath = resolveVaultPath(vaultPath, path.join(bundleBaseDir, slug));
   const warnings: string[] = [];
 
   if (!fs.existsSync(bundlePath) || !fs.statSync(bundlePath).isDirectory()) {
@@ -88,7 +109,7 @@ function discoverBundle(vaultPath: string, slug: string): BundleDiscoveryResult 
       bundlePath,
       discoveredFiles: [],
       recommendedSources: [],
-      warnings: [`Reading bundle not found: Reading/attachments/${slug}`],
+      warnings: [`Reading bundle not found: ${bundleBaseDir}/${slug}`],
     };
   }
 
@@ -99,7 +120,7 @@ function discoverBundle(vaultPath: string, slug: string): BundleDiscoveryResult 
       continue;
     }
 
-    if (!entry.isFile()) {
+    if (!entry.isFile() && !entry.isSymbolicLink()) {
       warnings.push(`Skipping non-file bundle entry "${entry.name}".`);
       continue;
     }
@@ -125,7 +146,7 @@ function discoverBundle(vaultPath: string, slug: string): BundleDiscoveryResult 
 
   const pdfCount = discoveredFiles.filter((file) => file.type === 'pdf' && file.readable).length;
   if (pdfCount > 1) {
-    warnings.push(`Multiple PDF files found in Reading/attachments/${slug}; review the recommended sources before ingesting.`);
+    warnings.push(`Multiple PDF files found in ${bundleBaseDir}/${slug}; review the recommended sources before ingesting.`);
   }
 
   if (recommendedSources.length === 0) {
@@ -442,9 +463,15 @@ export function createReadingIntakeTools(
         for (const source of selectedSources) {
           let sourcePath: string;
           try {
-            sourcePath = resolveVaultPath(vaultPath, path.join('Reading', 'attachments', slug, source.path));
-          } catch {
-            return JSON.stringify({ error: `Selected source resolves outside the vault: "${source.path}"` });
+            sourcePath = resolveReadingSourceFile(
+              vaultPath,
+              slug,
+              source.path,
+              { externalPdfRoots: args.zotero_managed === true ? configuredZoteroStorageRoots() : [] },
+              getBundleBaseDir()
+            );
+          } catch (err) {
+            return JSON.stringify({ error: `Selected source is not allowed: "${source.path}" (${(err as Error).message})` });
           }
 
           if (!fs.existsSync(sourcePath)) {
