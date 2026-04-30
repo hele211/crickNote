@@ -123,7 +123,8 @@ export async function loadSources(
   sources: Array<{ type: string; path: string }>,
   sourceSlug: string,
   vaultPath: string,
-  options: SourceResolveOptions = {}
+  options: SourceResolveOptions = {},
+  bundleBaseDir = 'Reading/attachments'
 ): Promise<SourceLoadResult> {
   const loaded: LoadedSource[] = [];
   const warnings: string[] = [];
@@ -170,7 +171,7 @@ export async function loadSources(
 
     let absPath: string;
     try {
-      absPath = resolveReadingSourceFile(vaultPath, sourceSlug, src.path, options);
+      absPath = resolveReadingSourceFile(vaultPath, sourceSlug, src.path, options, bundleBaseDir);
     } catch (err) {
       warnings.push(`Skipping "${src.path}" — ${(err as Error).message}`);
       continue;

@@ -6,6 +6,7 @@ import os from 'node:os';
 import type { ToolHandler } from './registry.js';
 import { loadConfig, type CrickNoteConfig, type ZoteroConfig } from '../../config/config.js';
 import { normalizeDoi, slugifyReadingTitle } from '../../knowledge/reading-note.js';
+import { resolveVaultPath } from '../../utils/paths.js';
 
 // ─── Config guard ────────────────────────────────────────────────────────────
 
@@ -559,7 +560,16 @@ function zoteroPrepareBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
       const slug = args.slug;
       if (typeof slug !== 'string' || !SLUG_RE.test(slug)) return JSON.stringify({ error: 'Invalid slug format.' });
 
-      const bundleDir = path.join(vaultPath, (z as ZoteroConfig).vault_pdf_dir, slug);
+      const rawBundleDir = path.join(vaultPath, (z as ZoteroConfig).vault_pdf_dir, slug);
+      if (fs.existsSync(rawBundleDir) && fs.lstatSync(rawBundleDir).isSymbolicLink()) {
+        return JSON.stringify({ error: 'Bundle directory is a symlink — refusing to operate.' });
+      }
+      let bundleDir: string;
+      try {
+        bundleDir = resolveVaultPath(vaultPath, path.join((z as ZoteroConfig).vault_pdf_dir, slug));
+      } catch (e) {
+        return JSON.stringify({ error: (e as Error).message });
+      }
       const markerPath = path.join(bundleDir, '.zotero-bundle');
       const pdfPath = typeof args.pdf_path === 'string' && args.pdf_path ? args.pdf_path : undefined;
       const abstract = typeof args.abstract === 'string' && args.abstract ? args.abstract : undefined;
@@ -727,12 +737,17 @@ function zoteroCleanupBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
       const slug = args.slug;
       if (typeof slug !== 'string' || !SLUG_RE.test(slug)) return JSON.stringify({ error: 'Invalid slug format.' });
 
-      const bundleDir = path.join(vaultPath, (z as ZoteroConfig).vault_pdf_dir, slug);
-      const markerPath = path.join(bundleDir, '.zotero-bundle');
-
-      if (fs.existsSync(bundleDir) && fs.lstatSync(bundleDir).isSymbolicLink()) {
+      const rawBundleDir = path.join(vaultPath, (z as ZoteroConfig).vault_pdf_dir, slug);
+      if (fs.existsSync(rawBundleDir) && fs.lstatSync(rawBundleDir).isSymbolicLink()) {
         return JSON.stringify({ error: 'Bundle directory is a symlink — refusing to operate.' });
       }
+      let bundleDir: string;
+      try {
+        bundleDir = resolveVaultPath(vaultPath, path.join((z as ZoteroConfig).vault_pdf_dir, slug));
+      } catch (e) {
+        return JSON.stringify({ error: (e as Error).message });
+      }
+      const markerPath = path.join(bundleDir, '.zotero-bundle');
 
       if (!fs.existsSync(markerPath)) {
         return JSON.stringify({ error: 'No .zotero-bundle marker found. Refusing to operate on an unmanaged directory.' });
