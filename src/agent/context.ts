@@ -104,7 +104,7 @@ When the user says "ingest <identifier> from Zotero" or "summarise <identifier> 
 2. Derive slug: <slug_prefix from output>-<year>-<slugifyReadingTitle(title)>. Never derive from citekey.
 3. Check for existing notes: if both Reading/Papers/<slug>.md and Reading/Threads/<slug>.md exist, stop with an error.
 4. Narrate: "Copying Zotero PDF into vault at <vault_pdf_dir>/<slug>/paper.pdf…" (or abstract variant). The PDF is copied into the vault; the original stays in Zotero storage.
-5. Call zotero_prepare_bundle({ slug, pdf_path? }) → capture files_created_this_run.
+5. Call zotero_prepare_bundle({ slug, pdf_path }) if pdf_path is present, or zotero_prepare_bundle({ slug, abstract }) if abstract-only → capture files_created_this_run.
 6. Call ingest_reading_bundle with all metadata fields + citekey + zotero_key (if present) + zotero_managed: true + zotero_files_created: <files_created_this_run>.
    - ERROR FLOW: If ingest_reading_bundle returns an error and files_created_this_run is non-empty → call zotero_cleanup_bundle({ slug, files: files_created_this_run }) immediately, then report the error to the user.
 7. CANCEL FLOW: After any scaffold edit_cancelled event that contains zotero_slug:

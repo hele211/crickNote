@@ -15,15 +15,6 @@ import { autoWrite, frontmatterFieldUpdate } from '../../editing/auto-writer.js'
 
 const log = logger.child('kb-tools');
 
-function configuredZoteroStorageRoots(): string[] {
-  try {
-    const z = loadConfig().zotero;
-    return z?.enabled && z.storage_root ? [z.storage_root] : [];
-  } catch {
-    return [];
-  }
-}
-
 function configuredBundleBaseDir(): string {
   try {
     return loadConfig().zotero?.vault_pdf_dir ?? 'Reading/attachments';
@@ -158,7 +149,7 @@ export function createKbTools(
           sources as Array<{ type: string; path: string }>,
           sourceSlug,
           vaultPath,
-          { externalPdfRoots: configuredZoteroStorageRoots() },
+          {},
           configuredBundleBaseDir()
         );
 
