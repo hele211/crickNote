@@ -418,7 +418,7 @@ function zoteroFetchItem(vaultPath: string, cfg: () => CrickNoteConfig): ToolHan
               return {
                 zotero_key,
                 title: csl?.title?.trim() ?? '',
-                year: csl?.issued?.['date-parts']?.[0]?.[0] ?? 0,
+                year: parseCslYear(csl?.issued?.['date-parts']?.[0]?.[0]) ?? 0,
                 journal: csl?.['container-title']?.trim() ?? '',
               };
             } catch {

@@ -51,15 +51,6 @@ interface MappingArtifactSummary {
 const TEXT_SOURCE_EXTENSIONS = new Set(['.md', '.txt']);
 const IGNORED_BUNDLE_FILES = new Set(['.ds_store', '.zotero-bundle']);
 
-function configuredZoteroStorageRoots(): string[] {
-  try {
-    const z = loadConfig().zotero;
-    return z?.enabled && z.storage_root ? [z.storage_root] : [];
-  } catch {
-    return [];
-  }
-}
-
 function normalizeBundleSlug(value: unknown): string {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error('slug is required.');
@@ -467,7 +458,7 @@ export function createReadingIntakeTools(
               vaultPath,
               slug,
               source.path,
-              { externalPdfRoots: args.zotero_managed === true ? configuredZoteroStorageRoots() : [] },
+              {},
               getBundleBaseDir()
             );
           } catch (err) {
