@@ -376,8 +376,15 @@ function zoteroFetchItem(vaultPath: string, cfg: () => CrickNoteConfig): ToolHan
       let libraryId: number | undefined;
 
       if (args.citekey) {
-        // Path A — citekey provided directly
+        // Path A — citekey provided directly; also recover zotero_key/libraryId when
+        // re-calling after needs_attachment_selection (resume object contains both).
         citekey = args.citekey as string;
+        if (args.zotero_key) {
+          const rawKey = args.zotero_key as string;
+          zoteroKey = rawKey;
+          const colonIdx = rawKey.indexOf(':');
+          if (colonIdx > 0) libraryId = parseInt(rawKey.slice(0, colonIdx), 10);
+        }
       } else if (args.doi) {
         // Path B — DOI provided
         const normalized = normalizeDoi(args.doi as string);

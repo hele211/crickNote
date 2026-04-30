@@ -106,6 +106,7 @@ When the user says "ingest <identifier> from Zotero" or "summarise <identifier> 
 4. Narrate: "Copying Zotero PDF into vault at <vault_pdf_dir>/<slug>/paper.pdf…" (or abstract variant). The PDF is copied into the vault; the original stays in Zotero storage.
 5. Call zotero_prepare_bundle({ slug, pdf_path? }) → capture files_created_this_run.
 6. Call ingest_reading_bundle with all metadata fields + citekey + zotero_key (if present) + zotero_managed: true + zotero_files_created: <files_created_this_run>.
+   - ERROR FLOW: If ingest_reading_bundle returns an error and files_created_this_run is non-empty → call zotero_cleanup_bundle({ slug, files: files_created_this_run }) immediately, then report the error to the user.
 7. CANCEL FLOW: After any scaffold edit_cancelled event that contains zotero_slug:
    - If zotero_files_created is non-empty → call zotero_cleanup_bundle({ slug: zotero_slug, files: zotero_files_created }).
    - If zotero_files_created is empty → call vault_read(note_rel_path from event):
