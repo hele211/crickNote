@@ -10,6 +10,7 @@ describe('Zotero config normalization', () => {
     expect(result.enabled).toBe(false);
     expect(result.api_port).toBe(23119);
     expect(result.storage_root).toContain('Zotero/storage');
+    expect(result.vault_pdf_dir).toBe('Reading/attachments');
     expect(result.auto_summarize).toBe(true);
   });
 

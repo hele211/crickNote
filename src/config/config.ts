@@ -7,6 +7,7 @@ export interface ZoteroConfig {
   enabled: boolean;
   api_port: number;
   storage_root: string;
+  vault_pdf_dir: string;
   bbt_export_path?: string;
   auto_summarize: boolean;
 }
@@ -16,6 +17,7 @@ export function normalizeZoteroConfig(raw: Partial<ZoteroConfig> | undefined, va
     enabled: false,
     api_port: 23119,
     storage_root: path.join(os.homedir(), 'Zotero', 'storage'),
+    vault_pdf_dir: 'Reading/attachments',
     auto_summarize: true,
   };
   const merged: ZoteroConfig = { ...defaults, ...(raw ?? {}) };

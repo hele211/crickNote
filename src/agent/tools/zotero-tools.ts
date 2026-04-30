@@ -102,7 +102,7 @@ interface CslAuthor { family?: string; given?: string; literal?: string }
 interface CslItem {
   title?: string;
   author?: CslAuthor[];
-  issued?: { 'date-parts'?: number[][] };
+  issued?: { 'date-parts'?: Array<Array<number | string>> };
   'container-title'?: string;
   DOI?: string;
   abstract?: string;
@@ -119,6 +119,67 @@ export interface ZoteroFetchResult {
   citekey: string;
   zotero_key?: string;
   slug_prefix: string;
+}
+
+function parseCslYear(raw: unknown): number | null {
+  if (typeof raw === 'number' && Number.isInteger(raw)) return raw;
+
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (/^-?\d+$/.test(trimmed)) {
+      const parsed = Number.parseInt(trimmed, 10);
+      if (Number.isInteger(parsed)) return parsed;
+    }
+  }
+
+  return null;
+}
+
+interface ZoteroSearchResult extends CslItem {
+  itemKey?: string;
+  libraryID?: number;
+  id?: string;
+  citekey?: string;
+  'citation-key'?: string;
+}
+
+function searchResultCitekey(item: ZoteroSearchResult): string | undefined {
+  if (typeof item.citekey === 'string' && item.citekey.trim()) return item.citekey;
+  const citationKey = item['citation-key'];
+  if (typeof citationKey === 'string' && citationKey.trim()) return citationKey;
+  return undefined;
+}
+
+function searchResultKey(item: ZoteroSearchResult): { zoteroKey?: string; libraryId?: number } {
+  if (typeof item.itemKey === 'string' && item.itemKey.trim()) {
+    const libraryId = typeof item.libraryID === 'number' && item.libraryID > 1 ? item.libraryID : undefined;
+    return { zoteroKey: libraryId ? `${libraryId}:${item.itemKey}` : item.itemKey, libraryId };
+  }
+
+  if (typeof item.id !== 'string' || !item.id.trim()) return {};
+
+  try {
+    const url = new URL(item.id);
+    const parts = url.pathname.split('/').filter(Boolean);
+    const itemsIdx = parts.indexOf('items');
+    if (itemsIdx < 1 || itemsIdx === parts.length - 1) return {};
+    const rawKey = parts[itemsIdx + 1];
+
+    if (parts[0] === 'users') {
+      return { zoteroKey: rawKey, libraryId: undefined };
+    }
+
+    if (parts[0] === 'groups') {
+      const parsedLibraryId = Number.parseInt(parts[1] ?? '', 10);
+      if (Number.isInteger(parsedLibraryId) && parsedLibraryId > 0) {
+        return { zoteroKey: `${parsedLibraryId}:${rawKey}`, libraryId: parsedLibraryId };
+      }
+    }
+  } catch {
+    return {};
+  }
+
+  return {};
 }
 
 function normalizeCsl(
@@ -140,8 +201,8 @@ function normalizeCsl(
   }).filter(Boolean);
   if (authors.length === 0) return { error: 'Item has no author.' };
 
-  const yearRaw = item.issued?.['date-parts']?.[0]?.[0];
-  if (typeof yearRaw !== 'number') return { error: 'Item has no publication year.' };
+  const year = parseCslYear(item.issued?.['date-parts']?.[0]?.[0]);
+  if (year === null) return { error: 'Item has no publication year.' };
 
   if (!item['container-title']?.trim()) return { error: 'Item has no journal/container title.' };
 
@@ -152,7 +213,7 @@ function normalizeCsl(
   return {
     title: item.title.trim(),
     authors,
-    year: yearRaw,
+    year,
     journal: item['container-title'].trim(),
     doi: item.DOI ? normalizeDoi(item.DOI) : undefined,
     abstract: item.abstract || undefined,
@@ -167,6 +228,7 @@ function normalizeCsl(
 
 interface BbtAttachment {
   id?: string;
+  open?: string;
   path?: string;
   contentType?: string;
   filename?: string;
@@ -174,31 +236,66 @@ interface BbtAttachment {
   size?: number;
 }
 
+interface PdfAttachmentCandidate {
+  id: string;
+  path: string;
+  filename: string;
+  size: number;
+}
+
 type PdfSelectionResult =
   | string
   | { error: string }
   | { status: 'needs_attachment_selection'; attachments: { id: string; filename: string; size: number }[] };
 
+function looksLikePdfAttachment(attachment: BbtAttachment): boolean {
+  if (attachment.contentType === 'application/pdf') return true;
+  if (typeof attachment.filename === 'string' && attachment.filename.toLowerCase().endsWith('.pdf')) return true;
+  if (typeof attachment.path === 'string' && attachment.path.toLowerCase().endsWith('.pdf')) return true;
+  if (typeof attachment.open === 'string' && attachment.open.startsWith('zotero://open-pdf/')) return true;
+  return false;
+}
+
+function normalizePdfAttachmentCandidates(attachments: BbtAttachment[]): PdfAttachmentCandidate[] {
+  return attachments.flatMap((attachment) => {
+    if (!attachment.path || !looksLikePdfAttachment(attachment)) return [];
+
+    const id = attachment.id ?? attachment.open ?? attachment.path;
+    const filename = attachment.filename ?? path.basename(attachment.path);
+    let size = typeof attachment.size === 'number' ? attachment.size : 0;
+
+    if (size === 0) {
+      try {
+        size = fs.statSync(attachment.path).size;
+      } catch {
+        size = 0;
+      }
+    }
+
+    return [{ id, path: attachment.path, filename, size }];
+  });
+}
+
 function selectPdf(attachments: BbtAttachment[], selectedId?: string): PdfSelectionResult {
-  const pdfs = attachments.filter(a => a.contentType === 'application/pdf' && a.path);
+  const pdfs = normalizePdfAttachmentCandidates(attachments);
   if (pdfs.length === 0) {
     return { error: 'No PDF attached and no abstract available. Cannot ingest without at least one readable source. Open Zotero, add an abstract or attach a PDF, then retry.' };
   }
 
   if (selectedId) {
     const chosen = pdfs.find(a => a.id === selectedId);
-    if (!chosen?.path) return { error: `Selected attachment ${selectedId} is not a valid PDF for this item.` };
+    if (!chosen) return { error: `Selected attachment ${selectedId} is not a valid PDF for this item.` };
     return chosen.path;
   }
 
-  if (pdfs.length === 1) return pdfs[0].path!;
+  if (pdfs.length === 1) return pdfs[0].path;
 
   return {
     status: 'needs_attachment_selection',
     attachments: pdfs.map(a => ({
-      id: a.id ?? '',
-      filename: a.filename ?? path.basename(a.path ?? ''),
-      size: a.size ?? 0,
+      id: a.id,
+      filename: a.filename,
+      size: a.size,
     })),
   };
 }
@@ -230,7 +327,13 @@ function readMarker(markerPath: string): ZoteroBundleMarker | null {
 
 function writeMarker(markerPath: string, files: Record<string, string>): void {
   const marker: ZoteroBundleMarker = { created_by: 'zotero_prepare_bundle', files };
-  fs.writeFileSync(markerPath, JSON.stringify(marker, null, 2));
+  const tmpPath = `${markerPath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(marker, null, 2));
+  fs.renameSync(tmpPath, markerPath);
+}
+
+function doiSearchParams(normalizedDoi: string): unknown[] {
+  return [[['DOI', 'is', normalizedDoi]]];
 }
 
 // ─── zotero_fetch_item ────────────────────────────────────────────────────────
@@ -277,21 +380,28 @@ function zoteroFetchItem(vaultPath: string, cfg: () => CrickNoteConfig): ToolHan
       } else if (args.doi) {
         // Path B — DOI provided
         const normalized = normalizeDoi(args.doi as string);
-        const items = await jsonRpc(port, 'item.search', [[['DOI', 'is', normalized]]]) as Array<{ itemKey: string; libraryID: number }>;
+        const items = await jsonRpc(port, 'item.search', doiSearchParams(normalized)) as ZoteroSearchResult[];
         if (!Array.isArray(items) || items.length === 0) {
           return JSON.stringify({ error: `No Zotero item found for DOI "${normalized}"` });
         }
         if (items.length > 1) {
           const topItems = items.slice(0, 3);
-          const keys = topItems.map(i => (i.libraryID === 1 ? i.itemKey : `${i.libraryID}:${i.itemKey}`));
+          const keys = topItems
+            .map(item => searchResultKey(item).zoteroKey)
+            .filter((key): key is string => typeof key === 'string' && key.length > 0);
           let keyMap: Record<string, string> = {};
           try { keyMap = await jsonRpc(port, 'item.citationkey', [keys]) as Record<string, string>; } catch { /* fall back to empty metadata */ }
           const candidates = await Promise.all(topItems.map(async (item) => {
-            const zotero_key = item.libraryID === 1 ? item.itemKey : `${item.libraryID}:${item.itemKey}`;
-            const citekey = keyMap[zotero_key];
-            if (!citekey) return { zotero_key, title: '', year: 0, journal: '' };
+            const { zoteroKey: zotero_key, libraryId: libId } = searchResultKey(item);
+            const citekey = searchResultCitekey(item) ?? (zotero_key ? keyMap[zotero_key] : undefined);
+            const title = item.title?.trim() ?? '';
+            const year = parseCslYear(item.issued?.['date-parts']?.[0]?.[0]) ?? 0;
+            const journal = item['container-title']?.trim() ?? '';
+            if (title || year || journal) {
+              return { zotero_key: zotero_key ?? '', title, year, journal };
+            }
+            if (!citekey) return { zotero_key: zotero_key ?? '', title: '', year: 0, journal: '' };
             try {
-              const libId = item.libraryID === 1 ? undefined : item.libraryID;
               const exportParams: unknown[] = [[citekey], 'Better CSL JSON'];
               if (libId) exportParams.push(libId);
               const exportRaw = await jsonRpc(port, 'item.export', exportParams) as string;
@@ -310,11 +420,15 @@ function zoteroFetchItem(vaultPath: string, cfg: () => CrickNoteConfig): ToolHan
           return JSON.stringify({ status: 'needs_item_selection', candidates });
         }
         const item = items[0];
-        libraryId = item.libraryID === 1 ? undefined : item.libraryID;
-        zoteroKey = libraryId ? `${item.libraryID}:${item.itemKey}` : item.itemKey;
-        const keyMap = await jsonRpc(port, 'item.citationkey', [[zoteroKey]]) as Record<string, string>;
-        citekey = keyMap[zoteroKey];
-        if (!citekey) return JSON.stringify({ error: `Could not resolve citekey for item "${zoteroKey}"` });
+        ({ zoteroKey, libraryId } = searchResultKey(item));
+        citekey = searchResultCitekey(item);
+        if (!citekey && zoteroKey) {
+          const keyMap = await jsonRpc(port, 'item.citationkey', [[zoteroKey]]) as Record<string, string>;
+          citekey = keyMap[zoteroKey];
+        }
+        if (!citekey) {
+          return JSON.stringify({ error: zoteroKey ? `Could not resolve citekey for item "${zoteroKey}"` : `Could not resolve citekey for DOI "${normalized}"` });
+        }
       } else if (args.zotero_key) {
         // Path C — item key provided
         const rawKey = args.zotero_key as string;
@@ -346,8 +460,8 @@ function zoteroFetchItem(vaultPath: string, cfg: () => CrickNoteConfig): ToolHan
       }
 
       // Validate CSL fields early so title/author/year errors take priority
-      const cslValidation = normalizeCsl(cslItems[0], citekey, undefined, zoteroKey);
-      if ('error' in cslValidation) return JSON.stringify(cslValidation);
+      const normalizedCsl = normalizeCsl(cslItems[0], citekey, undefined, zoteroKey);
+      if ('error' in normalizedCsl) return JSON.stringify(normalizedCsl);
 
       // Fetch attachments
       const attParams: unknown[] = [citekey];
@@ -380,8 +494,7 @@ function zoteroFetchItem(vaultPath: string, cfg: () => CrickNoteConfig): ToolHan
         pdfPath = undefined; // abstract-only mode
       }
 
-      const result = normalizeCsl(cslItems[0], citekey, pdfPath, zoteroKey);
-      return JSON.stringify(result);
+      return JSON.stringify({ ...normalizedCsl, pdf_path: pdfPath });
     },
   };
 }
@@ -427,7 +540,7 @@ function zoteroPrepareBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
   return {
     definition: {
       name: 'zotero_prepare_bundle',
-      description: 'Create the vault attachment directory and copy the PDF (or write abstract.md) for Zotero ingestion.',
+      description: 'Create the vault attachment directory and copy the Zotero PDF (or write abstract.md) for Zotero ingestion.',
       parameters: {
         type: 'object',
         properties: {
@@ -446,7 +559,7 @@ function zoteroPrepareBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
       const slug = args.slug;
       if (typeof slug !== 'string' || !SLUG_RE.test(slug)) return JSON.stringify({ error: 'Invalid slug format.' });
 
-      const bundleDir = path.join(vaultPath, 'Reading', 'attachments', slug);
+      const bundleDir = path.join(vaultPath, (z as ZoteroConfig).vault_pdf_dir, slug);
       const markerPath = path.join(bundleDir, '.zotero-bundle');
       const pdfPath = typeof args.pdf_path === 'string' && args.pdf_path ? args.pdf_path : undefined;
       const abstract = typeof args.abstract === 'string' && args.abstract ? args.abstract : undefined;
@@ -495,7 +608,7 @@ function zoteroPrepareBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
       const mode = pdfPath ? 'pdf' : 'abstract';
 
       if (mode === 'pdf') {
-        // TOCTOU guard: validate again before copy
+        // TOCTOU guard: validate again before copying
         try {
           validateZoteroAttachment(pdfPath!, (z as ZoteroConfig).storage_root);
         } catch (e) {
@@ -504,24 +617,28 @@ function zoteroPrepareBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
         }
 
         const destPdf = path.join(bundleDir, 'paper.pdf');
+        const sourceHash = sha256File(pdfPath!);
         if (fs.existsSync(destPdf)) {
           const existingHash = sha256File(destPdf);
-          const sourceHash = sha256File(pdfPath!);
           if (existingHash !== sourceHash) {
             if (!dirExists) try { fs.rmdirSync(bundleDir); } catch { /* ignore */ }
             return JSON.stringify({ error: `paper.pdf already exists with different content. Delete or rename it before re-running.` });
           }
-          // Matching hash — skip write (don't add to filesCreated)
+          // Matching hash — skip copy (don't add to filesCreated)
         } else {
-          // Atomic copy via temp file
-          const tmpPath = destPdf + '.tmp';
-          fs.copyFileSync(pdfPath!, tmpPath);
-          fs.renameSync(tmpPath, destPdf);
+          const tmpPdf = destPdf + '.tmp';
+          try {
+            fs.copyFileSync(pdfPath!, tmpPdf);
+            fs.renameSync(tmpPdf, destPdf);
+          } catch (e) {
+            try { fs.unlinkSync(tmpPdf); } catch { /* best effort */ }
+            if (!dirExists) try { fs.rmdirSync(bundleDir); } catch { /* ignore */ }
+            return JSON.stringify({ error: `Failed to copy Zotero PDF into vault: ${(e as Error).message}` });
+          }
           filesCreated.push('paper.pdf');
         }
 
-        const pdfHash = sha256File(destPdf);
-        const mergedFiles = { ...existingMarkerFiles, 'paper.pdf': pdfHash };
+        const mergedFiles = { ...existingMarkerFiles, 'paper.pdf': sourceHash };
         try {
           writeMarker(markerPath, mergedFiles);
         } catch {
@@ -536,7 +653,7 @@ function zoteroPrepareBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
           return JSON.stringify({ error: 'Failed to write .zotero-bundle marker. Bundle rolled back.' });
         }
 
-        return JSON.stringify({ source_type: 'pdf', source_path: 'paper.pdf', files_created_this_run: filesCreated });
+        return JSON.stringify({ source_type: 'pdf', source_path: 'paper.pdf', pdf_copied: true, files_created_this_run: filesCreated });
 
       } else {
         // Abstract-only mode
@@ -610,7 +727,7 @@ function zoteroCleanupBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
       const slug = args.slug;
       if (typeof slug !== 'string' || !SLUG_RE.test(slug)) return JSON.stringify({ error: 'Invalid slug format.' });
 
-      const bundleDir = path.join(vaultPath, 'Reading', 'attachments', slug);
+      const bundleDir = path.join(vaultPath, (z as ZoteroConfig).vault_pdf_dir, slug);
       const markerPath = path.join(bundleDir, '.zotero-bundle');
 
       if (fs.existsSync(bundleDir) && fs.lstatSync(bundleDir).isSymbolicLink()) {
@@ -656,6 +773,34 @@ function zoteroCleanupBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
           continue;
         }
 
+        let lstat: fs.Stats;
+        try {
+          lstat = fs.lstatSync(filePath);
+        } catch {
+          skipped.push(filename);
+          surviving[filename] = storedHash;
+          continue;
+        }
+
+        if (!inScope) {
+          // Out-of-scope: preserve in surviving marker
+          surviving[filename] = storedHash;
+          continue;
+        }
+
+        if (lstat.isSymbolicLink()) {
+          const currentHash = sha256File(filePath);
+          if (currentHash !== storedHash) {
+            skipped.push(filename);
+            surviving[filename] = storedHash;
+            continue;
+          }
+
+          fs.unlinkSync(filePath);
+          deleted.push(filename);
+          continue;
+        }
+
         // Containment guard — resolved path must stay inside bundleDir
         let realFilePath: string;
         try {
@@ -674,12 +819,6 @@ function zoteroCleanupBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
         // Reject directories (e.g. "." resolves inside bundleDir but is not a file)
         if (!fs.statSync(filePath).isFile()) {
           skipped.push(filename);
-          surviving[filename] = storedHash;
-          continue;
-        }
-
-        if (!inScope) {
-          // Out-of-scope: preserve in surviving marker
           surviving[filename] = storedHash;
           continue;
         }
