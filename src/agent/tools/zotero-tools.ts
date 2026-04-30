@@ -640,7 +640,7 @@ function zoteroPrepareBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
           }
           // Matching hash and not a symlink — skip copy (don't add to filesCreated)
         } else {
-          const tmpPdf = destPdf + '.tmp';
+          const tmpPdf = path.join(bundleDir, `.paper-${crypto.randomBytes(6).toString('hex')}.tmp`);
           try {
             fs.copyFileSync(pdfPath!, tmpPdf);
             fs.renameSync(tmpPdf, destPdf);
@@ -679,13 +679,17 @@ function zoteroPrepareBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
         const destAbstract = path.join(bundleDir, 'abstract.md');
         const abstractContent = `# Abstract\n\n${abstract}`;
         if (fs.existsSync(destAbstract)) {
+          if (fs.lstatSync(destAbstract).isSymbolicLink()) {
+            if (!dirExists) try { fs.rmdirSync(bundleDir); } catch { /* ignore */ }
+            return JSON.stringify({ error: 'abstract.md is a symlink — delete it and re-run to create a vault-owned copy.' });
+          }
           const existingHash = sha256File(destAbstract);
           const sourceHash = sha256Text(abstractContent);
           if (existingHash !== sourceHash) {
             if (!dirExists) try { fs.rmdirSync(bundleDir); } catch { /* ignore */ }
             return JSON.stringify({ error: 'abstract.md already exists with different content.' });
           }
-          // Matching hash — skip write
+          // Matching hash and not a symlink — skip write
         } else {
           fs.writeFileSync(destAbstract, abstractContent, 'utf-8');
           filesCreated.push('abstract.md');
