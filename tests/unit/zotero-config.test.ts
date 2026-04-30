@@ -99,4 +99,30 @@ describe('Zotero config normalization', () => {
       expect(result.storage_root).toContain('storage');
     });
   });
+
+  describe('vault_pdf_dir validation', () => {
+    it('rejects empty vault_pdf_dir', async () => {
+      const { normalizeZoteroConfig } = await import('../../src/config/config.js');
+      expect(() => normalizeZoteroConfig({ enabled: true, api_port: 23119, storage_root: '/tmp/zotero', vault_pdf_dir: '', auto_summarize: true }))
+        .toThrow(/vault_pdf_dir/);
+    });
+
+    it('rejects absolute vault_pdf_dir', async () => {
+      const { normalizeZoteroConfig } = await import('../../src/config/config.js');
+      expect(() => normalizeZoteroConfig({ enabled: true, api_port: 23119, storage_root: '/tmp/zotero', vault_pdf_dir: '/absolute/path', auto_summarize: true }))
+        .toThrow(/vault_pdf_dir/);
+    });
+
+    it('rejects vault_pdf_dir escaping vault with ..', async () => {
+      const { normalizeZoteroConfig } = await import('../../src/config/config.js');
+      expect(() => normalizeZoteroConfig({ enabled: true, api_port: 23119, storage_root: '/tmp/zotero', vault_pdf_dir: '../outside', auto_summarize: true }))
+        .toThrow(/vault_pdf_dir/);
+    });
+
+    it('accepts a valid relative vault_pdf_dir', async () => {
+      const { normalizeZoteroConfig } = await import('../../src/config/config.js');
+      const result = normalizeZoteroConfig({ enabled: true, api_port: 23119, storage_root: '/tmp/zotero', vault_pdf_dir: 'Zotero/PDFs', auto_summarize: true });
+      expect(result.vault_pdf_dir).toBe('Zotero/PDFs');
+    });
+  });
 });
