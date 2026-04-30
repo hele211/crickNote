@@ -509,7 +509,7 @@ export function createReadingIntakeTools(
           existingBody = parsed.content;
         }
 
-        if (exists) {
+        if (exists && args.zotero_managed === true) {
           const collision = checkSlugCollision(existingFrontmatter as Record<string, unknown>, {
             citekey: args.citekey,
             doi: args.doi,

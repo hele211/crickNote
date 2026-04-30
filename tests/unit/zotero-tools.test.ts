@@ -745,7 +745,7 @@ describe('zotero_cleanup_bundle', () => {
     expect(fs.existsSync(dir)).toBe(false);
   });
 
-  it('cleanup deletes only the managed PDF symlink and preserves the Zotero target', async () => {
+  it('cleanup skips symlinked bundle files (symlinks are never vault-owned copies)', async () => {
     const dir = path.join(vault, 'Reading/attachments/test-symlink');
     fs.mkdirSync(dir, { recursive: true });
     const target = path.join(os.tmpdir(), `zotero-target-${Date.now()}.pdf`);
@@ -755,8 +755,8 @@ describe('zotero_cleanup_bundle', () => {
     writeTestMarker(dir, { 'paper.pdf': pdfHash });
 
     const result = JSON.parse(await (await getCleanupTool(vault)).execute({ slug: 'test-symlink' }));
-    expect(result.deleted).toContain('paper.pdf');
-    expect(fs.existsSync(path.join(dir, 'paper.pdf'))).toBe(false);
+    expect(result.skipped).toContain('paper.pdf');
+    expect(fs.existsSync(path.join(dir, 'paper.pdf'))).toBe(true);
     expect(fs.existsSync(target)).toBe(true);
     fs.unlinkSync(target);
   });

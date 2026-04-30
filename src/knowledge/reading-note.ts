@@ -221,7 +221,7 @@ export function normalizeDoi(doi: string): string {
     const url = new URL(trimmed);
     if ((url.protocol === 'http:' || url.protocol === 'https:')
         && DOI_RESOLVER_HOSTS.has(url.hostname)) {
-      return decodeURIComponent(url.pathname.replace(/^\/+/, ''));
+      return decodeURIComponent(url.pathname.replace(/^\/+/, '')).replace(/^doi:\s*/, '');
     }
   } catch {
     // Not a valid URL — fall through to string-based stripping

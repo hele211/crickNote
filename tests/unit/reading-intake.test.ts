@@ -45,6 +45,26 @@ describe('reading intake tools', () => {
     expect(result.warnings).toEqual([]);
   });
 
+  it('discover_reading_bundle treats a managed PDF symlink as a readable PDF source', async () => {
+    const targetPdf = path.join(os.tmpdir(), `cricknote-zotero-target-${Date.now()}.pdf`);
+    fs.writeFileSync(targetPdf, '%PDF-linked');
+    fs.symlinkSync(
+      targetPdf,
+      path.join(vaultPath, 'Reading', 'attachments', 'smith-2026-il42', 'paper.pdf')
+    );
+
+    try {
+      const tool = createReadingIntakeTools(vaultPath, detector)
+        .find((candidate) => candidate.definition.name === 'discover_reading_bundle');
+      const result = JSON.parse(await tool!.execute({ slug: 'smith-2026-il42' }));
+
+      expect(result.discovered_files).toContainEqual({ path: 'paper.pdf', type: 'pdf', readable: true });
+      expect(result.recommended_sources).toContainEqual({ type: 'pdf', path: 'paper.pdf' });
+    } finally {
+      fs.unlinkSync(targetPdf);
+    }
+  });
+
   it('discover_reading_bundle warns for multiple PDFs, unsupported files, and missing bundles', async () => {
     fs.writeFileSync(path.join(vaultPath, 'Reading', 'attachments', 'smith-2026-il42', 'paper-a.pdf'), 'a');
     fs.writeFileSync(path.join(vaultPath, 'Reading', 'attachments', 'smith-2026-il42', 'paper-b.pdf'), 'b');
@@ -299,14 +319,14 @@ describe('ingest_reading_bundle — template integration', () => {
     // Place an existing thread note so findReadingNoteBySlug returns the Threads path
     fs.writeFileSync(
       path.join(vaultPath, 'Reading', 'Threads', 'smith-2026-il42.md'),
-      matter.stringify('\n# IL-42 Review\n', { title: 'IL-42 Review' })
+      matter.stringify('\n# IL-42 Review\n', { title: 'IL-42 Review', citekey: 'smith2026' })
     );
     fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
     fs.writeFileSync(
       path.join(vaultPath, 'Agent', 'templates', 'reading-thread.md'),
       `---\ntemplate_version: 1\nthread_topic:\n---\n\n# {{title}}\n\n## Claims\n## Reasoning\n## Evidence\n## Assumptions\n## Takeaways\n## Extensions\n`
     );
-    const r = await ingest();
+    const r = await ingest({ citekey: 'smith2026' });
     const parsed = matter(r.newContent);
     expect(parsed.data.cricknote_template).toBe('reading-thread');
     expect(parsed.data.thread_topic).toBeNull();
@@ -316,7 +336,7 @@ describe('ingest_reading_bundle — template integration', () => {
     fs.mkdirSync(path.join(vaultPath, 'Reading', 'Threads'), { recursive: true });
     fs.writeFileSync(
       path.join(vaultPath, 'Reading', 'Threads', 'smith-2026-il42.md'),
-      matter.stringify('\n# IL-42 Review\n', { title: 'IL-42 Review' })
+      matter.stringify('\n# IL-42 Review\n', { title: 'IL-42 Review', citekey: 'smith2026' })
     );
     fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
     // Only reading-paper.md present, no reading-thread.md
@@ -324,7 +344,7 @@ describe('ingest_reading_bundle — template integration', () => {
       path.join(vaultPath, 'Agent', 'templates', 'reading-paper.md'),
       `---\ntemplate_version: 1\nlab_relevance:\n---\n\n# {{title}}\n\n## Claims\n## Reasoning\n## Evidence\n## Assumptions\n## Takeaways\n## Extensions\n`
     );
-    const r = await ingest();
+    const r = await ingest({ citekey: 'smith2026' });
     const parsed = matter(r.newContent);
     // Still kind=reading-thread from loader's perspective, cricknote_template is 'reading-thread'
     expect(parsed.data.cricknote_template).toBe('reading-thread');
@@ -337,7 +357,7 @@ describe('ingest_reading_bundle — template integration', () => {
       path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-il42.md'),
       matter.stringify(
         '\n# IL-42 Review\n\n## Claims\nThis paper claims stuff.\n## Reasoning\n## Evidence\n## Assumptions\n## Takeaways\n## Extensions\n',
-        { title: 'IL-42 Review', sources: [] }
+        { title: 'IL-42 Review', sources: [{ type: 'notes', path: 'notes.md' }], citekey: 'smith2026' }
       )
     );
     fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
@@ -345,7 +365,7 @@ describe('ingest_reading_bundle — template integration', () => {
       path.join(vaultPath, 'Agent', 'templates', 'reading-paper.md'),
       `---\ntemplate_version: 1\nlab_relevance:\n---\n\n# {{title}}\n\n## Claims\n## Reasoning\n## Evidence\n## Assumptions\n## Takeaways\n## Extensions\n`
     );
-    const r = await ingest();
+    const r = await ingest({ citekey: 'smith2026' });
     const parsed = matter(r.newContent);
     expect(parsed.content).toContain('This paper claims stuff.');
   });
@@ -469,7 +489,7 @@ describe('collision-check tiers', () => {
     const vault = makeZoteroVault();
     fs.writeFileSync(path.join(vault, 'Reading/Papers/smith-2026-il42.md'),
       '---\ntitle: Old T\nzotero_key: OTHER123\n---\n');
-    const result = await ingestBundle(vault, { ...BASE_ARGS, zotero_key: 'ABCD1234' });
+    const result = await ingestBundle(vault, { ...BASE_ARGS, zotero_key: 'ABCD1234', zotero_managed: true });
     expect(result.error).toMatch(/zotero_key/i);
   });
 
@@ -485,7 +505,7 @@ describe('collision-check tiers', () => {
     const vault = makeZoteroVault();
     fs.writeFileSync(path.join(vault, 'Reading/Papers/smith-2026-il42.md'),
       '---\ntitle: Old T\ndoi: "10.9999/other"\n---\n');
-    const result = await ingestBundle(vault, { ...BASE_ARGS, doi: '10.1016/j.cell' });
+    const result = await ingestBundle(vault, { ...BASE_ARGS, doi: '10.1016/j.cell', zotero_managed: true });
     expect(result.error).toMatch(/doi/i);
   });
 
@@ -501,7 +521,7 @@ describe('collision-check tiers', () => {
     const vault = makeZoteroVault();
     fs.writeFileSync(path.join(vault, 'Reading/Papers/smith-2026-il42.md'),
       '---\ntitle: Old T\ncitekey: jones2025\n---\n');
-    const result = await ingestBundle(vault, { ...BASE_ARGS, citekey: 'smith2026' });
+    const result = await ingestBundle(vault, { ...BASE_ARGS, citekey: 'smith2026', zotero_managed: true });
     expect(result.error).toMatch(/citekey/i);
   });
 

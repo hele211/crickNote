@@ -776,6 +776,9 @@ function zoteroCleanupBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
       if (marker.created_by !== 'zotero_prepare_bundle') {
         return JSON.stringify({ error: 'Marker was not created by zotero_prepare_bundle. Refusing to operate.' });
       }
+      if (!marker.files || typeof marker.files !== 'object' || Array.isArray(marker.files)) {
+        return JSON.stringify({ error: 'Malformed .zotero-bundle marker: files must be an object.' });
+      }
 
       const realBundleDir = fs.realpathSync(bundleDir);
       const realVaultCleanup = fs.realpathSync(vaultPath);
@@ -822,15 +825,8 @@ function zoteroCleanupBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
         }
 
         if (lstat.isSymbolicLink()) {
-          const currentHash = sha256File(filePath);
-          if (currentHash !== storedHash) {
-            skipped.push(filename);
-            surviving[filename] = storedHash;
-            continue;
-          }
-
-          fs.unlinkSync(filePath);
-          deleted.push(filename);
+          skipped.push(filename);
+          surviving[filename] = storedHash;
           continue;
         }
 
