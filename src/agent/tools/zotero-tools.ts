@@ -485,8 +485,11 @@ function zoteroFetchItem(vaultPath: string, cfg: () => CrickNoteConfig): ToolHan
           return JSON.stringify({ error: (e as Error).message });
         }
       } else if ('status' in pdfResult) {
-        // Multiple PDFs — needs disambiguation
-        return JSON.stringify(pdfResult);
+        // Multiple PDFs — needs disambiguation; include resume identifiers for re-call
+        const resume: Record<string, string> = {};
+        if (citekey) resume.citekey = citekey;
+        if (zoteroKey) resume.zotero_key = zoteroKey;
+        return JSON.stringify({ ...pdfResult, resume });
       } else if ('error' in pdfResult) {
         // No PDF — check for abstract
         if (!cslItems[0].abstract) {

@@ -100,7 +100,7 @@ Preferred reading-note order (vault-native bundle):
 When the user says "ingest <identifier> from Zotero" or "summarise <identifier> from my Zotero":
 1. Call zotero_fetch_item with the identifier (citekey, doi, or zotero_key).
    - If it returns needs_item_selection: present the candidates to the user, re-call with zotero_key.
-   - If it returns needs_attachment_selection: present the PDF list, re-call with selected_attachment_id.
+   - If it returns needs_attachment_selection: present the PDF list to the user, then re-call zotero_fetch_item with all fields from the resume object plus selected_attachment_id.
 2. Derive slug: <slug_prefix from output>-<year>-<slugifyReadingTitle(title)>. Never derive from citekey.
 3. Check for existing notes: if both Reading/Papers/<slug>.md and Reading/Threads/<slug>.md exist, stop with an error.
 4. Narrate: "Copying Zotero PDF into vault at <vault_pdf_dir>/<slug>/paper.pdf…" (or abstract variant). The PDF is copied into the vault; the original stays in Zotero storage.
