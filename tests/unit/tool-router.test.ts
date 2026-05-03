@@ -45,6 +45,9 @@ describe('routeTools — write bundle', () => {
   it('matches "modify my protocol note"', () => {
     expect(routeTools('modify my protocol note')).toContain('vault_write');
   });
+  it('matches multi-word note name "edit my lab meeting note"', () => {
+    expect(routeTools('edit my lab meeting note')).toContain('vault_write');
+  });
 });
 
 describe('routeTools — tasks bundle', () => {
@@ -241,6 +244,12 @@ describe('needsVaultAccess', () => {
   });
   it('returns false for "I am unable to access the internet"', () => {
     expect(needsVaultAccess('I am unable to access the internet.')).toBe(false);
+  });
+  it('detects "do not have access to your vault"', () => {
+    expect(needsVaultAccess('I do not have access to your vault')).toBe(true);
+  });
+  it('detects "cannot access your notes"', () => {
+    expect(needsVaultAccess('I cannot access your notes')).toBe(true);
   });
 });
 
