@@ -157,7 +157,8 @@ describe('ensureVaultScaffold — _README.md scaffolding', () => {
       const readmePath = path.join(vaultPath, rel, '_README.md');
       expect(fs.existsSync(readmePath), `missing _README.md in ${rel}`).toBe(true);
       const content = fs.readFileSync(readmePath, 'utf-8');
-      expect(content).toContain('template_version: 1');
+      expect(content).toContain('note_kind: folder-readme');
+      expect(content).not.toContain('template_version');
     }
   });
 

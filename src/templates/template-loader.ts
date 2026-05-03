@@ -333,6 +333,22 @@ export async function renderNoteTemplate({
 
 // Default template content (used by setup scaffolding)
 
+/**
+ * Synchronous render for setup scaffolding, where async is not available.
+ * Falls back to builtin body silently if the template file is missing or invalid.
+ */
+export function renderFolderReadmeSync(vaultPath: string, title: string, created: string): string {
+  const context = { title, date: created };
+  const loadResult = loadTemplate(vaultPath, 'folder-readme', context);
+  const templateFrontmatter = loadResult instanceof Error ? {} : loadResult.templateFrontmatter;
+  const templateBody = loadResult instanceof Error
+    ? DEFAULT_BODY_RENDERERS['folder-readme'](context)
+    : loadResult.templateBody;
+  const frontmatter = mergeTemplate('folder-readme', templateFrontmatter, { note_kind: 'folder-readme', created });
+  const body = substituteBody(templateBody, context, []);
+  return matter.stringify(body, frontmatter);
+}
+
 export const DEFAULT_TEMPLATE_FILES: Record<string, string> = {
   'experiment.md': `---
 template_version: 1

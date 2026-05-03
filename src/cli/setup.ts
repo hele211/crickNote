@@ -5,7 +5,7 @@ import { saveConfig, PROVIDER_PRESETS, type CrickNoteConfig } from '../config/co
 import { generateToken, getTokenPath } from '../server/auth.js';
 import { getDatabase, getDataDir, closeDatabase } from '../storage/database.js';
 import { rebuildKnowledgeIndex } from '../knowledge/index-builder.js';
-import { DEFAULT_TEMPLATE_FILES } from '../templates/template-loader.js';
+import { DEFAULT_TEMPLATE_FILES, renderFolderReadmeSync } from '../templates/template-loader.js';
 
 const VAULT_DIRS = [
   'Projects', 'Protocols',
@@ -41,12 +41,13 @@ export function ensureVaultScaffold(vaultPath: string): void {
 
   // Scaffold _README.md stubs in root content folders and existing subfolders.
   // Never overwrite a file the scientist has already written.
-  const readmeTemplate = DEFAULT_TEMPLATE_FILES['folder-readme.md'] ?? '';
+  const today = new Date().toISOString().slice(0, 10);
   const readmeDirs = scaffoldReadmeDirs(vaultPath);
   for (const dir of readmeDirs) {
     const readmePath = path.join(dir, '_README.md');
     if (!fs.existsSync(readmePath)) {
-      fs.writeFileSync(readmePath, readmeTemplate, 'utf-8');
+      const title = path.basename(dir);
+      fs.writeFileSync(readmePath, renderFolderReadmeSync(vaultPath, title, today), 'utf-8');
     }
   }
 }

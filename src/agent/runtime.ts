@@ -321,6 +321,22 @@ export class AgentRuntime {
 
     // Fetch meta BEFORE confirmEdit deletes the pending entry
     const editMeta = this.safeWriter.getPendingEditMeta(editId) ?? {};
+    const batchId = typeof editMeta.batchId === 'string' ? editMeta.batchId : null;
+
+    // Preflight: for apply/force, verify all batch mates are still pending before writing any
+    if (batchId && action !== 'cancel') {
+      const batchMates = (this.pendingBatches.get(batchId) ?? []).filter(id => id !== editId);
+      const missingMate = batchMates.find(id => !this.safeWriter.getPendingEditMeta(id));
+      if (missingMate) {
+        this.safeWriter.confirmEdit(editId, 'cancel');
+        db.prepare('DELETE FROM prefix_reservations WHERE edit_id = ?').run(editId);
+        db.prepare('INSERT INTO workflow_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)')
+          .run(sessionId, 'edit_cancelled', JSON.stringify({ editId, action: 'cancel', success: true, reason: 'batch_mate_missing', ...editMeta }), Date.now());
+        this.pendingBatches.delete(batchId);
+        return { success: false, message: 'Batch cancelled: a paired edit was already confirmed or expired' };
+      }
+    }
+
     const result = this.safeWriter.confirmEdit(editId, action);
 
     if (action === 'cancel') {
@@ -335,7 +351,6 @@ export class AgentRuntime {
     }
 
     // Propagate action to all other edits in the same batch atomically
-    const batchId = typeof editMeta.batchId === 'string' ? editMeta.batchId : null;
     if (batchId) {
       const batchMates = (this.pendingBatches.get(batchId) ?? []).filter(id => id !== editId);
       for (const mateId of batchMates) {
