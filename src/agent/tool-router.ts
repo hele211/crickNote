@@ -35,7 +35,7 @@ const RULES: Array<{ pattern: RegExp; bundles: BundleKey[] }> = [
   },
   // Write: requires "my/the ... note" as the object of the edit verb
   {
-    pattern: /\bedit\s+(my|the)\s+\w+\s+note\b|\bupdate\s+(my|the)\s+\w+\s+note\b|\bappend\s+to\s+(my|the)\s+\w+\s+note\b|\bmodify\s+(my|the)\s+\w+\s+note\b/i,
+    pattern: /\b(edit|update|modify)\s+(my|the)\s+[\w-]+(?:\s+[\w-]+)*\s+note\b|\bappend\s+to\s+(my|the)\s+[\w-]+(?:\s+[\w-]+)*\s+note\b/i,
     bundles: ['write'],
   },
   // Tasks: "add a task", "my task/todo", "mark done"
@@ -89,8 +89,8 @@ export function routeTools(message: string): string[] {
 export function needsVaultAccess(text: string): boolean {
   const vaultObj = '(vault|notes|files|diary|obsidian)';
   return new RegExp(
-    `don['']?t have access to your ${vaultObj}` +
-    `|cannot (search|read|look) your ${vaultObj}` +
+    `(?:do not|don['']?t) have access to your ${vaultObj}` +
+    `|cannot (search|read|look|access) your ${vaultObj}` +
     `|no access to your ${vaultObj}` +
     `|need vault access` +
     `|unable to (search|read|access) your ${vaultObj}` +
