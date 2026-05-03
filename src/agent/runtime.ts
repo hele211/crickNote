@@ -15,6 +15,7 @@ import { createSerialTools } from './tools/serial-tools.js';
 import { createKbTools } from './tools/kb-tools.js';
 import { assembleSystemPrompt } from './context.js';
 import { SafeWriter, type EditProposal } from '../editing/safe-writer.js';
+import { appendFolderChangelog } from '../editing/changelog.js';
 import { getDatabase } from '../storage/database.js';
 import { logger } from '../utils/logger.js';
 
@@ -211,7 +212,44 @@ export class AgentRuntime {
         // Check if result is a pending edit
         try {
           const parsed = JSON.parse(result);
-          if (parsed.type === 'pending_edit') {
+
+          // Helper: propose a single pending_edit and push to pendingEdits
+          const proposeOne = (edit: Record<string, unknown>) => {
+            const absolutePath = edit.path as string;
+            const normalizedPath = path.normalize(absolutePath);
+            if (!path.isAbsolute(normalizedPath) || (normalizedPath !== this.realVaultPath && !normalizedPath.startsWith(this.realVaultPath + path.sep))) {
+              log.warn('Path escapes vault boundary', { path: absolutePath, tool: tc.name });
+              return null;
+            }
+            const meta: Record<string, unknown> = { operation: edit.operation ?? '', path: edit.path };
+            if (edit.reservation && typeof edit.reservation === 'object') {
+              Object.assign(meta, edit.reservation);
+            }
+            const proposal = this.safeWriter.proposeEdit(absolutePath, edit.newContent as string, userMessage, sessionId, meta);
+            const toolWarnings = Array.isArray(edit.warnings) ? (edit.warnings as string[]) : [];
+            pendingEdits.push({ editId: proposal.editId, proposal, warnings: toolWarnings });
+            if (edit.reservation && typeof edit.reservation === 'object') {
+              const { project_id } = edit.reservation as { project_id: string };
+              db.prepare('UPDATE prefix_reservations SET edit_id = ? WHERE project_id = ?').run(proposal.editId, project_id);
+            }
+            return proposal;
+          };
+
+          if (parsed.type === 'pending_edits' && Array.isArray(parsed.edits)) {
+            const confirmations: unknown[] = [];
+            for (const edit of parsed.edits as Record<string, unknown>[]) {
+              const proposal = proposeOne(edit);
+              if (!proposal) {
+                confirmations.push({ error: 'Path escapes vault boundary', path: edit.path });
+              } else {
+                confirmations.push({ status: 'pending_confirmation', path: edit.path, operation: edit.operation, editId: proposal.editId, hasConflict: proposal.hasConflict });
+              }
+            }
+            const toolResult = JSON.stringify({ status: 'pending_confirmation', edits: confirmations });
+            history.push({ role: 'tool', content: toolResult, toolCallId: tc.id });
+            db.prepare('INSERT INTO chat_messages (session_id, role, content, tool_call_id, timestamp) VALUES (?, ?, ?, ?, ?)')
+              .run(sessionId, 'tool', toolResult, tc.id, Date.now());
+          } else if (parsed.type === 'pending_edit') {
             // Vault tools now embed the resolved absolute path; validate it stays within the vault.
             const absolutePath = parsed.path as string;
             const normalizedPath = path.normalize(absolutePath);
@@ -282,6 +320,21 @@ export class AgentRuntime {
     const eventType = (action === 'cancel' || !result.success) ? 'edit_cancelled' : 'edit_confirmed';
     db.prepare('INSERT INTO workflow_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)')
       .run(sessionId, eventType, JSON.stringify({ editId, action, success: result.success, ...editMeta }), Date.now());
+
+    if (result.success && action !== 'cancel') {
+      const editPath = typeof editMeta.path === 'string' ? editMeta.path : '';
+      const operation = typeof editMeta.operation === 'string' ? editMeta.operation : 'edit';
+      if (editPath) {
+        const relPath = path.isAbsolute(editPath)
+          ? path.relative(this.realVaultPath, editPath).replace(/\\/g, '/')
+          : editPath;
+        try {
+          appendFolderChangelog({ vaultPath: this.realVaultPath, targetPath: relPath, operation, description: `${relPath} written` });
+        } catch {
+          // changelog write failures must not break the confirm response
+        }
+      }
+    }
 
     return { success: result.success, message: result.error ?? (result.success ? 'Edit applied' : 'Edit failed') };
   }

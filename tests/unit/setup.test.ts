@@ -121,4 +121,74 @@ describe('ensureVaultScaffold — template scaffolding', () => {
     expect(content).toContain('{{title}}');
     expect(content).toContain('{{date}}');
   });
+
+  it('folder-readme.md is included in DEFAULT_TEMPLATE_FILES and scaffolded', () => {
+    ensureVaultScaffold(vaultPath);
+    const filePath = path.join(vaultPath, 'Agent', 'templates', 'folder-readme.md');
+    expect(fs.existsSync(filePath)).toBe(true);
+    const content = fs.readFileSync(filePath, 'utf-8');
+    expect(content).toContain('template_version: 1');
+  });
+});
+
+describe('ensureVaultScaffold — _README.md scaffolding', () => {
+  let vaultPath: string;
+
+  beforeEach(() => {
+    vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), 'setup-readme-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(vaultPath, { recursive: true, force: true });
+  });
+
+  const ROOT_CONTENT_DIRS = [
+    'Projects',
+    'Reading/Papers',
+    'Reading/Threads',
+    'Knowledge/Concepts',
+    'Knowledge/Entities',
+    'Knowledge/Methods',
+  ];
+
+  it('creates _README.md stubs in all root content directories on first run', () => {
+    ensureVaultScaffold(vaultPath);
+    for (const rel of ROOT_CONTENT_DIRS) {
+      const readmePath = path.join(vaultPath, rel, '_README.md');
+      expect(fs.existsSync(readmePath), `missing _README.md in ${rel}`).toBe(true);
+      const content = fs.readFileSync(readmePath, 'utf-8');
+      expect(content).toContain('template_version: 1');
+    }
+  });
+
+  it('creates _README.md in existing project subfolders', () => {
+    // Pre-create a project subfolder (simulating an existing project)
+    fs.mkdirSync(path.join(vaultPath, 'Projects', 'P001-CM'), { recursive: true });
+    ensureVaultScaffold(vaultPath);
+    const readmePath = path.join(vaultPath, 'Projects', 'P001-CM', '_README.md');
+    expect(fs.existsSync(readmePath)).toBe(true);
+  });
+
+  it('creates _README.md in existing Reading/Papers subfolders', () => {
+    fs.mkdirSync(path.join(vaultPath, 'Reading', 'Papers', 'Smith2026'), { recursive: true });
+    ensureVaultScaffold(vaultPath);
+    const readmePath = path.join(vaultPath, 'Reading', 'Papers', 'Smith2026', '_README.md');
+    expect(fs.existsSync(readmePath)).toBe(true);
+  });
+
+  it('does not overwrite an existing _README.md in a subfolder', () => {
+    fs.mkdirSync(path.join(vaultPath, 'Projects', 'P001-CM'), { recursive: true });
+    const readmePath = path.join(vaultPath, 'Projects', 'P001-CM', '_README.md');
+    fs.writeFileSync(readmePath, '# scientist wrote this', 'utf-8');
+    ensureVaultScaffold(vaultPath);
+    expect(fs.readFileSync(readmePath, 'utf-8')).toBe('# scientist wrote this');
+  });
+
+  it('does not scaffold _README.md in ignored dirs (attachments, _Ops, hidden)', () => {
+    fs.mkdirSync(path.join(vaultPath, 'Projects', 'P001-CM', 'attachments'), { recursive: true });
+    fs.mkdirSync(path.join(vaultPath, 'Knowledge', '_Ops', 'Update-Logs'), { recursive: true });
+    ensureVaultScaffold(vaultPath);
+    expect(fs.existsSync(path.join(vaultPath, 'Projects', 'P001-CM', 'attachments', '_README.md'))).toBe(false);
+    expect(fs.existsSync(path.join(vaultPath, 'Knowledge', '_Ops', '_README.md'))).toBe(false);
+  });
 });

@@ -2,7 +2,7 @@ import matter from 'gray-matter';
 import { utcDateString } from '../utils/date.js';
 
 /** Note type classifications based on vault folder structure or note_kind frontmatter. */
-export type NoteType = 'experiment' | 'protocol' | 'reading' | 'diary' | 'agent' | 'series' | 'project-index' | 'knowledge' | 'review-queue' | 'unknown';
+export type NoteType = 'experiment' | 'protocol' | 'reading' | 'diary' | 'agent' | 'series' | 'project-index' | 'knowledge' | 'review-queue' | 'folder-readme' | 'unknown';
 
 /** Top-level folder name in the vault. */
 export type VaultFolder = 'Projects' | 'Protocols' | 'Reading' | 'Memory' | 'Agent';
@@ -64,6 +64,7 @@ const REQUIRED_FIELDS: Record<NoteType, string[]> = {
   agent: [],
   knowledge: [],
   'review-queue': [],
+  'folder-readme': [],
   unknown: [],
 };
 
@@ -74,6 +75,7 @@ const NOTE_KIND_MAP: Record<string, NoteType> = {
   project: 'project-index',
   protocol: 'protocol',
   reading: 'reading',
+  'folder-readme': 'folder-readme',
 };
 
 /**
@@ -90,6 +92,11 @@ export function classifyNote(filePath: string, noteKind?: string): { folder: str
     // Determine folder from path regardless
     const folder = firstSegment || 'root';
     return { folder, noteType };
+  }
+
+  // _README.md anywhere in the vault is a folder-readme, regardless of parent folder.
+  if ((normalized.split('/').pop() ?? '') === '_README.md') {
+    return { folder: firstSegment || 'root', noteType: 'folder-readme' };
   }
 
   // Path-based classification
@@ -167,7 +174,8 @@ function validateFrontmatter(
     }
   }
 
-  if (frontmatter['status'] && typeof frontmatter['status'] === 'string') {
+  if (frontmatter['status'] && typeof frontmatter['status'] === 'string'
+      && noteType !== 'folder-readme' && noteType !== 'knowledge' && noteType !== 'unknown') {
     const validStatuses = ['draft', 'in-progress', 'complete'];
     const reviewQueueStatuses = ['pending', 'resolved', 'dismissed'];
     const allValid = noteType === 'review-queue'

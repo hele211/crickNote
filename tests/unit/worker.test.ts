@@ -24,4 +24,10 @@ describe('shouldIgnoreIngestionPath', () => {
     expect(shouldIgnoreIngestionPath('Reading/Papers/smith-2026.md')).toBe(false);
     expect(shouldIgnoreIngestionPath('Knowledge/Concepts/il-42.md')).toBe(false);
   });
+
+  it('ignores _changelog.md files in any content folder', () => {
+    expect(shouldIgnoreIngestionPath('Projects/P001-CM/_changelog.md')).toBe(true);
+    expect(shouldIgnoreIngestionPath('Reading/Papers/_changelog.md')).toBe(true);
+    expect(shouldIgnoreIngestionPath('Knowledge/Concepts/_changelog.md')).toBe(true);
+  });
 });

@@ -479,6 +479,30 @@ thread_topic:
 ## Extensions
 `,
 
+  'folder-readme.md': `---
+template_version: 1
+
+# CrickNote automatically adds:
+# note_kind, created
+
+# Add your own fields below:
+status: active
+pi_name:
+---
+
+# {{title}}
+
+## Goal
+
+## Hypothesis
+
+## Current Status
+
+## Key Findings
+
+## Open Questions
+`,
+
   'README.md': `# CrickNote Templates
 
 Edit these files to customize note layout for your lab.

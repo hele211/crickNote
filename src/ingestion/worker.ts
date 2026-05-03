@@ -245,6 +245,7 @@ export function shouldIgnoreIngestionPath(relativePath: string): boolean {
     /(^|\/)attachments\//.test(normalized) ||
     /^(Reading\/[^/]+|Projects\/[^/]+)\/[^/]+-mapping(?:-\d{8}T\d{6})?\.md$/.test(normalized) ||
     normalized.startsWith('Knowledge/_Ops/') ||
-    /^Knowledge\/(Concepts|Entities|Methods)\/_index\.md$/.test(normalized)
+    /^Knowledge\/(Concepts|Entities|Methods)\/_index\.md$/.test(normalized) ||
+    /(^|\/)_changelog\.md$/.test(normalized)
   );
 }

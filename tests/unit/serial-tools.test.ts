@@ -180,20 +180,20 @@ describe('create_project', () => {
   });
   afterEach(() => { db.close(); fs.rmSync(vaultPath, { recursive: true, force: true }); });
 
-  it('returns pending_edit with correct path and reservation', async () => {
+  it('returns pending_edits with correct _index.md path and reservation', async () => {
     const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
     const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
     const r = JSON.parse(await tool.execute({ title: 'Cell Migration', prefix: 'CM' }));
-    expect(r.type).toBe('pending_edit');
-    expect(r.path).toMatch(/P001-CellMigration\/_index\.md$/);
-    expect(r.reservation).toEqual({ project_id: 'P001', prefix: 'CM' });
+    expect(r.type).toBe('pending_edits');
+    expect(r.edits[0].path).toMatch(/P001-CellMigration\/_index\.md$/);
+    expect(r.edits[0].reservation).toEqual({ project_id: 'P001', prefix: 'CM' });
   });
 
   it('frontmatter built via gray-matter — injection not possible', async () => {
     const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
     const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
     const r = JSON.parse(await tool.execute({ title: 'Cell:\nmalicious: injected', prefix: 'CM' }));
-    const parsed = matter(r.newContent);
+    const parsed = matter(r.edits[0].newContent);
     expect(parsed.data.malicious).toBeUndefined();
     expect(parsed.data.note_kind).toBe('project');
   });
@@ -231,6 +231,43 @@ describe('create_project', () => {
     expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('project') as { next_val: number } | undefined)?.next_val ?? -1).toBe(2);
     const res = db.prepare('SELECT project_id FROM prefix_reservations WHERE prefix = ?').get('CM') as { project_id: string } | undefined;
     expect(res?.project_id).toBe('P001');
+  });
+
+  it('returns pending_edits (plural) with exactly two edits: _index.md and _README.md', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
+    const r = JSON.parse(await tool.execute({ title: 'Cell Migration', prefix: 'CM' }));
+    expect(r.type).toBe('pending_edits');
+    expect(Array.isArray(r.edits)).toBe(true);
+    expect(r.edits).toHaveLength(2);
+  });
+
+  it('first edit is _index.md and carries the reservation', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
+    const r = JSON.parse(await tool.execute({ title: 'Cell Migration', prefix: 'CM' }));
+    const first = r.edits[0];
+    expect(first.type).toBe('pending_edit');
+    expect(first.path).toMatch(/P001-CellMigration\/_index\.md$/);
+    expect(first.reservation).toEqual({ project_id: 'P001', prefix: 'CM' });
+  });
+
+  it('second edit is _README.md with no reservation field', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
+    const r = JSON.parse(await tool.execute({ title: 'Cell Migration', prefix: 'CM' }));
+    const second = r.edits[1];
+    expect(second.type).toBe('pending_edit');
+    expect(second.path).toMatch(/P001-CellMigration\/_README\.md$/);
+    expect(second.reservation).toBeUndefined();
+  });
+
+  it('_README.md edit content contains template_version frontmatter', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
+    const r = JSON.parse(await tool.execute({ title: 'Cell Migration', prefix: 'CM' }));
+    const readmeEdit = r.edits[1];
+    expect(readmeEdit.newContent).toContain('template_version: 1');
   });
 });
 
@@ -525,9 +562,10 @@ describe('create_experiment and create_protocol — template integration', () =>
     const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
     // create_project allocates its own reservation — do NOT pre-insert one or the tool will reject it as a collision
     const r = JSON.parse(await tool.execute({ title: 'My Project', prefix: 'XY' }));
-    expect(r.type).toBe('pending_edit');
-    expect(Array.isArray(r.warnings)).toBe(true);
-    const parsed = matter(r.newContent);
+    expect(r.type).toBe('pending_edits');
+    const indexEdit = r.edits[0];
+    expect(Array.isArray(indexEdit.warnings)).toBe(true);
+    const parsed = matter(indexEdit.newContent);
     expect(parsed.content).toContain('<!-- AUTO-GENERATED: experiment-log -->');
     expect(parsed.content).toContain('<!-- AUTO-GENERATED: project-summary -->');
   });
@@ -542,8 +580,9 @@ describe('create_experiment and create_protocol — template integration', () =>
     const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
 
     const r = JSON.parse(await tool.execute({ title: 'My Project', prefix: 'XY' }));
-    expect(r.warnings).toEqual([]);
-    const parsed = matter(r.newContent);
+    const indexEdit = r.edits[0];
+    expect(indexEdit.warnings).toEqual([]);
+    const parsed = matter(indexEdit.newContent);
     expect(parsed.data.id).toBe('P001');
     expect(parsed.data.prefix).toBe('XY');
     expect(parsed.content).toContain('Project ID: P001');

@@ -38,6 +38,50 @@ export function ensureVaultScaffold(vaultPath: string): void {
       fs.writeFileSync(filePath, content, 'utf-8');
     }
   }
+
+  // Scaffold _README.md stubs in root content folders and existing subfolders.
+  // Never overwrite a file the scientist has already written.
+  const readmeTemplate = DEFAULT_TEMPLATE_FILES['folder-readme.md'] ?? '';
+  const readmeDirs = scaffoldReadmeDirs(vaultPath);
+  for (const dir of readmeDirs) {
+    const readmePath = path.join(dir, '_README.md');
+    if (!fs.existsSync(readmePath)) {
+      fs.writeFileSync(readmePath, readmeTemplate, 'utf-8');
+    }
+  }
+}
+
+/**
+ * Collect all directories that should receive a _README.md stub:
+ * - Root content folders: Projects/, Reading/Papers, Reading/Threads,
+ *   Knowledge/Concepts, Knowledge/Entities, Knowledge/Methods
+ * - Their immediate non-ignored subdirectories (one level deep)
+ *
+ * Ignored: attachments/, _Ops/, hidden dirs (start with .)
+ */
+function scaffoldReadmeDirs(vaultPath: string): string[] {
+  const rootContentDirs = [
+    path.join(vaultPath, 'Projects'),
+    path.join(vaultPath, 'Reading', 'Papers'),
+    path.join(vaultPath, 'Reading', 'Threads'),
+    path.join(vaultPath, 'Knowledge', 'Concepts'),
+    path.join(vaultPath, 'Knowledge', 'Entities'),
+    path.join(vaultPath, 'Knowledge', 'Methods'),
+  ];
+
+  const result: string[] = [];
+  for (const dir of rootContentDirs) {
+    if (!fs.existsSync(dir)) continue;
+    result.push(dir);
+    // Walk one level of subdirectories
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith('.')) continue;
+      if (entry.name === 'attachments' || entry.name === '_Ops' || entry.name === 'Review-Queue') continue;
+      result.push(path.join(dir, entry.name));
+    }
+  }
+  return result;
 }
 
 export async function setup(): Promise<void> {

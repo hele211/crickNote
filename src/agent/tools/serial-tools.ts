@@ -8,7 +8,7 @@ import { validatePrefix, getNextSerial } from '../../storage/serial.js';
 import { resolveVaultPath } from '../../utils/paths.js';
 import { fencedSectionUpdate } from '../../editing/auto-writer.js';
 import { logger } from '../../utils/logger.js';
-import { renderNoteTemplate, loadAndValidateTemplate, type RenderResult, type LoadResult, type TemplateKind } from '../../templates/template-loader.js';
+import { renderNoteTemplate, loadAndValidateTemplate, DEFAULT_TEMPLATE_FILES, type RenderResult, type LoadResult, type TemplateKind } from '../../templates/template-loader.js';
 
 const log = logger.child('serial-tools');
 const RESERVED_PREFIXES = new Set(['PR', 'P']);
@@ -282,13 +282,22 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
           return JSON.stringify({ error: (err as Error).message });
         }
         const newContent = matter.stringify(renderResult.body, renderResult.frontmatter);
-        let absPath: string;
+        let absIndexPath: string;
+        let absReadmePath: string;
         try {
-          absPath = resolveVaultPath(vaultPath, path.join('Projects', folderName, '_index.md'));
+          absIndexPath = resolveVaultPath(vaultPath, path.join('Projects', folderName, '_index.md'));
+          absReadmePath = resolveVaultPath(vaultPath, path.join('Projects', folderName, '_README.md'));
         } catch {
           return JSON.stringify({ error: 'Resolved project path is outside the vault.' });
         }
-        return JSON.stringify({ type: 'pending_edit', operation: 'create_project', path: absPath, newContent, reservation: { project_id: projectId, prefix: rawPrefix }, warnings: renderResult.warnings });
+        const readmeContent = (DEFAULT_TEMPLATE_FILES['folder-readme.md'] ?? '').replace(/\{\{title\}\}/g, title);
+        return JSON.stringify({
+          type: 'pending_edits',
+          edits: [
+            { type: 'pending_edit', operation: 'create_project', path: absIndexPath, newContent, reservation: { project_id: projectId, prefix: rawPrefix }, warnings: renderResult.warnings },
+            { type: 'pending_edit', operation: 'create_readme', path: absReadmePath, newContent: readmeContent },
+          ],
+        });
       },
     },
 
