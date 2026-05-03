@@ -14,6 +14,12 @@ export class ToolRegistry {
   private tools = new Map<string, ToolHandler>();
   register(handler: ToolHandler): void { this.tools.set(handler.definition.name, handler); }
   getDefinitions(): ToolDefinition[] { return Array.from(this.tools.values()).map(h => h.definition); }
+  getDefinitionsByName(names: string[]): ToolDefinition[] {
+    const nameSet = new Set(names);
+    return Array.from(this.tools.values())
+      .filter(h => nameSet.has(h.definition.name))
+      .map(h => h.definition);
+  }
   has(name: string): boolean { return this.tools.has(name); }
 
   async execute(toolCall: ToolCall, context?: ToolContext): Promise<string> {
