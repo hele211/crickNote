@@ -68,6 +68,8 @@ export function assembleSystemPrompt(
   const { agentMd, soulMd, skills } = loadAgentConfig(vaultPath);
   const activeToolNames = new Set(tools.map(t => t.name));
   const hasTools = tools.length > 0;
+  const hasVaultWrite = activeToolNames.has('vault_write') || activeToolNames.has('vault_append');
+  const hasVaultSearch = activeToolNames.has('vault_search');
   const hasReadingTools = activeToolNames.has('create_reading_note') || activeToolNames.has('ingest_reading_bundle');
   const hasDiaryTool = activeToolNames.has('get_today_diary');
   const hasWeekTool = activeToolNames.has('get_week_plan');
@@ -76,16 +78,23 @@ export function assembleSystemPrompt(
 
   // Layer 1: Base instructions — adapt to tool availability
   if (hasTools) {
+    const rules: string[] = [
+      '- Be precise with scientific data — never fabricate results.',
+      '- When uncertain, say so and ask the user to clarify.',
+    ];
+    if (hasVaultWrite) {
+      rules.unshift('- When writing to the vault, you MUST use the appropriate tool. Never output vault content as plain text.');
+      rules.unshift('- Always use structured frontmatter when creating experiment or reading notes.');
+    }
+    if (hasVaultSearch) {
+      rules.unshift('- When asked about experiments, search the vault first before answering.');
+    }
     sections.push(`You are CrickNote, a scientific research assistant for biology/life sciences.
 You help researchers record experiments, retrieve data, manage protocols, track literature, and plan their work.
-You operate on an Obsidian vault and can read, search, and write notes.
+You operate on an Obsidian vault and can use the active tools to assist you.
 
 IMPORTANT RULES:
-- When writing to the vault, you MUST use the appropriate tool. Never output vault content as plain text.
-- Always use structured frontmatter when creating experiment or reading notes.
-- When asked about experiments, search the vault first before answering.
-- Be precise with scientific data — never fabricate results.
-- When uncertain, say so and ask the user to clarify.`);
+${rules.join('\n')}`);
   } else {
     sections.push(`You are CrickNote, a scientific research assistant for biology/life sciences.
 You help researchers think through experiments, explain techniques, and answer scientific questions.
