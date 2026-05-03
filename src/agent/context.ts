@@ -66,11 +66,17 @@ export function assembleSystemPrompt(
   tools: ToolDefinition[]
 ): string {
   const { agentMd, soulMd, skills } = loadAgentConfig(vaultPath);
+  const activeToolNames = new Set(tools.map(t => t.name));
+  const hasTools = tools.length > 0;
+  const hasReadingTools = activeToolNames.has('create_reading_note') || activeToolNames.has('ingest_reading_bundle');
+  const hasDiaryTool = activeToolNames.has('get_today_diary');
+  const hasWeekTool = activeToolNames.has('get_week_plan');
 
   const sections: string[] = [];
 
-  // Layer 1: Base instructions
-  sections.push(`You are CrickNote, a scientific research assistant for biology/life sciences.
+  // Layer 1: Base instructions — adapt to tool availability
+  if (hasTools) {
+    sections.push(`You are CrickNote, a scientific research assistant for biology/life sciences.
 You help researchers record experiments, retrieve data, manage protocols, track literature, and plan their work.
 You operate on an Obsidian vault and can read, search, and write notes.
 
@@ -80,8 +86,17 @@ IMPORTANT RULES:
 - When asked about experiments, search the vault first before answering.
 - Be precise with scientific data — never fabricate results.
 - When uncertain, say so and ask the user to clarify.`);
+  } else {
+    sections.push(`You are CrickNote, a scientific research assistant for biology/life sciences.
+You help researchers think through experiments, explain techniques, and answer scientific questions.
+Vault access is not available for this query — answer from your scientific knowledge only.
+Be precise with scientific data — never fabricate results.
+When uncertain, say so and ask the user to clarify.`);
+  }
 
-  sections.push(`## Reading Workflow
+  // Layer 2: Reading workflow — only when reading tools are active
+  if (hasReadingTools) {
+    sections.push(`## Reading Workflow
 
 Preferred reading-note order:
 1. Call reading_pipeline_status first.
@@ -89,63 +104,70 @@ Preferred reading-note order:
 3. If the note is ready, call compile_reading_note.
 4. After the user reviews the draft, call set_reading_note_status with status: complete.
 5. Then continue with kb_suggest, kb_write_mapping, and kb_apply.`);
+  }
 
-  // Layer 2: Agent config (user's core rules)
+  // Layer 3: Agent config (user's core rules)
   if (agentMd) {
     sections.push(`## User-Defined Agent Rules\n\n${agentMd}`);
   }
 
-  // Layer 3: Soul (personality)
+  // Layer 4: Soul (personality)
   if (soulMd) {
     sections.push(`## Personality\n\n${soulMd}`);
   }
 
-  // Layer 4: Skills
+  // Layer 5: Skills
   for (const skill of skills) {
     sections.push(`## Skill\n\n${skill}`);
   }
 
-  // Layer 5: Today's diary (cached to avoid repeated disk reads)
-  const today = localDateString();
-  const diaryPath = path.join(vaultPath, 'Memory', 'Daily', `${today}.md`);
-  const diary = cachedReadFile(diaryPath);
-  if (diary !== null) {
-    sections.push(`## Today's Diary (${today})\n\n${diary}`);
+  // Layer 6: Today's diary — only when diary tool is active
+  if (hasDiaryTool) {
+    const today = localDateString();
+    const diaryPath = path.join(vaultPath, 'Memory', 'Daily', `${today}.md`);
+    const diary = cachedReadFile(diaryPath);
+    if (diary !== null) {
+      sections.push(`## Today's Diary (${today})\n\n${diary}`);
+    }
   }
 
-  // Layer 5b: KB lint reminder + unfinished KB work count
-  const lintReportsDir = path.join(vaultPath, 'Knowledge', '_Ops', 'Lint-Reports');
-  if (fs.existsSync(lintReportsDir)) {
-    const reports = fs.readdirSync(lintReportsDir)
-      .filter(f => /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
-      .sort();
+  // Layer 7: KB lint reminder — only when kb_lint is active
+  if (activeToolNames.has('kb_lint')) {
+    const lintReportsDir = path.join(vaultPath, 'Knowledge', '_Ops', 'Lint-Reports');
+    if (fs.existsSync(lintReportsDir)) {
+      const reports = fs.readdirSync(lintReportsDir)
+        .filter(f => /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
+        .sort();
 
-    const unfinishedKbCount = getCachedUnfinishedKbCount(vaultPath);
+      const unfinishedKbCount = getCachedUnfinishedKbCount(vaultPath);
 
-    if (reports.length === 0) {
-      const kbMsg = unfinishedKbCount > 0 ? ` ${unfinishedKbCount} reading note(s) have unfinished KB work.` : '';
-      sections.push(`**KB reminder:** KB lint has never run. Run kb_lint to check knowledge base health.${kbMsg}`);
-    } else {
-      const lastReport = reports[reports.length - 1];
-      const lastDate = new Date(lastReport.replace('.md', ''));
-      const daysAgo = (Date.now() - lastDate.getTime()) / 86400000;
-      const kbMsg = unfinishedKbCount > 0 ? ` ${unfinishedKbCount} reading note(s) have unfinished KB work.` : '';
-      if (daysAgo > 14) {
-        sections.push(`**KB reminder:** KB lint hasn't run in ${Math.floor(daysAgo)} days. Run kb_lint to check for issues.${kbMsg}`);
-      } else if (unfinishedKbCount > 0) {
-        sections.push(`**KB reminder:** ${unfinishedKbCount} reading note(s) have unfinished KB work (kb_status: pending/mapped/merged_with_review).`);
+      if (reports.length === 0) {
+        const kbMsg = unfinishedKbCount > 0 ? ` ${unfinishedKbCount} reading note(s) have unfinished KB work.` : '';
+        sections.push(`**KB reminder:** KB lint has never run. Run kb_lint to check knowledge base health.${kbMsg}`);
+      } else {
+        const lastReport = reports[reports.length - 1];
+        const lastDate = new Date(lastReport.replace('.md', ''));
+        const daysAgo = (Date.now() - lastDate.getTime()) / 86400000;
+        const kbMsg = unfinishedKbCount > 0 ? ` ${unfinishedKbCount} reading note(s) have unfinished KB work.` : '';
+        if (daysAgo > 14) {
+          sections.push(`**KB reminder:** KB lint hasn't run in ${Math.floor(daysAgo)} days. Run kb_lint to check for issues.${kbMsg}`);
+        } else if (unfinishedKbCount > 0) {
+          sections.push(`**KB reminder:** ${unfinishedKbCount} reading note(s) have unfinished KB work (kb_status: pending/mapped/merged_with_review).`);
+        }
       }
     }
   }
 
-  // Layer 6: Current week's plan (cached to avoid repeated disk reads)
+  // Layer 8: Current week's plan — only when week-plan tool is active
   // Use ISO week year (not calendar year) so late-December dates like 29 Dec 2025
   // (= ISO week 1 of 2026) map to the correct weekly file.
-  const { week: weekNum, isoYear } = getISOWeekInfo(new Date());
-  const weekPath = path.join(vaultPath, 'Memory', 'Weekly', `${isoYear}-W${String(weekNum).padStart(2, '0')}.md`);
-  const weekPlan = cachedReadFile(weekPath);
-  if (weekPlan !== null) {
-    sections.push(`## This Week's Plan\n\n${weekPlan}`);
+  if (hasWeekTool) {
+    const { week: weekNum, isoYear } = getISOWeekInfo(new Date());
+    const weekPath = path.join(vaultPath, 'Memory', 'Weekly', `${isoYear}-W${String(weekNum).padStart(2, '0')}.md`);
+    const weekPlan = cachedReadFile(weekPath);
+    if (weekPlan !== null) {
+      sections.push(`## This Week's Plan\n\n${weekPlan}`);
+    }
   }
 
   return sections.join('\n\n---\n\n');
