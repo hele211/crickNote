@@ -46,6 +46,11 @@ describe('classifyNote — folder-readme', () => {
     const result = classifyNote('Projects/P001-CM/_README.md', 'folder-readme');
     expect(result.noteType).toBe('folder-readme');
   });
+
+  it('classifyNote with conflicting note_kind (experiment) still returns folder-readme — basename wins', () => {
+    const result = classifyNote('Projects/P001-CM/_README.md', 'experiment');
+    expect(result.noteType).toBe('folder-readme');
+  });
 });
 
 describe('parseNote — folder-readme', () => {
@@ -59,6 +64,12 @@ describe('parseNote — folder-readme', () => {
 
   it('parseNote path-classifies _README.md without frontmatter note_kind', () => {
     const content = `---\nstatus: active\n---\n# My Project\n`;
+    const result = parseNote('Projects/P001-CM/_README.md', content);
+    expect(result.noteType).toBe('folder-readme');
+  });
+
+  it('parseNote with conflicting note_kind frontmatter still classifies as folder-readme — basename wins', () => {
+    const content = `---\nnote_kind: experiment\nstatus: active\n---\n# My Project\n`;
     const result = parseNote('Projects/P001-CM/_README.md', content);
     expect(result.noteType).toBe('folder-readme');
   });

@@ -141,5 +141,19 @@ describe('SafeWriter', () => {
 
       expect(writer.preflightEdit(proposal.editId, 'force')).toEqual({ ok: true });
     });
+
+    it('does not consume the proposal — confirmEdit still succeeds after preflight', () => {
+      const filePath = path.join(tmpDir, 'preflight-non-consuming.md');
+      const content = '# Preflighted\n';
+      const proposal = writer.proposeEdit(filePath, content, 'q', 'sess');
+
+      expect(writer.preflightEdit(proposal.editId, 'apply')).toEqual({ ok: true });
+      // preflight must not write the file
+      expect(fs.existsSync(filePath)).toBe(false);
+      // proposal must still be consumable by confirmEdit
+      const result = writer.confirmEdit(proposal.editId, 'apply');
+      expect(result.success).toBe(true);
+      expect(fs.readFileSync(filePath, 'utf-8')).toBe(content);
+    });
   });
 });

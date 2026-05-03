@@ -3,11 +3,25 @@ import path from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { CrickNoteConfig } from '../config/config.js';
 import { validateAuthMessage, type AuthMessage } from './auth.js';
-import { AgentRuntime } from '../agent/runtime.js';
+import { AgentRuntime, type RuntimeResponse } from '../agent/runtime.js';
 import { RateLimiter } from './rate-limiter.js';
 import { logger } from '../utils/logger.js';
 
 const log = logger.child('websocket');
+
+export function mapPendingEditForPlugin(
+  pe: RuntimeResponse['pendingEdits'][number],
+  vaultPath: string,
+): { editId: string; batchId: string | undefined; path: string; diff: string; hasConflict: boolean; warnings: string[] } {
+  return {
+    editId: pe.editId,
+    batchId: pe.batchId,
+    path: path.relative(vaultPath, pe.proposal.filePath),
+    diff: pe.proposal.diff,
+    hasConflict: pe.proposal.hasConflict,
+    warnings: pe.warnings,
+  };
+}
 
 interface AuthenticatedClient {
   ws: WebSocket;
@@ -136,16 +150,7 @@ export function createWebSocketServer(config: CrickNoteConfig): Promise<WebSocke
               }
             },
           );
-          // Flatten EditProposal into a shape the plugin can render directly.
-          // Strip newContent (large, not needed by UI) and normalize filePath → path.
-          const pendingEdits = response.pendingEdits.map(pe => ({
-            editId: pe.editId,
-            batchId: pe.batchId,
-            path: path.relative(realVaultPath, pe.proposal.filePath),
-            diff: pe.proposal.diff,
-            hasConflict: pe.proposal.hasConflict,
-            warnings: pe.warnings,
-          }));
+          const pendingEdits = response.pendingEdits.map(pe => mapPendingEditForPlugin(pe, realVaultPath));
           log.info('Chat response sent', {
             sessionId: client.sessionId,
             toolCalls: response.toolCalls.length,
