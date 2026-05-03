@@ -339,11 +339,9 @@ export async function renderNoteTemplate({
  */
 export function renderFolderReadmeSync(vaultPath: string, title: string, created: string): string {
   const context = { title, date: created };
-  const loadResult = loadTemplate(vaultPath, 'folder-readme', context);
-  const templateFrontmatter = loadResult instanceof Error ? {} : loadResult.templateFrontmatter;
-  const templateBody = loadResult instanceof Error
-    ? DEFAULT_BODY_RENDERERS['folder-readme'](context)
-    : loadResult.templateBody;
+  const loadResult = loadAndValidateTemplate(vaultPath, 'folder-readme', context);
+  if (loadResult instanceof Error) throw loadResult;
+  const { templateFrontmatter, templateBody } = loadResult;
   const frontmatter = mergeTemplate('folder-readme', templateFrontmatter, { note_kind: 'folder-readme', created });
   const body = substituteBody(templateBody, context, []);
   return matter.stringify(body, frontmatter);

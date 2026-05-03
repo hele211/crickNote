@@ -140,6 +140,7 @@ export function createWebSocketServer(config: CrickNoteConfig): Promise<WebSocke
           // Strip newContent (large, not needed by UI) and normalize filePath → path.
           const pendingEdits = response.pendingEdits.map(pe => ({
             editId: pe.editId,
+            batchId: pe.batchId,
             path: path.relative(realVaultPath, pe.proposal.filePath),
             diff: pe.proposal.diff,
             hasConflict: pe.proposal.hasConflict,

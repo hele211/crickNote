@@ -86,17 +86,16 @@ export function classifyNote(filePath: string, noteKind?: string): { folder: str
   const normalized = filePath.replace(/\\/g, '/');
   const firstSegment = normalized.split('/')[0];
 
-  // note_kind frontmatter takes precedence
-  if (noteKind && NOTE_KIND_MAP[noteKind]) {
-    const noteType = NOTE_KIND_MAP[noteKind];
-    // Determine folder from path regardless
-    const folder = firstSegment || 'root';
-    return { folder, noteType };
-  }
-
-  // _README.md anywhere in the vault is a folder-readme, regardless of parent folder.
+  // _README.md anywhere in the vault is a folder-readme, regardless of parent folder or frontmatter.
   if ((normalized.split('/').pop() ?? '') === '_README.md') {
     return { folder: firstSegment || 'root', noteType: 'folder-readme' };
+  }
+
+  // note_kind frontmatter takes precedence for non-README notes
+  if (noteKind && NOTE_KIND_MAP[noteKind]) {
+    const noteType = NOTE_KIND_MAP[noteKind];
+    const folder = firstSegment || 'root';
+    return { folder, noteType };
   }
 
   // Path-based classification
