@@ -35,7 +35,7 @@ const RULES: Array<{ pattern: RegExp; bundles: BundleKey[] }> = [
   },
   // Write: requires "my/the ... note" as the object of the edit verb
   {
-    pattern: /\bedit\s+(my|the)\s+\w+\s+note\b|\bupdate\s+(my|the)\s+\w+\s+note\b|\bappend\s+to\s+(my|the)\b|\bmodify\s+(my|the)\s+\w+\s+note\b/i,
+    pattern: /\bedit\s+(my|the)\s+\w+\s+note\b|\bupdate\s+(my|the)\s+\w+\s+note\b|\bappend\s+to\s+(my|the)\s+\w+\s+note\b|\bmodify\s+(my|the)\s+\w+\s+note\b/i,
     bundles: ['write'],
   },
   // Tasks: "add a task", "my task/todo", "mark done"
