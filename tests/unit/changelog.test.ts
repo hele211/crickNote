@@ -161,6 +161,8 @@ describe('appendFolderChangelog', () => {
     // Newline replaced by space — only one log line written (no fake second line).
     const lines = content.split('\n').filter(l => l.length > 0);
     expect(lines).toHaveLength(1);
+    expect(lines[0]).not.toContain('\n');
+    expect(lines[0]).not.toContain('\r');
   });
 
   it('entry format is ISO timestamp | operation | description', () => {

@@ -186,10 +186,12 @@ describe('ensureVaultScaffold — _README.md scaffolding', () => {
   });
 
   it('does not scaffold _README.md in ignored dirs (attachments, _Ops, hidden)', () => {
-    fs.mkdirSync(path.join(vaultPath, 'Projects', 'P001-CM', 'attachments'), { recursive: true });
+    fs.mkdirSync(path.join(vaultPath, 'Projects', 'attachments'), { recursive: true });
+    fs.mkdirSync(path.join(vaultPath, 'Projects', '.hidden'), { recursive: true });
     fs.mkdirSync(path.join(vaultPath, 'Knowledge', '_Ops', 'Update-Logs'), { recursive: true });
     ensureVaultScaffold(vaultPath);
-    expect(fs.existsSync(path.join(vaultPath, 'Projects', 'P001-CM', 'attachments', '_README.md'))).toBe(false);
+    expect(fs.existsSync(path.join(vaultPath, 'Projects', 'attachments', '_README.md'))).toBe(false);
+    expect(fs.existsSync(path.join(vaultPath, 'Projects', '.hidden', '_README.md'))).toBe(false);
     expect(fs.existsSync(path.join(vaultPath, 'Knowledge', '_Ops', '_README.md'))).toBe(false);
   });
 });
