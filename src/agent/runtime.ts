@@ -25,6 +25,7 @@ interface PendingEdit {
   editId: string;
   proposal: EditProposal;
   warnings: string[];
+  batchId?: string;
 }
 
 export interface RuntimeResponse {
@@ -39,6 +40,7 @@ export class AgentRuntime {
   private safeWriter: SafeWriter;
   private config: CrickNoteConfig;
   private realVaultPath: string;
+  private pendingBatches = new Map<string, string[]>();
 
   constructor(config: CrickNoteConfig) {
     this.config = config;
@@ -214,7 +216,7 @@ export class AgentRuntime {
           const parsed = JSON.parse(result);
 
           // Helper: propose a single pending_edit and push to pendingEdits
-          const proposeOne = (edit: Record<string, unknown>) => {
+          const proposeOne = (edit: Record<string, unknown>, batchId?: string) => {
             const absolutePath = edit.path as string;
             const normalizedPath = path.normalize(absolutePath);
             if (!path.isAbsolute(normalizedPath) || (normalizedPath !== this.realVaultPath && !normalizedPath.startsWith(this.realVaultPath + path.sep))) {
@@ -222,12 +224,13 @@ export class AgentRuntime {
               return null;
             }
             const meta: Record<string, unknown> = { operation: edit.operation ?? '', path: edit.path };
+            if (batchId) meta.batchId = batchId;
             if (edit.reservation && typeof edit.reservation === 'object') {
               Object.assign(meta, edit.reservation);
             }
             const proposal = this.safeWriter.proposeEdit(absolutePath, edit.newContent as string, userMessage, sessionId, meta);
             const toolWarnings = Array.isArray(edit.warnings) ? (edit.warnings as string[]) : [];
-            pendingEdits.push({ editId: proposal.editId, proposal, warnings: toolWarnings });
+            pendingEdits.push({ editId: proposal.editId, proposal, warnings: toolWarnings, batchId });
             if (edit.reservation && typeof edit.reservation === 'object') {
               const { project_id } = edit.reservation as { project_id: string };
               db.prepare('UPDATE prefix_reservations SET edit_id = ? WHERE project_id = ?').run(proposal.editId, project_id);
@@ -236,16 +239,22 @@ export class AgentRuntime {
           };
 
           if (parsed.type === 'pending_edits' && Array.isArray(parsed.edits)) {
+            const batchId = Math.random().toString(36).slice(2, 10);
+            const batchEditIds: string[] = [];
             const confirmations: unknown[] = [];
             for (const edit of parsed.edits as Record<string, unknown>[]) {
-              const proposal = proposeOne(edit);
+              const proposal = proposeOne(edit, batchId);
               if (!proposal) {
                 confirmations.push({ error: 'Path escapes vault boundary', path: edit.path });
               } else {
+                batchEditIds.push(proposal.editId);
                 confirmations.push({ status: 'pending_confirmation', path: edit.path, operation: edit.operation, editId: proposal.editId, hasConflict: proposal.hasConflict });
               }
             }
-            const toolResult = JSON.stringify({ status: 'pending_confirmation', edits: confirmations });
+            if (batchEditIds.length > 1) {
+              this.pendingBatches.set(batchId, batchEditIds);
+            }
+            const toolResult = JSON.stringify({ status: 'pending_confirmation', batchId, edits: confirmations });
             history.push({ role: 'tool', content: toolResult, toolCallId: tc.id });
             db.prepare('INSERT INTO chat_messages (session_id, role, content, tool_call_id, timestamp) VALUES (?, ?, ?, ?, ?)')
               .run(sessionId, 'tool', toolResult, tc.id, Date.now());
@@ -322,21 +331,44 @@ export class AgentRuntime {
       .run(sessionId, eventType, JSON.stringify({ editId, action, success: result.success, ...editMeta }), Date.now());
 
     if (result.success && action !== 'cancel') {
-      const editPath = typeof editMeta.path === 'string' ? editMeta.path : '';
-      const operation = typeof editMeta.operation === 'string' ? editMeta.operation : 'edit';
-      if (editPath) {
-        const relPath = path.isAbsolute(editPath)
-          ? path.relative(this.realVaultPath, editPath).replace(/\\/g, '/')
-          : editPath;
-        try {
-          appendFolderChangelog({ vaultPath: this.realVaultPath, targetPath: relPath, operation, description: `${relPath} written` });
-        } catch {
-          // changelog write failures must not break the confirm response
+      this.writeChangelogEntry(editMeta);
+    }
+
+    // Propagate action to all other edits in the same batch atomically
+    const batchId = typeof editMeta.batchId === 'string' ? editMeta.batchId : null;
+    if (batchId) {
+      const batchMates = (this.pendingBatches.get(batchId) ?? []).filter(id => id !== editId);
+      for (const mateId of batchMates) {
+        const mateMeta = this.safeWriter.getPendingEditMeta(mateId) ?? {};
+        const mateResult = this.safeWriter.confirmEdit(mateId, action);
+        if (action === 'cancel') {
+          db.prepare('DELETE FROM prefix_reservations WHERE edit_id = ?').run(mateId);
+        }
+        const mateEventType = (action === 'cancel' || !mateResult.success) ? 'edit_cancelled' : 'edit_confirmed';
+        db.prepare('INSERT INTO workflow_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)')
+          .run(sessionId, mateEventType, JSON.stringify({ editId: mateId, action, success: mateResult.success, ...mateMeta }), Date.now());
+        if (mateResult.success && action !== 'cancel') {
+          this.writeChangelogEntry(mateMeta);
         }
       }
+      this.pendingBatches.delete(batchId);
     }
 
     return { success: result.success, message: result.error ?? (result.success ? 'Edit applied' : 'Edit failed') };
+  }
+
+  private writeChangelogEntry(editMeta: Record<string, unknown>): void {
+    const editPath = typeof editMeta.path === 'string' ? editMeta.path : '';
+    const operation = typeof editMeta.operation === 'string' ? editMeta.operation : 'edit';
+    if (!editPath) return;
+    const relPath = path.isAbsolute(editPath)
+      ? path.relative(this.realVaultPath, editPath).replace(/\\/g, '/')
+      : editPath;
+    try {
+      appendFolderChangelog({ vaultPath: this.realVaultPath, targetPath: relPath, operation, description: `${relPath} written` });
+    } catch {
+      // changelog write failures must not break the confirm response
+    }
   }
 
   /**

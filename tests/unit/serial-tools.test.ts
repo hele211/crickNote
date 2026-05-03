@@ -262,12 +262,15 @@ describe('create_project', () => {
     expect(second.reservation).toBeUndefined();
   });
 
-  it('_README.md edit content contains template_version frontmatter', async () => {
+  it('_README.md edit content is rendered via template pipeline with note_kind and title', async () => {
     const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
     const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
     const r = JSON.parse(await tool.execute({ title: 'Cell Migration', prefix: 'CM' }));
     const readmeEdit = r.edits[1];
-    expect(readmeEdit.newContent).toContain('template_version: 1');
+    expect(readmeEdit.newContent).toContain('note_kind: folder-readme');
+    expect(readmeEdit.newContent).toContain('Cell Migration');
+    // template_version is stripped by the merge pipeline and must not appear
+    expect(readmeEdit.newContent).not.toContain('template_version');
   });
 });
 

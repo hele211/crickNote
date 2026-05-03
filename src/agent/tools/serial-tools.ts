@@ -8,7 +8,7 @@ import { validatePrefix, getNextSerial } from '../../storage/serial.js';
 import { resolveVaultPath } from '../../utils/paths.js';
 import { fencedSectionUpdate } from '../../editing/auto-writer.js';
 import { logger } from '../../utils/logger.js';
-import { renderNoteTemplate, loadAndValidateTemplate, DEFAULT_TEMPLATE_FILES, type RenderResult, type LoadResult, type TemplateKind } from '../../templates/template-loader.js';
+import { renderNoteTemplate, loadAndValidateTemplate, type RenderResult, type LoadResult, type TemplateKind } from '../../templates/template-loader.js';
 
 const log = logger.child('serial-tools');
 const RESERVED_PREFIXES = new Set(['PR', 'P']);
@@ -241,6 +241,10 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         if (typeof projectTemplate === 'string') {
           return JSON.stringify({ error: projectTemplate });
         }
+        const readmeTemplate = validateTemplateBeforeAllocation('folder-readme', { title, date: today });
+        if (typeof readmeTemplate === 'string') {
+          return JSON.stringify({ error: readmeTemplate });
+        }
 
         database.prepare('DELETE FROM prefix_reservations WHERE expires_at < ?').run(Date.now());
 
@@ -290,12 +294,24 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         } catch {
           return JSON.stringify({ error: 'Resolved project path is outside the vault.' });
         }
-        const readmeContent = (DEFAULT_TEMPLATE_FILES['folder-readme.md'] ?? '').replace(/\{\{title\}\}/g, title);
+        let readmeRenderResult: RenderResult;
+        try {
+          readmeRenderResult = await renderNoteTemplate({
+            vaultPath,
+            kind: 'folder-readme',
+            protectedFrontmatter: { note_kind: 'folder-readme', created: today },
+            context: { title, date: today },
+            preloadedTemplate: readmeTemplate,
+          });
+        } catch (err) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+        const readmeContent = matter.stringify(readmeRenderResult.body, readmeRenderResult.frontmatter);
         return JSON.stringify({
           type: 'pending_edits',
           edits: [
             { type: 'pending_edit', operation: 'create_project', path: absIndexPath, newContent, reservation: { project_id: projectId, prefix: rawPrefix }, warnings: renderResult.warnings },
-            { type: 'pending_edit', operation: 'create_readme', path: absReadmePath, newContent: readmeContent },
+            { type: 'pending_edit', operation: 'create_readme', path: absReadmePath, newContent: readmeContent, warnings: readmeRenderResult.warnings },
           ],
         });
       },

@@ -11,7 +11,8 @@ export type TemplateKind =
   | 'series'
   | 'protocol'
   | 'reading-paper'
-  | 'reading-thread';
+  | 'reading-thread'
+  | 'folder-readme';
 
 export interface RenderResult {
   frontmatter: Record<string, unknown>;
@@ -29,6 +30,7 @@ const TEMPLATE_FILE_BY_KIND: Record<TemplateKind, string> = {
   'protocol':       'protocol.md',
   'reading-paper':  'reading-paper.md',
   'reading-thread': 'reading-thread.md',
+  'folder-readme':  'folder-readme.md',
 };
 
 const PROTECTED_FIELDS: Record<TemplateKind, string[]> = {
@@ -38,6 +40,7 @@ const PROTECTED_FIELDS: Record<TemplateKind, string[]> = {
   'protocol':       ['note_kind', 'id', 'title', 'version', 'category', 'created', 'last_updated', 'derived_from'],
   'reading-paper':  ['title', 'authors', 'year', 'journal', 'read_date', 'status', 'kb_status', 'related_projects', 'tags', 'doi', 'sources'],
   'reading-thread': ['title', 'authors', 'year', 'journal', 'read_date', 'status', 'kb_status', 'related_projects', 'tags', 'doi', 'sources'],
+  'folder-readme':  ['note_kind', 'created'],
 };
 
 interface TemplateContract {
@@ -47,6 +50,7 @@ interface TemplateContract {
 
 const TEMPLATE_CONTRACTS: Record<TemplateKind, TemplateContract> = {
   'experiment':     {},
+  'folder-readme':  {},
   'project-index':  {
     requiredBodyMarkers: [
       '<!-- AUTO-GENERATED: experiment-log -->',
@@ -73,6 +77,10 @@ const TEMPLATE_CONTRACTS: Record<TemplateKind, TemplateContract> = {
 const CURRENT_CONTRACT_VERSION = 1;
 
 const DEFAULT_BODY_RENDERERS: Record<TemplateKind, (ctx: Record<string, string>) => string> = {
+  'folder-readme': (ctx) => {
+    const title = ctx.title ?? '';
+    return `\n# ${title}\n\n## Goal\n\n## Hypothesis\n\n## Current Status\n\n## Key Findings\n\n## Open Questions\n`;
+  },
   'experiment': (ctx) => {
     const today = ctx.date ?? new Date().toISOString().slice(0, 10);
     const title = ctx.title ?? '';
