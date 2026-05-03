@@ -7,7 +7,7 @@ interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: number;
-  pendingEdits?: Array<{ editId: string; path: string; diff: string; hasConflict: boolean; warnings: string[] }>;
+  pendingEdits?: Array<{ editId: string; batchId?: string; path: string; diff: string; hasConflict: boolean; warnings: string[] }>;
 }
 
 export class ChatView extends ItemView {
@@ -151,18 +151,34 @@ export class ChatView extends ItemView {
 
     this.editResultHandler = (msg: Record<string, unknown>) => {
       const editId = msg.editId as string;
-      const btns = this.pendingEditButtons.get(editId);
-      if (!btns) return;
+      const allPendingEdits = this.messages.flatMap(m => m.pendingEdits ?? []);
+      const currentEdit = allPendingEdits.find(e => e.editId === editId);
+      const batchId = currentEdit?.batchId;
+      const affectedEditIds = batchId
+        ? allPendingEdits.filter(e => e.batchId === batchId).map(e => e.editId)
+        : [editId];
+      const affectedButtons = affectedEditIds
+        .map(id => [id, this.pendingEditButtons.get(id)] as const)
+        .filter((entry): entry is readonly [string, NonNullable<ReturnType<typeof this.pendingEditButtons.get>>] => Boolean(entry[1]));
+
+      if (affectedButtons.length === 0) return;
 
       if (msg.success) {
-        // Determine which action was taken based on which button shows pending text
-        if (btns.cancelBtn.textContent === 'Cancelling\u2026') {
-          btns.cancelBtn.setText('Cancelled');
-        } else {
-          btns.applyBtn.setText('Applied');
+        const clickedButtons = this.pendingEditButtons.get(editId);
+        const wasCancel = clickedButtons?.cancelBtn.textContent === 'Cancelling\u2026';
+
+        for (const [, btns] of affectedButtons) {
+          btns.applyBtn.disabled = true;
+          btns.cancelBtn.disabled = true;
+          if (btns.forceBtn) btns.forceBtn.disabled = true;
+          if (wasCancel) {
+            btns.cancelBtn.setText('Cancelled');
+          } else {
+            btns.applyBtn.setText('Applied');
+          }
         }
-        // Add Continue button
-        const continueBtn = btns.actionsEl.createEl('button', {
+
+        const continueBtn = affectedButtons[0][1].actionsEl.createEl('button', {
           cls: 'cricknote-continue-btn',
           text: 'Continue',
         });
@@ -170,8 +186,20 @@ export class ChatView extends ItemView {
           continueBtn.remove();
           this.sendMessageText('continue');
         });
+      } else if (batchId) {
+        for (const [, btns] of affectedButtons) {
+          btns.applyBtn.disabled = true;
+          btns.applyBtn.setText('Batch cancelled');
+          btns.cancelBtn.disabled = true;
+          if (btns.forceBtn) btns.forceBtn.disabled = true;
+        }
+        this.addMessage({
+          role: 'system',
+          content: `Edit failed: ${msg.message ?? 'Unknown error'}`,
+          timestamp: Date.now(),
+        });
       } else {
-        // Server rejected — re-enable buttons and show error
+        const btns = affectedButtons[0][1];
         btns.applyBtn.disabled = false;
         btns.applyBtn.setText('Apply');
         btns.cancelBtn.disabled = false;
@@ -186,7 +214,10 @@ export class ChatView extends ItemView {
           timestamp: Date.now(),
         });
       }
-      this.pendingEditButtons.delete(editId);
+
+      for (const [affectedEditId] of affectedButtons) {
+        this.pendingEditButtons.delete(affectedEditId);
+      }
     };
 
     this.plugin.ws?.on('chat_chunk', this.chatChunkHandler);
