@@ -179,6 +179,10 @@ describe('routeTools — false-positive protection', () => {
   it('does NOT route write tools for "edit my data" (no "note")', () => {
     expect(routeTools('edit my data in Excel')).not.toContain('vault_write');
   });
+  it('does NOT route write tools for "append to my data" (no "note")', () => {
+    expect(routeTools('append to my data')).not.toContain('vault_append');
+    expect(routeTools('append to my data')).not.toContain('vault_write');
+  });
   it('does NOT route diary for bare "today"', () => {
     expect(routeTools("what is today's date?")).not.toContain('get_today_diary');
   });
