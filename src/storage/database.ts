@@ -27,6 +27,10 @@ export function closeDatabase(): void {
   }
 }
 
+export function setDatabase(instance: Database.Database | null): void {
+  db = instance;
+}
+
 export function getDataDir(): string {
   const configuredDir = process.env.CRICKNOTE_DATA_DIR?.trim();
   if (configuredDir) {
