@@ -155,5 +155,20 @@ describe('SafeWriter', () => {
       expect(result.success).toBe(true);
       expect(fs.readFileSync(filePath, 'utf-8')).toBe(content);
     });
+
+    it('returns ok:false for an expired proposal', () => {
+      vi.useFakeTimers();
+      try {
+        const filePath = path.join(tmpDir, 'preflight-expired.md');
+        const proposal = writer.proposeEdit(filePath, '# content\n', 'q', 'sess');
+        vi.advanceTimersByTime(30 * 60 * 1000 + 1);
+        const result = writer.preflightEdit(proposal.editId, 'apply');
+        expect(result.ok).toBe(false);
+        expect(result.error).toMatch(/expired/i);
+        expect(fs.existsSync(filePath)).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
