@@ -17,6 +17,12 @@ const BUNDLES = {
     'create_experiment', 'create_series', 'create_protocol', 'update_project_index',
     'vault_read', 'vault_write', 'vault_append', 'vault_list',
   ],
+  // Zotero: fetch + prepare + cleanup + full reading pipeline (Zotero flow always feeds ingest_reading_bundle)
+  zotero: [
+    'zotero_fetch_item', 'zotero_prepare_bundle', 'zotero_cleanup_bundle',
+    'ingest_reading_bundle', 'reading_pipeline_status', 'set_reading_note_status', 'compile_reading_note',
+    'vault_read', 'vault_write', 'vault_append',
+  ],
   // Diary and week-plan are separate so asking about one does not inject the other.
   diary:    ['get_today_diary'],
   weekplan: ['get_week_plan'],
@@ -42,6 +48,11 @@ const RULES: Array<{ pattern: RegExp; bundles: BundleKey[] }> = [
   {
     pattern: /\badd\s+a\s+task\b|\b(show|list|my)\s+(a\s+)?task\b|\btodo\b|\bto-do\b|\bmark\s+done\b/i,
     bundles: ['tasks'],
+  },
+  // Zotero: any mention of Zotero routes the full Zotero + reading bundle
+  {
+    pattern: /\bzotero\b/i,
+    bundles: ['zotero'],
   },
   // Reading: possessive "my paper", or reading-specific workflow verbs
   {
