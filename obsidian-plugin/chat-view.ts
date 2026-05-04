@@ -55,6 +55,7 @@ export class ChatView extends ItemView {
 
     // Messages area
     this.messagesEl = container.createDiv({ cls: 'cricknote-messages' });
+    this.messages = [];
 
     // Replay persisted history, or show welcome for new sessions.
     const savedData = ((await this.plugin.loadData()) as CrickNotePluginData | null) ?? {};
@@ -122,10 +123,11 @@ export class ChatView extends ItemView {
         ? msg.pendingEdits as ChatMessage['pendingEdits']
         : undefined;
 
-      this.messages.push({ role: 'assistant', content, timestamp: Date.now(), pendingEdits });
-      void this.saveHistory();
+      const assistantMessage: ChatMessage = { role: 'assistant', content, timestamp: Date.now(), pendingEdits };
 
       if (this.streamingMessageEl && this.streamingContentEl) {
+        this.messages.push(assistantMessage);
+        void this.saveHistory();
         // Finalize the streaming bubble: replace plain text with rendered markdown.
         this.streamingContentEl.empty();
         MarkdownRenderer.render(this.plugin.app, content, this.streamingContentEl, '', this);
@@ -137,7 +139,8 @@ export class ChatView extends ItemView {
         this.streamingText = '';
       } else {
         // No chunks arrived (e.g. streaming disabled or very fast empty reply).
-        this.addMessage({ role: 'assistant', content, timestamp: Date.now(), pendingEdits });
+        this.addMessage(assistantMessage);
+        void this.saveHistory();
       }
 
       if (this.messagesEl) {

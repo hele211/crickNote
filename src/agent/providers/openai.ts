@@ -246,6 +246,7 @@ export class OpenAIProvider implements LLMProvider {
     }
 
     const decoder = new TextDecoder();
+    const thinkFilter = new ThinkBlockFilter();
     let buffer = '';
     let toolCallIndex = 0;
 
@@ -260,7 +261,8 @@ export class OpenAIProvider implements LLMProvider {
       };
       const events: StreamChunk[] = [];
       if (parsed.message?.content) {
-        events.push({ type: 'text', text: parsed.message.content });
+        const filtered = thinkFilter.push(parsed.message.content);
+        if (filtered) events.push({ type: 'text', text: filtered });
       }
       for (const tc of parsed.message?.tool_calls ?? []) {
         const id = `ollama-tool-${++toolCallIndex}`;
