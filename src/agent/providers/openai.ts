@@ -198,38 +198,45 @@ export class OpenAIProvider implements LLMProvider {
     let buffer = '';
     let toolCallIndex = 0;
 
+    const parseLine = (line: string): StreamChunk[] => {
+      if (!line.trim()) return [];
+      const parsed = JSON.parse(line) as {
+        done?: boolean;
+        message?: {
+          content?: string;
+          tool_calls?: Array<{ function?: { name?: string; arguments?: Record<string, unknown> } }>;
+        };
+      };
+      const events: StreamChunk[] = [];
+      if (parsed.message?.content) {
+        events.push({ type: 'text', text: parsed.message.content });
+      }
+      for (const tc of parsed.message?.tool_calls ?? []) {
+        const id = `ollama-tool-${++toolCallIndex}`;
+        const name = tc.function?.name ?? '';
+        const args = JSON.stringify(tc.function?.arguments ?? {});
+        events.push({ type: 'tool_call_start', toolCall: { id, name, arguments: '' } });
+        events.push({ type: 'tool_call_delta', toolCall: { id, name, arguments: args } });
+        events.push({ type: 'tool_call_end', toolCall: { id, name, arguments: args } });
+      }
+      if (parsed.done) {
+        events.push({ type: 'done' });
+      }
+      return events;
+    };
+
     for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
       buffer += decoder.decode(chunk, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
-
       for (const line of lines) {
-        if (!line.trim()) continue;
-        const parsed = JSON.parse(line) as {
-          done?: boolean;
-          message?: {
-            content?: string;
-            tool_calls?: Array<{ function?: { name?: string; arguments?: Record<string, unknown> } }>;
-          };
-        };
-
-        if (parsed.message?.content) {
-          yield { type: 'text', text: parsed.message.content };
-        }
-
-        for (const tc of parsed.message?.tool_calls ?? []) {
-          const id = `ollama-tool-${++toolCallIndex}`;
-          const name = tc.function?.name ?? '';
-          const args = JSON.stringify(tc.function?.arguments ?? {});
-          yield { type: 'tool_call_start', toolCall: { id, name, arguments: '' } };
-          yield { type: 'tool_call_delta', toolCall: { id, name, arguments: args } };
-          yield { type: 'tool_call_end', toolCall: { id, name, arguments: args } };
-        }
-
-        if (parsed.done) {
-          yield { type: 'done' };
-        }
+        for (const event of parseLine(line)) yield event;
       }
+    }
+
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      for (const event of parseLine(buffer)) yield event;
     }
   }
 }
