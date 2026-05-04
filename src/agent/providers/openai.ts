@@ -4,8 +4,10 @@ import type { LLMProvider, Message, ToolDefinition, ChatOptions, StreamChunk } f
 export class OpenAIProvider implements LLMProvider {
   name = 'openai';
   private client: OpenAI;
+  private baseURL?: string;
 
   constructor(apiKey: string, baseURL?: string) {
+    this.baseURL = baseURL;
     this.client = new OpenAI({
       apiKey,
       ...(baseURL ? { baseURL } : {}),
@@ -17,6 +19,11 @@ export class OpenAIProvider implements LLMProvider {
     tools: ToolDefinition[],
     options: ChatOptions
   ): AsyncIterable<StreamChunk> {
+    if (this.baseURL && /127\.0\.0\.1|localhost/.test(this.baseURL) && this.baseURL.includes('11434')) {
+      yield* this.chatOllama(messages, tools, options);
+      return;
+    }
+
     const openaiMessages: OpenAI.ChatCompletionMessageParam[] = [];
 
     if (options.systemPrompt) {
@@ -109,6 +116,114 @@ export class OpenAIProvider implements LLMProvider {
           };
         }
         yield { type: 'done' };
+      }
+    }
+  }
+
+  private async *chatOllama(
+    messages: Message[],
+    tools: ToolDefinition[],
+    options: ChatOptions
+  ): AsyncIterable<StreamChunk> {
+    const ollamaMessages: Array<Record<string, unknown>> = [];
+
+    if (options.systemPrompt) {
+      ollamaMessages.push({ role: 'system', content: options.systemPrompt });
+    }
+
+    for (const m of messages) {
+      if (m.role === 'tool') {
+        ollamaMessages.push({
+          role: 'tool',
+          content: m.content,
+          tool_call_id: m.toolCallId,
+        });
+      } else if (m.role === 'assistant' && m.toolCalls?.length) {
+        ollamaMessages.push({
+          role: 'assistant',
+          content: m.content || '',
+          tool_calls: m.toolCalls.map(tc => ({
+            id: tc.id,
+            type: 'function',
+            function: {
+              name: tc.name,
+              arguments: tc.arguments,
+            },
+          })),
+        });
+      } else {
+        ollamaMessages.push({ role: m.role, content: m.content });
+      }
+    }
+
+    const ollamaTools = tools.map(t => ({
+      type: 'function',
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      },
+    }));
+
+    const nativeBaseURL = new URL(this.baseURL!);
+    if (nativeBaseURL.pathname.endsWith('/v1')) {
+      nativeBaseURL.pathname = nativeBaseURL.pathname.slice(0, -3) || '/';
+    }
+    const response = await fetch(new URL('/api/chat', nativeBaseURL), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: options.model ?? 'gpt-4o',
+        messages: ollamaMessages,
+        tools: ollamaTools.length > 0 ? ollamaTools : undefined,
+        stream: true,
+        think: false,
+        options: {
+          temperature: options.temperature ?? 0.3,
+          num_predict: options.maxTokens ?? 4096,
+        },
+      }),
+    });
+
+    if (!response.ok || !response.body) {
+      throw new Error(`Ollama chat failed: ${response.status} ${await response.text()}`);
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let toolCallIndex = 0;
+
+    for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
+      buffer += decoder.decode(chunk, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const parsed = JSON.parse(line) as {
+          done?: boolean;
+          message?: {
+            content?: string;
+            tool_calls?: Array<{ function?: { name?: string; arguments?: Record<string, unknown> } }>;
+          };
+        };
+
+        if (parsed.message?.content) {
+          yield { type: 'text', text: parsed.message.content };
+        }
+
+        for (const tc of parsed.message?.tool_calls ?? []) {
+          const id = `ollama-tool-${++toolCallIndex}`;
+          const name = tc.function?.name ?? '';
+          const args = JSON.stringify(tc.function?.arguments ?? {});
+          yield { type: 'tool_call_start', toolCall: { id, name, arguments: '' } };
+          yield { type: 'tool_call_delta', toolCall: { id, name, arguments: args } };
+          yield { type: 'tool_call_end', toolCall: { id, name, arguments: args } };
+        }
+
+        if (parsed.done) {
+          yield { type: 'done' };
+        }
       }
     }
   }
