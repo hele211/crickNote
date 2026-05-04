@@ -54,6 +54,12 @@ const RULES: Array<{ pattern: RegExp; bundles: BundleKey[] }> = [
     pattern: /\bzotero\b/i,
     bundles: ['zotero'],
   },
+  // "continue" by itself is the Continue-button signal from the Obsidian plugin after an Apply.
+  // Route to zotero bundle so compile_reading_note + vault_write are available for the next step.
+  {
+    pattern: /^continue$/i,
+    bundles: ['zotero'],
+  },
   // Reading: possessive "my paper", or reading-specific workflow verbs
   {
     pattern: /\bmy paper\b|\breading note\b|\bingest\b|\bcompile\s+(the\s+)?reading\b|\bsource bundle\b/i,
