@@ -19,7 +19,12 @@ export class OpenAIProvider implements LLMProvider {
     tools: ToolDefinition[],
     options: ChatOptions
   ): AsyncIterable<StreamChunk> {
-    if (this.baseURL && /127\.0\.0\.1|localhost/.test(this.baseURL) && this.baseURL.includes('11434')) {
+    const useNativeOllama = (() => {
+      if (!this.baseURL) return false;
+      const url = new URL(this.baseURL);
+      return (url.hostname === 'localhost' || url.hostname === '127.0.0.1') && url.port === '11434';
+    })();
+    if (useNativeOllama) {
       yield* this.chatOllama(messages, tools, options);
       return;
     }
