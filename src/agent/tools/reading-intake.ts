@@ -10,6 +10,7 @@ import {
   hasCreateHeadings,
   hasMeaningfulReadingBody,
   inferReadingPipelineStep,
+  normalizeDoi,
   normalizeReadingSourcePath,
   normalizeReadingSources,
   readingSourcesEqual,
@@ -19,8 +20,10 @@ import {
   type ReadingPipelineStep,
   type ReadingSourceType,
 } from '../../knowledge/reading-note.js';
+import { resolveReadingSourceFile } from '../../knowledge/source-loader.js';
 import { resolveVaultPath } from '../../utils/paths.js';
 import { renderNoteTemplate, type RenderResult, type TemplateKind } from '../../templates/template-loader.js';
+import { loadConfig } from '../../config/config.js';
 
 interface DiscoveredBundleFile {
   path: string;
@@ -46,7 +49,7 @@ interface MappingArtifactSummary {
 }
 
 const TEXT_SOURCE_EXTENSIONS = new Set(['.md', '.txt']);
-const IGNORED_BUNDLE_FILES = new Set(['.ds_store']);
+const IGNORED_BUNDLE_FILES = new Set(['.ds_store', '.zotero-bundle']);
 
 function normalizeBundleSlug(value: unknown): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -76,8 +79,18 @@ function classifyBundleFile(fileName: string): { type: ReadingSourceType; readab
   return { type: 'other', readable: false };
 }
 
+function getBundleBaseDir(): string {
+  try {
+    const cfg = loadConfig();
+    return cfg.zotero?.vault_pdf_dir ?? 'Reading/attachments';
+  } catch {
+    return 'Reading/attachments';
+  }
+}
+
 function discoverBundle(vaultPath: string, slug: string): BundleDiscoveryResult {
-  const bundlePath = resolveVaultPath(vaultPath, path.join('Reading', 'attachments', slug));
+  const bundleBaseDir = getBundleBaseDir();
+  const bundlePath = resolveVaultPath(vaultPath, path.join(bundleBaseDir, slug));
   const warnings: string[] = [];
 
   if (!fs.existsSync(bundlePath) || !fs.statSync(bundlePath).isDirectory()) {
@@ -87,7 +100,7 @@ function discoverBundle(vaultPath: string, slug: string): BundleDiscoveryResult 
       bundlePath,
       discoveredFiles: [],
       recommendedSources: [],
-      warnings: [`Reading bundle not found: Reading/attachments/${slug}`],
+      warnings: [`Reading bundle not found: ${bundleBaseDir}/${slug}`],
     };
   }
 
@@ -98,7 +111,7 @@ function discoverBundle(vaultPath: string, slug: string): BundleDiscoveryResult 
       continue;
     }
 
-    if (!entry.isFile()) {
+    if (!entry.isFile() && !entry.isSymbolicLink()) {
       warnings.push(`Skipping non-file bundle entry "${entry.name}".`);
       continue;
     }
@@ -124,7 +137,7 @@ function discoverBundle(vaultPath: string, slug: string): BundleDiscoveryResult 
 
   const pdfCount = discoveredFiles.filter((file) => file.type === 'pdf' && file.readable).length;
   if (pdfCount > 1) {
-    warnings.push(`Multiple PDF files found in Reading/attachments/${slug}; review the recommended sources before ingesting.`);
+    warnings.push(`Multiple PDF files found in ${bundleBaseDir}/${slug}; review the recommended sources before ingesting.`);
   }
 
   if (recommendedSources.length === 0) {
@@ -283,6 +296,44 @@ function determinePipelineStep(
   return baseStep;
 }
 
+interface CollisionCheckResult {
+  action: 'proceed' | 'stop';
+  error?: string;
+}
+
+function checkSlugCollision(
+  existingFrontmatter: Record<string, unknown>,
+  incomingArgs: { citekey?: unknown; doi?: unknown; zotero_key?: unknown }
+): CollisionCheckResult {
+  const existingZoteroKey = typeof existingFrontmatter.zotero_key === 'string' ? existingFrontmatter.zotero_key : undefined;
+  const incomingZoteroKey = typeof incomingArgs.zotero_key === 'string' && incomingArgs.zotero_key ? incomingArgs.zotero_key : undefined;
+  const existingDoi = typeof existingFrontmatter.doi === 'string' ? normalizeDoi(existingFrontmatter.doi) : undefined;
+  const incomingDoi = typeof incomingArgs.doi === 'string' && incomingArgs.doi ? normalizeDoi(incomingArgs.doi) : undefined;
+  const existingCitekey = typeof existingFrontmatter.citekey === 'string' ? existingFrontmatter.citekey : undefined;
+  const incomingCitekey = typeof incomingArgs.citekey === 'string' && incomingArgs.citekey ? incomingArgs.citekey : undefined;
+
+  // Tier 1: zotero_key — only a shared identifier if BOTH sides have it
+  if (existingZoteroKey && incomingZoteroKey) {
+    if (existingZoteroKey === incomingZoteroKey) return { action: 'proceed' };
+    return { action: 'stop', error: `Slug collision: existing note has zotero_key "${existingZoteroKey}" but incoming item has zotero_key "${incomingZoteroKey}". These are different papers. Resolve manually.` };
+  }
+
+  // Tier 2: DOI — only a shared identifier if both sides have one
+  if (existingDoi && incomingDoi) {
+    if (existingDoi === incomingDoi) return { action: 'proceed' };
+    return { action: 'stop', error: `Slug collision: existing note has doi "${existingDoi}" but incoming item has doi "${incomingDoi}". These are different papers. Resolve manually.` };
+  }
+
+  // Tier 3: citekey
+  if (existingCitekey && incomingCitekey) {
+    if (existingCitekey === incomingCitekey) return { action: 'proceed' };
+    return { action: 'stop', error: `Slug collision: existing note has citekey "${existingCitekey}" but incoming has citekey "${incomingCitekey}". No stronger ID to confirm they are the same paper. Resolve manually.` };
+  }
+
+  // Tier 4: no shared identifier
+  return { action: 'stop', error: `Slug collision: a note already exists at this slug but shares no common identifier (zotero_key, doi, citekey) with the incoming item. Resolve manually or use a different slug.` };
+}
+
 export function createReadingIntakeTools(
   vaultPath: string,
   conflictDetector?: ConflictDetector
@@ -350,6 +401,14 @@ export function createReadingIntakeTools(
               description: 'Optional source paths to exclude from the discovered bundle',
               items: { type: 'string' },
             },
+            citekey: { type: 'string', description: 'Zotero citekey (optional)' },
+            zotero_key: { type: 'string', description: 'Zotero item key (optional, e.g. ABCD1234 or 12345:ABCD1234)' },
+            zotero_managed: { type: 'boolean', description: 'Set true when called from Zotero flow' },
+            zotero_files_created: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Files written by zotero_prepare_bundle this run',
+            },
           },
           required: ['slug', 'title', 'authors', 'year', 'journal'],
         },
@@ -395,14 +454,27 @@ export function createReadingIntakeTools(
         for (const source of selectedSources) {
           let sourcePath: string;
           try {
-            sourcePath = resolveVaultPath(vaultPath, path.join('Reading', 'attachments', slug, source.path));
-          } catch {
-            return JSON.stringify({ error: `Selected source resolves outside the vault: "${source.path}"` });
+            sourcePath = resolveReadingSourceFile(
+              vaultPath,
+              slug,
+              source.path,
+              {},
+              getBundleBaseDir()
+            );
+          } catch (err) {
+            return JSON.stringify({ error: `Selected source is not allowed: "${source.path}" (${(err as Error).message})` });
           }
 
           if (!fs.existsSync(sourcePath)) {
             return JSON.stringify({ error: `Selected source file not found: "${source.path}"` });
           }
+        }
+
+        // Duplicate-slug guard: slug in both Papers and Threads
+        const papersPath = resolveVaultPath(vaultPath, path.posix.join('Reading', 'Papers', `${slug}.md`));
+        const threadsPath = resolveVaultPath(vaultPath, path.posix.join('Reading', 'Threads', `${slug}.md`));
+        if (fs.existsSync(papersPath) && fs.existsSync(threadsPath)) {
+          return JSON.stringify({ error: `Slug "${slug}" found in both Reading/Papers/ and Reading/Threads/. Resolve the duplicate manually before proceeding.` });
         }
 
         // Use an existing thread note if one is already present, otherwise default to Papers
@@ -428,6 +500,17 @@ export function createReadingIntakeTools(
           existingBody = parsed.content;
         }
 
+        if (exists && args.zotero_managed === true) {
+          const collision = checkSlugCollision(existingFrontmatter as Record<string, unknown>, {
+            citekey: args.citekey,
+            doi: args.doi,
+            zotero_key: args.zotero_key,
+          });
+          if (collision.action === 'stop') {
+            return JSON.stringify({ error: collision.error });
+          }
+        }
+
         let existingSources: ReadingSourceInput[] | undefined;
         try {
           existingSources = Array.isArray(existingFrontmatter.sources)
@@ -437,7 +520,21 @@ export function createReadingIntakeTools(
           existingSources = undefined;
         }
 
-        const sourcesChanged = exists && !readingSourcesEqual(existingSources, selectedSources);
+        let effectiveSources = selectedSources;
+        let downgradeMessage: string | undefined;
+
+        if (exists && existingSources) {
+          const existingHasPdf = existingSources.some(s => s.type === 'pdf');
+          const incomingIsNotesOnly = selectedSources.every(s => s.type !== 'pdf');
+
+          if (existingHasPdf && incomingIsNotesOnly) {
+            // Downgrade attempt: keep existing sources
+            effectiveSources = existingSources;
+            downgradeMessage = 'Existing PDF source preserved; abstract-only rerun would downgrade it. Provide a PDF to upgrade.';
+          }
+        }
+
+        const sourcesChanged = exists && !readingSourcesEqual(existingSources, effectiveSources);
         const shouldResetWorkflowState = !hasMeaningfulReadingBody(existingBody) || sourcesChanged;
 
         let frontmatter: Record<string, unknown>;
@@ -450,10 +547,12 @@ export function createReadingIntakeTools(
               journal: args.journal as string,
               doi: args.doi as string | undefined,
               related_projects: args.related_projects as string[] | undefined,
+              citekey: args.citekey as string | undefined,
+              zotero_key: args.zotero_key as string | undefined,
               status: shouldResetWorkflowState ? 'draft' : undefined,
               kb_status: shouldResetWorkflowState ? 'pending' : undefined,
             },
-            selectedSources,
+            effectiveSources,
             existingFrontmatter
           );
         } catch (err) {
@@ -462,8 +561,10 @@ export function createReadingIntakeTools(
 
         let body: string;
         let templateWarnings: string[] = [];
-        if (exists && hasMeaningfulReadingBody(existingBody)) {
-          body = syncReadingBodyTitle(existingBody, args.title as string);
+        if (!shouldResetWorkflowState) {
+          body = preserveExistingBody(args.title as string, existingBody);
+        } else if (args.zotero_managed === true) {
+          body = buildCreateReadingBody({ title: args.title as string });
         } else {
           const folderName = path.basename(path.dirname(notePath));
           const noteKind: TemplateKind = folderName === 'Threads' ? 'reading-thread' : 'reading-paper';
@@ -484,13 +585,31 @@ export function createReadingIntakeTools(
         }
         const newContent = matter.stringify(body, frontmatter);
 
-        return JSON.stringify({
+        const resultPayload: Record<string, unknown> = {
           type: 'pending_edit',
           operation: exists ? 'update' : 'create',
           path: notePath,
           newContent,
           warnings: templateWarnings,
-        });
+        };
+
+        if (typeof downgradeMessage === 'string') {
+          resultPayload.message = downgradeMessage;
+        }
+
+        if (args.zotero_managed === true) {
+          const resolvedVaultPath = fs.realpathSync(vaultPath);
+          const noteRelPath = notePath.startsWith(resolvedVaultPath + path.sep)
+            ? notePath.slice(resolvedVaultPath.length + 1).replace(/\\/g, '/')
+            : notePath;
+          resultPayload.meta = {
+            zotero_slug: slug,
+            zotero_files_created: Array.isArray(args.zotero_files_created) ? args.zotero_files_created : [],
+            note_rel_path: noteRelPath,
+          };
+        }
+
+        return JSON.stringify(resultPayload);
       },
     },
     {

@@ -13,6 +13,7 @@ import { createReadingIntakeTools } from './tools/reading-intake.js';
 import { createContextTools } from './tools/context.js';
 import { createSerialTools } from './tools/serial-tools.js';
 import { createKbTools } from './tools/kb-tools.js';
+import { createZoteroTools } from './tools/zotero-tools.js';
 import { assembleSystemPrompt } from './context.js';
 import { SafeWriter, type EditProposal } from '../editing/safe-writer.js';
 import { appendFolderChangelog } from '../editing/changelog.js';
@@ -90,6 +91,11 @@ export class AgentRuntime {
     for (const tool of createKbTools(config.vaultPath)) {
       this.registry.register(tool);
     }
+    if (config.zotero?.enabled === true) {
+      for (const tool of createZoteroTools(config.vaultPath)) {
+        this.registry.register(tool);
+      }
+    }
   }
 
   private async runAgentLoop(
@@ -100,7 +106,7 @@ export class AgentRuntime {
     onChunk?: (text: string) => void,
   ): Promise<{ content: string; toolCalls: ToolCall[]; pendingEdits: PendingEdit[] }> {
     const db = getDatabase();
-    const systemPrompt = assembleSystemPrompt(this.config.vaultPath, toolDefs);
+    const systemPrompt = assembleSystemPrompt(this.config.vaultPath, toolDefs, this.config);
     const allToolCalls: ToolCall[] = [];
     const pendingEdits: PendingEdit[] = [];
     let finalContent = '';
@@ -220,6 +226,9 @@ export class AgentRuntime {
             if (parsed.reservation && typeof parsed.reservation === 'object') {
               Object.assign(meta, parsed.reservation);
             }
+            if (parsed.meta && typeof parsed.meta === 'object' && !Array.isArray(parsed.meta)) {
+              Object.assign(meta, parsed.meta);
+            }
             const proposal = this.safeWriter.proposeEdit(absolutePath, parsed.newContent, userMessage, sessionId, meta);
             const toolWarnings = Array.isArray(parsed.warnings) ? (parsed.warnings as string[]) : [];
             pendingEdits.push({ editId: proposal.editId, proposal, warnings: toolWarnings });
@@ -233,6 +242,7 @@ export class AgentRuntime {
               operation: parsed.operation,
               editId: proposal.editId,
               hasConflict: proposal.hasConflict,
+              ...(typeof parsed.message === 'string' && parsed.message ? { message: parsed.message } : {}),
             });
             history.push({ role: 'tool', content: toolResult, toolCallId: tc.id });
             db.prepare('INSERT INTO chat_messages (session_id, role, content, tool_call_id, timestamp) VALUES (?, ?, ?, ?, ?)')

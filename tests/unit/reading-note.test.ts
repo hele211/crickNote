@@ -4,6 +4,8 @@ import {
   buildReadingFrontmatter,
   hasMeaningfulReadingBody,
   normalizeReadingSources,
+  normalizeDoi,
+  readingSourcesEqual,
   slugifyReadingTitle,
 } from '../../src/knowledge/reading-note.js';
 
@@ -106,5 +108,122 @@ describe('hasMeaningfulReadingBody — custom template sections', () => {
   it('ignores HTML comments when evaluating content', () => {
     const body = `\n# Some Paper\n\n## Claims\n<!-- placeholder -->\n## Reasoning\n## Evidence\n## Assumptions\n## Takeaways\n## Extensions\n`;
     expect(hasMeaningfulReadingBody(body)).toBe(false);
+  });
+});
+
+describe('readingSourcesEqual (order-insensitive)', () => {
+  it('treats reordered identical sources as equal', () => {
+    const a = [{ type: 'pdf' as const, path: 'paper.pdf' }, { type: 'notes' as const, path: 'abstract.md' }];
+    const b = [{ type: 'notes' as const, path: 'abstract.md' }, { type: 'pdf' as const, path: 'paper.pdf' }];
+    expect(readingSourcesEqual(a, b)).toBe(true);
+  });
+
+  it('detects genuinely different sources', () => {
+    const a = [{ type: 'pdf' as const, path: 'paper.pdf' }];
+    const b = [{ type: 'notes' as const, path: 'abstract.md' }];
+    expect(readingSourcesEqual(a, b)).toBe(false);
+  });
+
+  it('treats different lengths as unequal', () => {
+    const a = [{ type: 'pdf' as const, path: 'paper.pdf' }];
+    const b = [{ type: 'pdf' as const, path: 'paper.pdf' }, { type: 'notes' as const, path: 'notes.md' }];
+    expect(readingSourcesEqual(a, b)).toBe(false);
+  });
+});
+
+describe('normalizeDoi', () => {
+  it('lowercases the input', () => {
+    expect(normalizeDoi('10.1016/J.Cell')).toBe('10.1016/j.cell');
+  });
+
+  it('strips https://doi.org/ prefix', () => {
+    expect(normalizeDoi('https://doi.org/10.1016/j.cell.2026.01.001')).toBe('10.1016/j.cell.2026.01.001');
+  });
+
+  it('strips http://doi.org/ prefix', () => {
+    expect(normalizeDoi('http://doi.org/10.1016/j.cell')).toBe('10.1016/j.cell');
+  });
+
+  it('handles mixed case with prefix', () => {
+    expect(normalizeDoi('https://doi.org/10.1016/J.Cell.2026')).toBe('10.1016/j.cell.2026');
+  });
+
+  it('returns bare DOI unchanged (already normalized)', () => {
+    expect(normalizeDoi('10.1016/j.cell')).toBe('10.1016/j.cell');
+  });
+
+  it('strips dx.doi.org resolver prefix', () => {
+    expect(normalizeDoi('https://dx.doi.org/10.1016/j.cell')).toBe('10.1016/j.cell');
+  });
+
+  it('strips doi: prefix', () => {
+    expect(normalizeDoi('doi:10.1016/j.cell')).toBe('10.1016/j.cell');
+  });
+
+  it('trims surrounding whitespace', () => {
+    expect(normalizeDoi('  10.1016/j.cell  ')).toBe('10.1016/j.cell');
+  });
+
+  it('returns empty string for empty input', () => {
+    expect(normalizeDoi('')).toBe('');
+  });
+
+  it('strips query string from DOI URL', () => {
+    expect(normalizeDoi('https://doi.org/10.1016/j.cell?foo=bar')).toBe('10.1016/j.cell');
+  });
+});
+
+describe('buildReadingFrontmatter normalizes DOI', () => {
+  it('buildReadingFrontmatter normalizes the doi field', () => {
+    const fm = buildReadingFrontmatter(
+      { title: 'T', authors: ['A'], year: 2026, journal: 'J', doi: 'https://doi.org/10.1016/J.Cell' },
+      [{ type: 'pdf', path: 'paper.pdf' }]
+    );
+    expect(fm.doi).toBe('10.1016/j.cell');
+  });
+});
+
+describe('buildReadingFrontmatter with Zotero fields', () => {
+  it('includes citekey when provided', () => {
+    const fm = buildReadingFrontmatter(
+      { title: 'T', authors: ['A'], year: 2026, journal: 'J', citekey: 'smith2026' },
+      [{ type: 'pdf', path: 'paper.pdf' }]
+    );
+    expect(fm.citekey).toBe('smith2026');
+  });
+
+  it('includes zotero_key when provided', () => {
+    const fm = buildReadingFrontmatter(
+      { title: 'T', authors: ['A'], year: 2026, journal: 'J', zotero_key: 'ABCD1234' },
+      [{ type: 'pdf', path: 'paper.pdf' }]
+    );
+    expect(fm.zotero_key).toBe('ABCD1234');
+  });
+
+  it('omits citekey/zotero_key when not provided', () => {
+    const fm = buildReadingFrontmatter(
+      { title: 'T', authors: ['A'], year: 2026, journal: 'J' },
+      [{ type: 'pdf', path: 'paper.pdf' }]
+    );
+    expect(fm.citekey).toBeUndefined();
+    expect(fm.zotero_key).toBeUndefined();
+  });
+
+  it('preserves existing zotero_key when new meta omits it (passthrough)', () => {
+    const fm = buildReadingFrontmatter(
+      { title: 'T', authors: ['A'], year: 2026, journal: 'J' },
+      [{ type: 'pdf', path: 'paper.pdf' }],
+      { zotero_key: 'ABCD1234' }
+    );
+    expect(fm.zotero_key).toBe('ABCD1234');
+  });
+
+  it('overwrites existing zotero_key when new meta provides one', () => {
+    const fm = buildReadingFrontmatter(
+      { title: 'T', authors: ['A'], year: 2026, journal: 'J', zotero_key: 'NEW1234' },
+      [{ type: 'pdf', path: 'paper.pdf' }],
+      { zotero_key: 'OLD1234' }
+    );
+    expect(fm.zotero_key).toBe('NEW1234');
   });
 });

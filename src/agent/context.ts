@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import matter from 'gray-matter';
 import { loadAgentConfig } from '../config/config.js';
+import type { CrickNoteConfig } from '../config/config.js';
 import type { ToolDefinition } from './providers/base.js';
 import { localDateString } from '../utils/date.js';
 
@@ -63,7 +64,8 @@ function cachedReadFile(filePath: string): string | null {
 
 export function assembleSystemPrompt(
   vaultPath: string,
-  tools: ToolDefinition[]
+  tools: ToolDefinition[],
+  config?: CrickNoteConfig
 ): string {
   const { agentMd, soulMd, skills } = loadAgentConfig(vaultPath);
   const activeToolNames = new Set(tools.map(t => t.name));
@@ -73,6 +75,9 @@ export function assembleSystemPrompt(
   const hasReadingTools = activeToolNames.has('create_reading_note') || activeToolNames.has('ingest_reading_bundle');
   const hasDiaryTool = activeToolNames.has('get_today_diary');
   const hasWeekTool = activeToolNames.has('get_week_plan');
+
+  const autoSummarize = config?.zotero?.auto_summarize ?? true;
+  const zoteroEnabled = config?.zotero?.enabled ?? false;
 
   const sections: string[] = [];
 
@@ -111,12 +116,37 @@ When uncertain, say so and ask the user to clarify.`);
       : '5. KB integration (kb_suggest, kb_write_mapping, kb_apply) can be run in a separate KB session.';
     sections.push(`## Reading Workflow
 
-Preferred reading-note order:
+Preferred reading-note order (vault-native bundle):
 1. Call reading_pipeline_status first.
 2. If the reading note does not exist yet, call discover_reading_bundle or ingest_reading_bundle.
 3. If the note is ready, call compile_reading_note.
 4. After the user reviews the draft, call set_reading_note_status with status: complete.
 ${kbStep}`);
+  }
+
+  if (zoteroEnabled) {
+    sections.push(`## Zotero Reading Workflow
+
+When the user says "ingest <identifier> from Zotero" or "summarise <identifier> from my Zotero":
+1. Call zotero_fetch_item with the identifier (citekey, doi, or zotero_key).
+   - If it returns needs_item_selection: present the candidates to the user, re-call with zotero_key.
+   - If it returns needs_attachment_selection: present the PDF list to the user, then re-call zotero_fetch_item with all fields from the resume object plus selected_attachment_id.
+2. Derive slug: <slug_prefix from output>-<year>-<slugifyReadingTitle(title)>. Never derive from citekey.
+3. Check for existing notes: if both Reading/Papers/<slug>.md and Reading/Threads/<slug>.md exist, stop with an error.
+4. Narrate: "Copying Zotero PDF into vault at <vault_pdf_dir>/<slug>/paper.pdf…" (or abstract variant). The PDF is copied into the vault; the original stays in Zotero storage.
+5. Call zotero_prepare_bundle({ slug, pdf_path }) if pdf_path is present, or zotero_prepare_bundle({ slug, abstract }) if abstract-only → capture files_created_this_run.
+6. Call ingest_reading_bundle with all metadata fields + citekey + zotero_key (if present) + zotero_managed: true + zotero_files_created: <files_created_this_run>.
+   - ERROR FLOW: If ingest_reading_bundle returns an error and files_created_this_run is non-empty → call zotero_cleanup_bundle({ slug, files: files_created_this_run }) immediately, then report the error to the user.
+7. CANCEL FLOW: After any scaffold edit_cancelled event that contains zotero_slug:
+   - If zotero_files_created is non-empty → call zotero_cleanup_bundle({ slug: zotero_slug, files: zotero_files_created }).
+   - If zotero_files_created is empty → call vault_read(note_rel_path from event):
+     * Note found → bundle belongs to confirmed prior note; skip cleanup.
+     * Note absent → call zotero_cleanup_bundle({ slug: zotero_slug }) with no files (full cleanup).
+   - Always prompt the user to click Continue after scaffold cancel so cleanup executes.
+8. After scaffold confirmed, use note_rel_path (from pending_edit meta, vault-relative) for ALL follow-up tool calls. Never use the absolute pending_edit.path.
+${autoSummarize
+  ? '9. auto_summarize is ON: proceed to compile_reading_note({ path: note_rel_path }) automatically. Then call vault_write with the returned content → second pending_edit. Append: "Note: PDF extraction is capped at 20 pages. If longer, review the summary manually."'
+  : '9. auto_summarize is OFF: stop after scaffold confirmation. Report the note path and offer to summarize on demand. Only call compile_reading_note if the user explicitly asks.'}`);
   }
 
   // Layer 3: Agent config (user's core rules)

@@ -15,6 +15,8 @@ export interface ReadingNoteMeta {
   year: number;
   journal: string;
   doi?: string;
+  citekey?: string;
+  zotero_key?: string;
   read_date?: string;
   related_projects?: string[];
   status?: string;
@@ -132,14 +134,11 @@ export function readingSourcesEqual(
   const normalizedLeft = left ? normalizeReadingSources(left) : [];
   const normalizedRight = right ? normalizeReadingSources(right) : [];
 
-  if (normalizedLeft.length !== normalizedRight.length) {
-    return false;
-  }
+  if (normalizedLeft.length !== normalizedRight.length) return false;
 
-  return normalizedLeft.every((source, index) =>
-    source.type === normalizedRight[index]?.type
-    && source.path === normalizedRight[index]?.path
-  );
+  const makeKey = (s: ReadingSourceInput) => `${s.type}:${s.path}`;
+  const leftKeys = new Set(normalizedLeft.map(makeKey));
+  return normalizedRight.every(s => leftKeys.has(makeKey(s)));
 }
 
 function normalizeFrontmatterString(value: unknown): string | undefined {
@@ -211,6 +210,27 @@ function chooseString(primary: string | undefined, fallback: unknown, defaultVal
   return existingString(primary) ?? existingString(fallback) ?? defaultValue;
 }
 
+const DOI_RESOLVER_HOSTS = new Set(['doi.org', 'dx.doi.org']);
+
+export function normalizeDoi(doi: string): string {
+  const trimmed = doi.trim().toLowerCase();
+  if (!trimmed) return '';
+
+  // Handle URL form: https://doi.org/... or https://dx.doi.org/...
+  try {
+    const url = new URL(trimmed);
+    if ((url.protocol === 'http:' || url.protocol === 'https:')
+        && DOI_RESOLVER_HOSTS.has(url.hostname)) {
+      return decodeURIComponent(url.pathname.replace(/^\/+/, '')).replace(/^doi:\s*/, '');
+    }
+  } catch {
+    // Not a valid URL — fall through to string-based stripping
+  }
+
+  // Handle doi: prefix (e.g. "doi:10.1016/j.cell")
+  return trimmed.replace(/^doi:\s*/, '');
+}
+
 export function buildReadingFrontmatter(
   meta: ReadingNoteMeta,
   sources?: ReadingSourceInput[],
@@ -246,11 +266,26 @@ export function buildReadingFrontmatter(
     tags,
   };
 
-  const doi = existingString(meta.doi) ?? existingString(existingFrontmatter.doi);
+  const rawDoi = existingString(meta.doi) ?? existingString(existingFrontmatter.doi);
+  const doi = rawDoi ? normalizeDoi(rawDoi) : undefined;
   if (doi) {
     frontmatter.doi = doi;
   } else {
     delete frontmatter.doi;
+  }
+
+  const citekey = existingString(meta.citekey) ?? existingString(existingFrontmatter.citekey);
+  if (citekey) {
+    frontmatter.citekey = citekey;
+  } else {
+    delete frontmatter.citekey;
+  }
+
+  const zoteroKey = existingString(meta.zotero_key) ?? existingString(existingFrontmatter.zotero_key);
+  if (zoteroKey) {
+    frontmatter.zotero_key = zoteroKey;
+  } else {
+    delete frontmatter.zotero_key;
   }
 
   if (normalizedSources && normalizedSources.length > 0) {

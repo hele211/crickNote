@@ -5,6 +5,7 @@ import type Database from 'better-sqlite3';
 import type { ToolHandler } from './registry.js';
 import { resolveVaultPath } from '../../utils/paths.js';
 import { loadSources } from '../../knowledge/source-loader.js';
+import { loadConfig } from '../../config/config.js';
 import {
   hasCreateHeadings,
   inferReadingPipelineStep,
@@ -13,6 +14,14 @@ import { logger } from '../../utils/logger.js';
 import { autoWrite, frontmatterFieldUpdate } from '../../editing/auto-writer.js';
 
 const log = logger.child('kb-tools');
+
+function configuredBundleBaseDir(): string {
+  try {
+    return loadConfig().zotero?.vault_pdf_dir ?? 'Reading/attachments';
+  } catch {
+    return 'Reading/attachments';
+  }
+}
 
 // Helper: validate path is inside vault (including symlink resolution), then return
 // a path.join result to avoid realpathSync desync on macOS with autoWrite.
@@ -139,7 +148,9 @@ export function createKbTools(
         const result = await loadSources(
           sources as Array<{ type: string; path: string }>,
           sourceSlug,
-          vaultPath
+          vaultPath,
+          {},
+          configuredBundleBaseDir()
         );
 
         return JSON.stringify({
