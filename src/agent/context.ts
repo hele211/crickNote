@@ -105,6 +105,10 @@ When uncertain, say so and ask the user to clarify.`);
 
   // Layer 2: Reading workflow — only when reading tools are active
   if (hasReadingTools) {
+    const hasKbTools = activeToolNames.has('kb_suggest') || activeToolNames.has('kb_write_mapping') || activeToolNames.has('kb_apply');
+    const kbStep = hasKbTools
+      ? '5. Then continue with kb_suggest, kb_write_mapping, and kb_apply.'
+      : '5. KB integration (kb_suggest, kb_write_mapping, kb_apply) can be run in a separate KB session.';
     sections.push(`## Reading Workflow
 
 Preferred reading-note order:
@@ -112,7 +116,7 @@ Preferred reading-note order:
 2. If the reading note does not exist yet, call discover_reading_bundle or ingest_reading_bundle.
 3. If the note is ready, call compile_reading_note.
 4. After the user reviews the draft, call set_reading_note_status with status: complete.
-5. Then continue with kb_suggest, kb_write_mapping, and kb_apply.`);
+${kbStep}`);
   }
 
   // Layer 3: Agent config (user's core rules)
