@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { CrickNoteConfig } from '../config/config.js';
-import type { LLMProvider, Message, ToolCall, StreamChunk } from './providers/base.js';
+import type { LLMProvider, Message, ToolCall, StreamChunk, ToolDefinition } from './providers/base.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAIProvider } from './providers/openai.js';
 import { ToolRegistry, type ToolContext } from './tools/registry.js';
@@ -17,6 +17,7 @@ import { assembleSystemPrompt } from './context.js';
 import { SafeWriter, type EditProposal } from '../editing/safe-writer.js';
 import { appendFolderChangelog } from '../editing/changelog.js';
 import { getDatabase } from '../storage/database.js';
+import { routeTools, needsVaultAccess, SEARCH_BUNDLE } from './tool-router.js';
 import { logger } from '../utils/logger.js';
 
 const log = logger.child('runtime');
@@ -91,59 +92,15 @@ export class AgentRuntime {
     }
   }
 
-  async processMessage(
+  private async runAgentLoop(
+    history: Message[],
+    toolDefs: ToolDefinition[],
     userMessage: string,
     sessionId: string,
     onChunk?: (text: string) => void,
-  ): Promise<RuntimeResponse> {
+  ): Promise<{ content: string; toolCalls: ToolCall[]; pendingEdits: PendingEdit[] }> {
     const db = getDatabase();
-
-    // Ensure session exists
-    const session = db.prepare('SELECT id FROM chat_sessions WHERE id = ?').get(sessionId);
-    if (!session) {
-      db.prepare('INSERT INTO chat_sessions (id, created_at, last_active, metadata) VALUES (?, ?, ?, ?)')
-        .run(sessionId, Date.now(), Date.now(), JSON.stringify({ provider: this.config.llm.provider }));
-    }
-
-    // Load recent history
-    const recentMessages = db.prepare(
-      'SELECT role, content, tool_calls, tool_call_id FROM chat_messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT 20'
-    ).all(sessionId) as Array<{ role: string; content: string; tool_calls: string | null; tool_call_id: string | null }>;
-
-    const history: Message[] = recentMessages.reverse().map(m => {
-      let content = m.content;
-      // Search results embed full note bodies in a "context" key which can be
-      // 5–15 KB per call.  When replaying history we only need the result
-      // metadata, not the raw text, so strip that field to keep the context
-      // window from ballooning across multi-turn conversations.
-      if (m.role === 'tool' && content.length > 500) {
-        try {
-          const parsed = JSON.parse(content) as Record<string, unknown>;
-          if (typeof parsed.context === 'string') {
-            parsed.context = '[omitted from history]';
-            content = JSON.stringify(parsed);
-          }
-        } catch {
-          // Not JSON — leave as-is.
-        }
-      }
-      return {
-        role: m.role as 'user' | 'assistant' | 'tool',
-        content,
-        toolCalls: m.tool_calls ? JSON.parse(m.tool_calls) : undefined,
-        toolCallId: m.tool_call_id ?? undefined,
-      };
-    });
-
-    // Add user message
-    history.push({ role: 'user', content: userMessage });
-    db.prepare('INSERT INTO chat_messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)')
-      .run(sessionId, 'user', userMessage, Date.now());
-
-    // Assemble system prompt
-    const systemPrompt = assembleSystemPrompt(this.config.vaultPath, this.registry.getDefinitions());
-
-    // Agent loop: call LLM, execute tools, repeat until done
+    const systemPrompt = assembleSystemPrompt(this.config.vaultPath, toolDefs);
     const allToolCalls: ToolCall[] = [];
     const pendingEdits: PendingEdit[] = [];
     let finalContent = '';
@@ -157,14 +114,12 @@ export class AgentRuntime {
       const toolCallsThisTurn: ToolCall[] = [];
       const toolCallAccumulators = new Map<string, { id: string; name: string; args: string }>();
 
-      for await (const chunk of this.provider.chat(history, this.registry.getDefinitions(), {
+      for await (const chunk of this.provider.chat(history, toolDefs, {
         systemPrompt,
         model: this.config.llm.model,
       })) {
         if (chunk.type === 'text' && chunk.text) {
           text += chunk.text;
-          // Only stream the final reply turn — skip intermediate text that
-          // appears before tool calls (the model sometimes narrates its intent).
           onChunk?.(chunk.text);
         } else if (chunk.type === 'tool_call_start' && chunk.toolCall) {
           toolCallAccumulators.set(chunk.toolCall.id, {
@@ -188,7 +143,6 @@ export class AgentRuntime {
         }
       }
 
-      // Save assistant message
       const assistantMsg: Message = {
         role: 'assistant',
         content: text,
@@ -198,24 +152,20 @@ export class AgentRuntime {
       db.prepare('INSERT INTO chat_messages (session_id, role, content, tool_calls, timestamp) VALUES (?, ?, ?, ?, ?)')
         .run(sessionId, 'assistant', text, toolCallsThisTurn.length > 0 ? JSON.stringify(toolCallsThisTurn) : null, Date.now());
 
-      // If no tool calls, we're done
       if (toolCallsThisTurn.length === 0) {
         finalContent = text;
         break;
       }
 
-      // Execute tools
       for (const tc of toolCallsThisTurn) {
         allToolCalls.push(tc);
         log.debug('Executing tool', { name: tc.name, id: tc.id });
         const toolContext: ToolContext = { sessionId, vaultPath: this.config.vaultPath };
         const result = await this.registry.execute(tc, toolContext);
 
-        // Check if result is a pending edit
         try {
           const parsed = JSON.parse(result);
 
-          // Helper: propose a single pending_edit and push to pendingEdits
           const proposeOne = (edit: Record<string, unknown>, batchId?: string) => {
             const absolutePath = edit.path as string;
             const normalizedPath = path.normalize(absolutePath);
@@ -259,7 +209,6 @@ export class AgentRuntime {
             db.prepare('INSERT INTO chat_messages (session_id, role, content, tool_call_id, timestamp) VALUES (?, ?, ?, ?, ?)')
               .run(sessionId, 'tool', toolResult, tc.id, Date.now());
           } else if (parsed.type === 'pending_edit') {
-            // Vault tools now embed the resolved absolute path; validate it stays within the vault.
             const absolutePath = parsed.path as string;
             const normalizedPath = path.normalize(absolutePath);
             if (!path.isAbsolute(normalizedPath) || (normalizedPath !== this.realVaultPath && !normalizedPath.startsWith(this.realVaultPath + path.sep))) {
@@ -269,18 +218,15 @@ export class AgentRuntime {
             }
             const meta: Record<string, unknown> = { operation: parsed.operation ?? '', path: parsed.path };
             if (parsed.reservation && typeof parsed.reservation === 'object') {
-              Object.assign(meta, parsed.reservation); // adds project_id, prefix
+              Object.assign(meta, parsed.reservation);
             }
             const proposal = this.safeWriter.proposeEdit(absolutePath, parsed.newContent, userMessage, sessionId, meta);
             const toolWarnings = Array.isArray(parsed.warnings) ? (parsed.warnings as string[]) : [];
             pendingEdits.push({ editId: proposal.editId, proposal, warnings: toolWarnings });
-
             if (parsed.reservation && typeof parsed.reservation === 'object') {
               const { project_id } = parsed.reservation as { project_id: string };
               db.prepare('UPDATE prefix_reservations SET edit_id = ? WHERE project_id = ?').run(proposal.editId, project_id);
             }
-
-            // Tell the LLM the edit is pending confirmation
             const toolResult = JSON.stringify({
               status: 'pending_confirmation',
               path: parsed.path,
@@ -303,16 +249,85 @@ export class AgentRuntime {
         }
       }
 
-      // Only overwrite finalContent when this turn produced text.
-      // Tool-call-only turns leave text === '' and should not erase a
-      // previous reply that the model already wrote.
       if (text) finalContent = text;
     }
 
-    // Update session last_active
+    return { content: finalContent, toolCalls: allToolCalls, pendingEdits };
+  }
+
+  async processMessage(
+    userMessage: string,
+    sessionId: string,
+    onChunk?: (text: string) => void,
+  ): Promise<RuntimeResponse> {
+    const db = getDatabase();
+
+    const session = db.prepare('SELECT id FROM chat_sessions WHERE id = ?').get(sessionId);
+    if (!session) {
+      db.prepare('INSERT INTO chat_sessions (id, created_at, last_active, metadata) VALUES (?, ?, ?, ?)')
+        .run(sessionId, Date.now(), Date.now(), JSON.stringify({ provider: this.config.llm.provider }));
+    }
+
+    const recentMessages = db.prepare(
+      'SELECT role, content, tool_calls, tool_call_id FROM chat_messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT 20'
+    ).all(sessionId) as Array<{ role: string; content: string; tool_calls: string | null; tool_call_id: string | null }>;
+
+    const history: Message[] = recentMessages.reverse().map(m => {
+      let content = m.content;
+      // Search results embed full note bodies in a "context" key; strip to keep history compact.
+      if (m.role === 'tool' && content.length > 500) {
+        try {
+          const parsed = JSON.parse(content) as Record<string, unknown>;
+          if (typeof parsed.context === 'string') {
+            parsed.context = '[omitted from history]';
+            content = JSON.stringify(parsed);
+          }
+        } catch {
+          // Not JSON — leave as-is.
+        }
+      }
+      return {
+        role: m.role as 'user' | 'assistant' | 'tool',
+        content,
+        toolCalls: m.tool_calls ? JSON.parse(m.tool_calls) : undefined,
+        toolCallId: m.tool_call_id ?? undefined,
+      };
+    });
+
+    history.push({ role: 'user', content: userMessage });
+    db.prepare('INSERT INTO chat_messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)')
+      .run(sessionId, 'user', userMessage, Date.now());
+
+    // Route: select tool bundle from user message keywords. Default is no tools.
+    const selectedNames = routeTools(userMessage);
+    const toolDefs = this.registry.getDefinitionsByName(selectedNames);
+
+    // When no tools are selected, buffer chunks during the first pass so we can
+    // suppress the failed response if a retry is needed.
+    const bufferedChunks: string[] = [];
+    const bufferingOnChunk = (text: string) => { bufferedChunks.push(text); };
+    const firstPassOnChunk = selectedNames.length === 0 ? bufferingOnChunk : onChunk;
+    const firstCallTs = Date.now();
+
+    let result = await this.runAgentLoop(history, toolDefs, userMessage, sessionId, firstPassOnChunk);
+
+    if (selectedNames.length === 0 && needsVaultAccess(result.content)) {
+      // Delete the stale assistant DB row so history replay stays clean.
+      db.prepare(
+        'DELETE FROM chat_messages WHERE rowid = (SELECT rowid FROM chat_messages WHERE session_id = ? AND role = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT 1)'
+      ).run(sessionId, 'assistant', firstCallTs);
+      if (history[history.length - 1].role === 'assistant') history.pop();
+
+      const searchDefs = this.registry.getDefinitionsByName([...SEARCH_BUNDLE]);
+      result = await this.runAgentLoop(history, searchDefs, userMessage, sessionId, onChunk);
+    } else if (selectedNames.length === 0) {
+      // No retry needed — replay buffered chunks so the caller receives streaming output.
+      for (const chunk of bufferedChunks) onChunk?.(chunk);
+    }
+
     db.prepare('UPDATE chat_sessions SET last_active = ? WHERE id = ?').run(Date.now(), sessionId);
 
-    return { content: finalContent, toolCalls: allToolCalls, pendingEdits };
+    return result;
   }
 
   async confirmEdit(editId: string, action: 'apply' | 'force' | 'cancel', sessionId: string): Promise<{ success: boolean; message: string }> {
