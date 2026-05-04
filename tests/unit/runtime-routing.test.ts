@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { LLMProvider, Message, ToolDefinition, ChatOptions, StreamChunk } from '../../src/agent/providers/base.js';
 import { runMigrations } from '../../src/storage/migrations/001-initial.js';
+import { compactToolResultForHistory } from '../../src/agent/runtime.js';
 
 class FakeLLMProvider implements LLMProvider {
   name = 'fake';
@@ -241,5 +242,76 @@ describe('processMessage — retry path', () => {
     await runtime.processMessage('explain western blot', 'session-r6', t => chunks.push(t));
 
     expect(chunks.join('')).toBe('Western blot detects proteins by size.');
+  });
+});
+
+describe('compactToolResultForHistory', () => {
+  it('strips vault_read file body, keeps path and frontmatter', () => {
+    const input = JSON.stringify({
+      path: 'Knowledge/KB001.md',
+      frontmatter: { title: 'KB001', tags: ['kb'] },
+      content: 'x'.repeat(800),
+    });
+    const result = JSON.parse(compactToolResultForHistory(input));
+    expect(result.path).toBe('Knowledge/KB001.md');
+    expect(result.frontmatter).toEqual({ title: 'KB001', tags: ['kb'] });
+    expect(result.content).toBe('[omitted from history]');
+  });
+
+  it('strips vault_search context, keeps results metadata', () => {
+    const input = JSON.stringify({
+      results: [{ path: 'foo.md', note_type: 'experiment' }],
+      context: 'x'.repeat(600),
+      totalCandidates: 1,
+    });
+    const result = JSON.parse(compactToolResultForHistory(input));
+    expect(result.results).toEqual([{ path: 'foo.md', note_type: 'experiment' }]);
+    expect(result.context).toBe('[omitted from history]');
+    expect(result.totalCandidates).toBe(1);
+  });
+
+  it('leaves short results unchanged', () => {
+    const input = JSON.stringify({ status: 'pending_confirmation', editId: 'abc', hasConflict: false });
+    expect(compactToolResultForHistory(input)).toBe(input);
+  });
+
+  it('leaves content field unchanged when under 300 chars', () => {
+    const short = 'brief note';
+    const input = JSON.stringify({ path: 'foo.md', frontmatter: {}, content: short, extra: 'z'.repeat(500) });
+    const result = JSON.parse(compactToolResultForHistory(input));
+    expect(result.content).toBe(short);
+  });
+});
+
+describe('processMessage — history compaction', () => {
+  it('strips vault_read body from replayed tool messages, keeping path and frontmatter', async () => {
+    const sessionId = 'session-compact';
+    const now = Date.now();
+
+    // Seed a prior turn: user asked → assistant called vault_read → tool returned full file
+    db.prepare('INSERT INTO chat_sessions (id, created_at, last_active, metadata) VALUES (?, ?, ?, ?)')
+      .run(sessionId, now - 3000, now - 1000, '{}');
+    db.prepare('INSERT INTO chat_messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)')
+      .run(sessionId, 'user', 'read kb001', now - 3000);
+    db.prepare('INSERT INTO chat_messages (session_id, role, content, tool_calls, timestamp) VALUES (?, ?, ?, ?, ?)')
+      .run(sessionId, 'assistant', '',
+        JSON.stringify([{ id: 'tc1', name: 'vault_read', arguments: { path: 'Knowledge/KB001.md' } }]),
+        now - 2000);
+    db.prepare('INSERT INTO chat_messages (session_id, role, content, tool_call_id, timestamp) VALUES (?, ?, ?, ?, ?)')
+      .run(sessionId, 'tool',
+        JSON.stringify({ path: 'Knowledge/KB001.md', frontmatter: { title: 'KB001' }, content: 'x'.repeat(800) }),
+        'tc1', now - 1000);
+
+    const provider = new FakeLLMProvider(['Follow-up answer.']);
+    const runtime = await makeRuntime(provider);
+
+    await runtime.processMessage('follow-up question', sessionId);
+
+    const toolMsg = provider.calls[0].messages.find(m => m.role === 'tool');
+    expect(toolMsg).toBeDefined();
+    const parsed = JSON.parse(toolMsg!.content);
+    expect(parsed.path).toBe('Knowledge/KB001.md');
+    expect(parsed.frontmatter).toEqual({ title: 'KB001' });
+    expect(parsed.content).toBe('[omitted from history]');
   });
 });

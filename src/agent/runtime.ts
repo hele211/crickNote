@@ -22,6 +22,34 @@ import { logger } from '../utils/logger.js';
 
 const log = logger.child('runtime');
 
+const HISTORY_MESSAGE_LIMIT = 16;
+
+/**
+ * Strip large body fields from a stored tool result before replaying it in
+ * conversation history. The LLM already acted on the full content in the turn
+ * it appeared; replaying thousands of extra tokens adds cost with no benefit.
+ * path and frontmatter are preserved so the model knows which file was read.
+ */
+export function compactToolResultForHistory(content: string): string {
+  if (content.length <= 500) return content;
+  try {
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    let modified = false;
+    if (typeof parsed.context === 'string') {
+      parsed.context = '[omitted from history]';
+      modified = true;
+    }
+    if (typeof parsed.content === 'string' && parsed.content.length > 300) {
+      parsed.content = '[omitted from history]';
+      modified = true;
+    }
+    if (modified) return JSON.stringify(parsed);
+  } catch {
+    // Not JSON — leave as-is.
+  }
+  return content;
+}
+
 interface PendingEdit {
   editId: string;
   proposal: EditProposal;
@@ -56,7 +84,7 @@ function recentHistoryHasWriteIntent(history: Message[]): boolean {
     if (m.role === 'tool') return false;
     const text = normalizeFollowUpText(m.content);
     const hasWriteVerb = /\b(add|append|update|write|save|record|put|edit|modify|apply)\b/.test(text);
-    const hasVaultTarget = /\b(note|file|vault|obsidian|experiment|protocol|diary|kb001)\b|\.md\b/.test(text);
+    const hasVaultTarget = /\b(note|file|vault|obsidian|experiment|protocol|diary)\b|\b(?:kb|exp|prot|ser)\d{3,}\b|\.md\b/.test(text);
     return (
       (hasWriteVerb && hasVaultTarget) ||
       /\bwould you like me to\b.*\b(add|append|update|write|save|record)\b/.test(text) ||
@@ -308,30 +336,15 @@ export class AgentRuntime {
     }
 
     const recentMessages = db.prepare(
-      'SELECT role, content, tool_calls, tool_call_id FROM chat_messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT 20'
+      `SELECT role, content, tool_calls, tool_call_id FROM chat_messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT ${HISTORY_MESSAGE_LIMIT}`
     ).all(sessionId) as Array<{ role: string; content: string; tool_calls: string | null; tool_call_id: string | null }>;
 
-    const history: Message[] = recentMessages.reverse().map(m => {
-      let content = m.content;
-      // Search results embed full note bodies in a "context" key; strip to keep history compact.
-      if (m.role === 'tool' && content.length > 500) {
-        try {
-          const parsed = JSON.parse(content) as Record<string, unknown>;
-          if (typeof parsed.context === 'string') {
-            parsed.context = '[omitted from history]';
-            content = JSON.stringify(parsed);
-          }
-        } catch {
-          // Not JSON — leave as-is.
-        }
-      }
-      return {
-        role: m.role as 'user' | 'assistant' | 'tool',
-        content,
-        toolCalls: m.tool_calls ? JSON.parse(m.tool_calls) : undefined,
-        toolCallId: m.tool_call_id ?? undefined,
-      };
-    });
+    const history: Message[] = recentMessages.reverse().map(m => ({
+      role: m.role as 'user' | 'assistant' | 'tool',
+      content: m.role === 'tool' ? compactToolResultForHistory(m.content) : m.content,
+      toolCalls: m.tool_calls ? JSON.parse(m.tool_calls) : undefined,
+      toolCallId: m.tool_call_id ?? undefined,
+    }));
 
     history.push({ role: 'user', content: userMessage });
     db.prepare('INSERT INTO chat_messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)')
