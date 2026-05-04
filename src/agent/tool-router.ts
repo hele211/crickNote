@@ -63,6 +63,9 @@ export function routeTools(message: string): string[] {
   const writeTarget = has(text, /\b(to|in|into|inside)\s+(my\s+|the\s+)?(vault|obsidian|notes|files)\b/);
   const commandPrefix = has(text, /^(please\s+)?(can you|could you|would you|please|i want you to|let's|lets)?\s*/);
 
+  // Serial project file identifier pattern: kb001, exp001, prot001, ser001
+  const serialFileRef = /\b(?:kb|exp|prot|ser)\d{3,}\b/;
+
   // Search/read: vault-framed lookup and recall requests. Routing these on the
   // first pass avoids the slow "no tools, then retry with search" path.
   if (
@@ -71,7 +74,9 @@ export function routeTools(message: string): string[] {
     has(text, /\b(do i have|have i got|any)\s+(notes|files|records)\b/) ||
     has(text, /\bwhat (did i write|have i written|have i recorded|have i documented|did i record|did i document)\b/) ||
     has(text, /\b(recall|remember|retrieve|pull up)\s+(my\s+)?(work|notes|records|experiments)\b/) ||
-    has(text, /\bexperiment results\b/)
+    has(text, /\bexperiment results\b/) ||
+    // Reading (not updating) a specific project file, e.g. "read KB001", "show KB001"
+    (has(text, serialFileRef) && has(text, /\b(read|open|show|get|check|look at|content of)\b/))
   ) {
     addBundle(selected, 'search');
   }
@@ -83,7 +88,9 @@ export function routeTools(message: string): string[] {
     has(text, /\bappend\b.*\b(to|in|into)\b.*\b(note|file|diary|vault|obsidian|notes)\b/) ||
     has(text, /\b(write|save|record|put|add)\b.*\b(to|in|into|inside)\b.*\b(my\s+|the\s+)?(vault|obsidian|notes|files)\b/) ||
     (commandPrefix && has(text, /\b(create|make)\s+(a\s+|an\s+)?(new\s+|now\s+)?(note|file)\b/) && (mentionsVault || writeTarget || !has(text, /\?$/))) ||
-    possessiveNote && has(text, /\b(edit|update|modify|append|write|save|record)\b/)
+    possessiveNote && has(text, /\b(edit|update|modify|append|write|save|record)\b/) ||
+    // Recognize project file serial identifiers (kb001, exp001, prot001, ser001) with write verbs
+    (has(text, serialFileRef) && has(text, /\b(update|edit|modify|revise|overwrite|append|write|save|record|add)\b/))
   )) {
     addBundle(selected, 'write');
   }
