@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { routeTools, needsVaultAccess, SEARCH_BUNDLE } from '../../src/agent/tool-router.js';
+import { routeTools, needsVaultAccess, needsVaultWriteAccess, SEARCH_BUNDLE, FULL_WRITE_BUNDLE } from '../../src/agent/tool-router.js';
 
 // ── True-positive: correct bundle selection ──────────────────────────────
 
@@ -28,6 +28,18 @@ describe('routeTools — search bundle', () => {
   it('matches "experiment results"', () => {
     expect(routeTools('what were the experiment results for P001?')).toContain('vault_search');
   });
+  it('matches "what have I recorded"', () => {
+    expect(routeTools('what have I recorded about LTP?')).toContain('vault_search');
+  });
+  it('matches "do I have notes"', () => {
+    expect(routeTools('do I have notes on synaptic tagging?')).toContain('vault_search');
+  });
+  it('matches "recall my work"', () => {
+    expect(routeTools('recall my work on plasticity')).toContain('vault_search');
+  });
+  it('matches "show files in my vault"', () => {
+    expect(routeTools('show files in my vault')).toContain('vault_search');
+  });
 });
 
 describe('routeTools — write bundle', () => {
@@ -48,6 +60,30 @@ describe('routeTools — write bundle', () => {
   it('matches multi-word note name "edit my lab meeting note"', () => {
     expect(routeTools('edit my lab meeting note')).toContain('vault_write');
   });
+  it('matches "create a new note in Obsidian"', () => {
+    expect(routeTools('create a new note in Obsidian')).toContain('vault_write');
+  });
+  it('matches "can you create a file in my vault"', () => {
+    expect(routeTools('can you create a file in my vault')).toContain('vault_write');
+  });
+  it('matches "write this to my notes"', () => {
+    expect(routeTools('write this to my notes')).toContain('vault_write');
+  });
+  it('matches "save this in Obsidian"', () => {
+    expect(routeTools('save this in Obsidian')).toContain('vault_write');
+  });
+  it('matches "record this in the vault"', () => {
+    expect(routeTools('record this in the vault')).toContain('vault_write');
+  });
+  it('matches "put this into my vault"', () => {
+    expect(routeTools('put this into my vault')).toContain('vault_write');
+  });
+  it('matches "make a new file in notes"', () => {
+    expect(routeTools('make a new file in notes')).toContain('vault_write');
+  });
+  it('matches bare command "create a new note"', () => {
+    expect(routeTools('create a new note')).toContain('vault_write');
+  });
 });
 
 describe('routeTools — tasks bundle', () => {
@@ -62,6 +98,9 @@ describe('routeTools — tasks bundle', () => {
   });
   it('matches "my todo list"', () => {
     expect(routeTools('show me my todo list')).toContain('task_list');
+  });
+  it('matches "create todo"', () => {
+    expect(routeTools('create todo for imaging analysis')).toContain('task_add');
   });
   it('matches "mark done"', () => {
     expect(routeTools('mark done the PCR task')).toContain('task_complete');
@@ -85,6 +124,9 @@ describe('routeTools — reading bundle', () => {
   });
   it('matches "my paper" (possessive)', () => {
     expect(routeTools('add my paper on CRISPR to vault')).toContain('create_reading_note');
+  });
+  it('matches "paper bundle"', () => {
+    expect(routeTools('discover paper bundle for Chen 2024')).toContain('discover_reading_bundle');
   });
 });
 
@@ -115,6 +157,12 @@ describe('routeTools — project bundle', () => {
   it('matches "create project"', () => {
     expect(routeTools('create a new project on memory consolidation')).toContain('create_project');
   });
+  it('matches "add a new project"', () => {
+    expect(routeTools('add a new project for me')).toContain('create_project');
+  });
+  it('matches typo "add an now project"', () => {
+    expect(routeTools('add an now project for me')).toContain('create_project');
+  });
   it('matches "new series"', () => {
     expect(routeTools('start a new series for my blot experiments')).toContain('create_series');
   });
@@ -123,6 +171,15 @@ describe('routeTools — project bundle', () => {
   });
   it('matches "write a new protocol"', () => {
     expect(routeTools('write a new protocol for gel electrophoresis')).toContain('create_protocol');
+  });
+  it('matches "start project"', () => {
+    expect(routeTools('start a project for cell migration')).toContain('create_project');
+  });
+  it('matches "set up experiment"', () => {
+    expect(routeTools('set up a new experiment for western blot')).toContain('create_experiment');
+  });
+  it('matches "make protocol"', () => {
+    expect(routeTools('make a protocol for gel electrophoresis')).toContain('create_protocol');
   });
 });
 
@@ -186,6 +243,9 @@ describe('routeTools — false-positive protection', () => {
     expect(routeTools('append to my data')).not.toContain('vault_append');
     expect(routeTools('append to my data')).not.toContain('vault_write');
   });
+  it('does NOT route write tools for a tutorial question about creating Obsidian files', () => {
+    expect(routeTools('how do I create a file in Obsidian?')).not.toContain('vault_write');
+  });
   it('does NOT route diary for bare "today"', () => {
     expect(routeTools("what is today's date?")).not.toContain('get_today_diary');
   });
@@ -194,6 +254,15 @@ describe('routeTools — false-positive protection', () => {
   });
   it('does NOT route kb for bare "claim" without "notes" object', () => {
     expect(routeTools('I claim this theory is wrong')).not.toContain('kb_suggest');
+  });
+  it('does NOT route project tools for generic project advice', () => {
+    expect(routeTools('how do I add project management to my workflow?')).not.toContain('create_project');
+  });
+  it('does NOT route project tools for tutorial project question', () => {
+    expect(routeTools('how do I create a research project?')).not.toContain('create_project');
+  });
+  it('does NOT route write tools for "write a protocol explanation"', () => {
+    expect(routeTools('write a protocol explanation for students')).not.toContain('vault_write');
   });
 });
 
@@ -253,6 +322,18 @@ describe('needsVaultAccess', () => {
   });
 });
 
+describe('needsVaultWriteAccess', () => {
+  it('detects "cannot create files in Obsidian"', () => {
+    expect(needsVaultWriteAccess('I cannot create files in Obsidian.')).toBe(true);
+  });
+  it('detects "unable to write to your vault"', () => {
+    expect(needsVaultWriteAccess('I am unable to write to your vault.')).toBe(true);
+  });
+  it('returns false for search-only access errors', () => {
+    expect(needsVaultWriteAccess('I cannot search your notes.')).toBe(false);
+  });
+});
+
 // ── SEARCH_BUNDLE export ─────────────────────────────────────────────────
 
 describe('SEARCH_BUNDLE', () => {
@@ -260,5 +341,24 @@ describe('SEARCH_BUNDLE', () => {
     expect(SEARCH_BUNDLE).toContain('vault_search');
     expect(SEARCH_BUNDLE).toContain('vault_read');
     expect(SEARCH_BUNDLE).toContain('vault_list');
+  });
+});
+
+// ── FULL_WRITE_BUNDLE export ─────────────────────────────────────────────
+
+describe('FULL_WRITE_BUNDLE', () => {
+  it('contains basic write tools', () => {
+    expect(FULL_WRITE_BUNDLE).toContain('vault_write');
+    expect(FULL_WRITE_BUNDLE).toContain('vault_append');
+    expect(FULL_WRITE_BUNDLE).toContain('vault_read');
+  });
+  it('contains project creation tools', () => {
+    expect(FULL_WRITE_BUNDLE).toContain('create_project');
+    expect(FULL_WRITE_BUNDLE).toContain('reserve_prefix');
+    expect(FULL_WRITE_BUNDLE).toContain('create_experiment');
+    expect(FULL_WRITE_BUNDLE).toContain('create_protocol');
+  });
+  it('has no duplicates', () => {
+    expect(FULL_WRITE_BUNDLE.length).toBe(new Set(FULL_WRITE_BUNDLE).size);
   });
 });

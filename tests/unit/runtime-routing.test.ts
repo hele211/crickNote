@@ -8,7 +8,7 @@ import { runMigrations } from '../../src/storage/migrations/001-initial.js';
 
 class FakeLLMProvider implements LLMProvider {
   name = 'fake';
-  calls: Array<{ tools: ToolDefinition[]; response: string }> = [];
+  calls: Array<{ tools: ToolDefinition[]; response: string; messages: Message[] }> = [];
   private responses: string[];
 
   constructor(responses: string[]) { this.responses = responses; }
@@ -19,7 +19,7 @@ class FakeLLMProvider implements LLMProvider {
     _opts: ChatOptions,
   ): AsyncIterable<StreamChunk> {
     const response = this.responses[this.calls.length] ?? this.responses[this.responses.length - 1];
-    this.calls.push({ tools, response });
+    this.calls.push({ tools, response, messages: [..._messages] });
     yield { type: 'text', text: response };
     yield { type: 'done' };
   }
@@ -74,6 +74,16 @@ describe('processMessage — tool routing', () => {
     expect(provider.calls[0].tools.map(t => t.name)).toContain('vault_search');
   });
 
+  it('sends search tools on the first call for "what have I recorded"', async () => {
+    const provider = new FakeLLMProvider(['Found your notes.']);
+    const runtime = await makeRuntime(provider);
+
+    await runtime.processMessage('what have I recorded about LTP?', 'session-2b');
+
+    expect(provider.calls).toHaveLength(1);
+    expect(provider.calls[0].tools.map(t => t.name)).toContain('vault_search');
+  });
+
   it('sends project tools for "create a new experiment"', async () => {
     const provider = new FakeLLMProvider(['Creating experiment...']);
     const runtime = await makeRuntime(provider);
@@ -83,6 +93,56 @@ describe('processMessage — tool routing', () => {
     const names = provider.calls[0].tools.map(t => t.name);
     expect(names).toContain('create_experiment');
     expect(names).not.toContain('kb_lint');
+  });
+
+  it('sends project tools for typo "add an now project"', async () => {
+    const provider = new FakeLLMProvider(['Creating project...']);
+    const runtime = await makeRuntime(provider);
+
+    await runtime.processMessage('add an now project for me', 'session-3b');
+
+    const names = provider.calls[0].tools.map(t => t.name);
+    expect(names).toContain('create_project');
+    expect(names).toContain('reserve_prefix');
+    expect(names).toContain('vault_write');
+  });
+
+  it('sends write tools for "create a new note in Obsidian"', async () => {
+    const provider = new FakeLLMProvider(['Creating note...']);
+    const runtime = await makeRuntime(provider);
+
+    await runtime.processMessage('create a new note in Obsidian', 'session-4');
+
+    const names = provider.calls[0].tools.map(t => t.name);
+    expect(names).toContain('vault_write');
+    expect(names).toContain('vault_append');
+  });
+
+  it('sends write tools on the first call for "record this in the vault"', async () => {
+    const provider = new FakeLLMProvider(['Recording...']);
+    const runtime = await makeRuntime(provider);
+
+    await runtime.processMessage('record this in the vault', 'session-5');
+
+    expect(provider.calls).toHaveLength(1);
+    expect(provider.calls[0].tools.map(t => t.name)).toContain('vault_write');
+  });
+
+  it('sends write tools for a short follow-up to a previous update offer', async () => {
+    const provider = new FakeLLMProvider([
+      'Would you like me to update KB001 experiment.md with option B?',
+      'I will update it.',
+    ]);
+    const runtime = await makeRuntime(provider);
+    const sessionId = 'session-follow-up-write';
+
+    await runtime.processMessage('please help me calculate the digest volumes', sessionId);
+    await runtime.processMessage('option B', sessionId);
+
+    expect(provider.calls).toHaveLength(2);
+    expect(provider.calls[0].tools).toHaveLength(0);
+    expect(provider.calls[1].tools.map(t => t.name)).toContain('vault_append');
+    expect(provider.calls[1].messages.map(m => m.content)).toContain('Would you like me to update KB001 experiment.md with option B?');
   });
 });
 
@@ -94,12 +154,30 @@ describe('processMessage — retry path', () => {
     ]);
     const runtime = await makeRuntime(provider);
 
-    const result = await runtime.processMessage('do I have notes on synaptic tagging?', 'session-r1');
+    const result = await runtime.processMessage('summarize previous context about synaptic tagging', 'session-r1');
 
     expect(provider.calls).toHaveLength(2);
     expect(provider.calls[0].tools).toHaveLength(0);
     expect(provider.calls[1].tools.map(t => t.name)).toContain('vault_search');
     expect(result.content).toBe('Here are your notes on synaptic tagging.');
+  });
+
+  it('retries once with write tools when no-tool response signals write access needed', async () => {
+    const provider = new FakeLLMProvider([
+      'I cannot create files in Obsidian.',
+      'I can create that note now.',
+    ]);
+    const runtime = await makeRuntime(provider);
+
+    const result = await runtime.processMessage('please put this somewhere permanent', 'session-rw1');
+
+    expect(provider.calls).toHaveLength(2);
+    expect(provider.calls[0].tools).toHaveLength(0);
+    const retryToolNames = provider.calls[1].tools.map(t => t.name);
+    expect(retryToolNames).toContain('vault_write');
+    expect(retryToolNames).toContain('create_project');
+    expect(retryToolNames).toContain('reserve_prefix');
+    expect(result.content).toBe('I can create that note now.');
   });
 
   it('deletes the stale assistant DB row before retry', async () => {
@@ -110,7 +188,7 @@ describe('processMessage — retry path', () => {
     const runtime = await makeRuntime(provider);
     const sessionId = 'session-r2';
 
-    await runtime.processMessage('what have I recorded about LTP?', sessionId);
+    await runtime.processMessage('summarize previous context about LTP', sessionId);
 
     const rows = db.prepare(
       "SELECT content FROM chat_messages WHERE session_id = ? AND role = 'assistant' ORDER BY timestamp ASC"
@@ -128,7 +206,7 @@ describe('processMessage — retry path', () => {
     const runtime = await makeRuntime(provider);
 
     const chunks: string[] = [];
-    await runtime.processMessage('recall my work on plasticity', 'session-r3', t => chunks.push(t));
+    await runtime.processMessage('summarize previous context about plasticity', 'session-r3', t => chunks.push(t));
 
     expect(chunks.join('')).not.toContain("don't have access");
     expect(chunks.join('')).toContain('Found your notes.');
@@ -141,7 +219,7 @@ describe('processMessage — retry path', () => {
     ]);
     const runtime = await makeRuntime(provider);
 
-    await runtime.processMessage('what have I documented about IL-42?', 'session-r4');
+    await runtime.processMessage('summarize previous context about IL-42', 'session-r4');
 
     expect(provider.calls).toHaveLength(2);
   });

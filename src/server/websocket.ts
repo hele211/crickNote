@@ -30,6 +30,13 @@ interface AuthenticatedClient {
   connectionId: string;
 }
 
+export function normalizeClientSessionId(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!/^[A-Za-z0-9._:-]{8,128}$/.test(trimmed)) return null;
+  return trimmed;
+}
+
 export function createWebSocketServer(config: CrickNoteConfig): Promise<WebSocketServer> {
   return new Promise((resolve, reject) => {
     const wss = new WebSocketServer({
@@ -109,7 +116,7 @@ export function createWebSocketServer(config: CrickNoteConfig): Promise<WebSocke
         const result = validateAuthMessage(msg as unknown as AuthMessage, '0.1.0');
 
         if (result.type === 'auth_ok') {
-          const sessionId = `obsidian-${Date.now()}`;
+          const sessionId = normalizeClientSessionId(msg.sessionId) ?? `obsidian-${Date.now()}-${connectionCounter}`;
           clients.set(ws, {
             ws,
             pluginVersion: (msg as unknown as AuthMessage).pluginVersion,
@@ -117,7 +124,7 @@ export function createWebSocketServer(config: CrickNoteConfig): Promise<WebSocke
             connectionId,
           });
           log.info('Client authenticated', { sessionId, pluginVersion: (msg as unknown as AuthMessage).pluginVersion });
-          ws.send(JSON.stringify(result));
+          ws.send(JSON.stringify({ ...result, sessionId }));
         } else {
           log.warn('Auth rejected', { reason: result.reason });
           ws.send(JSON.stringify(result));

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { mapPendingEditForPlugin } from '../../src/server/websocket.js';
+import { mapPendingEditForPlugin, normalizeClientSessionId } from '../../src/server/websocket.js';
 
 const vaultPath = '/vault';
 
@@ -51,5 +51,17 @@ describe('mapPendingEditForPlugin', () => {
     const pe = makePe();
     const result = mapPendingEditForPlugin(pe, vaultPath);
     expect(Object.keys(result)).not.toContain('newContent');
+  });
+});
+
+describe('normalizeClientSessionId', () => {
+  it('accepts normal plugin session ids', () => {
+    expect(normalizeClientSessionId('obsidian-123e4567-e89b-12d3-a456-426614174000')).toBe('obsidian-123e4567-e89b-12d3-a456-426614174000');
+  });
+
+  it('rejects unsafe or malformed values', () => {
+    expect(normalizeClientSessionId('../bad-session')).toBeNull();
+    expect(normalizeClientSessionId('short')).toBeNull();
+    expect(normalizeClientSessionId(42)).toBeNull();
   });
 });

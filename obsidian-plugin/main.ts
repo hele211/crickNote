@@ -2,6 +2,19 @@ import { Plugin, WorkspaceLeaf } from 'obsidian';
 import { ChatView, CHAT_VIEW_TYPE } from './chat-view';
 import { CrickNoteWebSocket } from './websocket-client';
 
+interface CrickNotePluginData {
+  chatSessionId?: string;
+}
+
+function isValidSessionId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9._:-]{8,128}$/.test(value);
+}
+
+function createChatSessionId(): string {
+  const randomId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `obsidian-${randomId}`;
+}
+
 export default class CrickNotePlugin extends Plugin {
   ws: CrickNoteWebSocket | null = null;
 
@@ -18,9 +31,16 @@ export default class CrickNotePlugin extends Plugin {
       callback: () => this.activateChatView(),
     });
 
+    const data = (await this.loadData()) as CrickNotePluginData | null;
+    let chatSessionId = data?.chatSessionId;
+    if (!isValidSessionId(chatSessionId)) {
+      chatSessionId = createChatSessionId();
+      await this.saveData({ ...(data ?? {}), chatSessionId });
+    }
+
     // Connect to agent service using built-in defaults (127.0.0.1:18790).
     // Configurable host/port/token will require a proper settings model and UI.
-    this.ws = new CrickNoteWebSocket(this);
+    this.ws = new CrickNoteWebSocket(this, { sessionId: chatSessionId });
     await this.ws.connect();
 
     // Status bar

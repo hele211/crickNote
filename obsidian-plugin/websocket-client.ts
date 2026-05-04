@@ -9,6 +9,7 @@ export interface WebSocketOptions {
   host?: string;
   port?: number;
   tokenPath?: string;
+  sessionId?: string;
 }
 
 export class CrickNoteWebSocket extends EventEmitter {
@@ -21,6 +22,7 @@ export class CrickNoteWebSocket extends EventEmitter {
   private host: string;
   private port: number;
   private tokenPath: string;
+  private sessionId?: string;
 
   constructor(plugin: CrickNotePlugin, options: WebSocketOptions = {}) {
     super();
@@ -29,6 +31,7 @@ export class CrickNoteWebSocket extends EventEmitter {
     this.port = options.port ?? 18790;
     const homeDir = process.env.HOME ?? '~';
     this.tokenPath = options.tokenPath ?? join(homeDir, '.cricknote', 'auth-token');
+    this.sessionId = options.sessionId;
   }
 
   async connect(): Promise<void> {
@@ -51,6 +54,7 @@ export class CrickNoteWebSocket extends EventEmitter {
           token,
           protocolVersion: PROTOCOL_VERSION,
           pluginVersion: '0.1.0',
+          ...(this.sessionId ? { sessionId: this.sessionId } : {}),
         }));
       };
 
@@ -113,6 +117,9 @@ export class CrickNoteWebSocket extends EventEmitter {
     switch (msg.type) {
       case 'auth_ok':
         this.authenticated = true;
+        if (typeof msg.sessionId === 'string') {
+          this.sessionId = msg.sessionId;
+        }
         this.reconnectDelay = 1000; // reset backoff on successful connection
         this.emit('connected');
         this.requestStatus();
