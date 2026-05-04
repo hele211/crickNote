@@ -2,8 +2,9 @@ import { Plugin, WorkspaceLeaf } from 'obsidian';
 import { ChatView, CHAT_VIEW_TYPE } from './chat-view';
 import { CrickNoteWebSocket } from './websocket-client';
 
-interface CrickNotePluginData {
+export interface CrickNotePluginData {
   chatSessionId?: string;
+  chatHistory?: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number }>;
 }
 
 function isValidSessionId(value: unknown): value is string {
