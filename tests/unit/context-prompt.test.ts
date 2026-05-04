@@ -21,9 +21,11 @@ afterEach(() => {
 });
 
 describe('assembleSystemPrompt — zero tools', () => {
-  it('includes vault-unavailable notice', () => {
+  it('includes vault-unavailable notice with retry-triggering phrases', () => {
     const prompt = assembleSystemPrompt(vaultPath, []);
-    expect(prompt).toContain('Vault access is not available');
+    expect(prompt).toContain('No vault tools are loaded');
+    expect(prompt).toContain('I cannot write to your vault for this query');
+    expect(prompt).toContain('I cannot access your vault for this query');
   });
 
   it('does NOT include tool-use instruction', () => {
