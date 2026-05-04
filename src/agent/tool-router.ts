@@ -5,7 +5,7 @@ const BUNDLES = {
   reading: [
     'create_reading_note', 'discover_reading_bundle', 'ingest_reading_bundle',
     'reading_pipeline_status', 'set_reading_note_status', 'compile_reading_note',
-    'vault_read', 'vault_write', 'vault_append',
+    'vault_search', 'vault_list', 'vault_read', 'vault_write', 'vault_append',
   ],
   kb: [
     'kb_suggest', 'kb_write_mapping', 'kb_apply', 'kb_apply_advance',
