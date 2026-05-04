@@ -1,6 +1,57 @@
 import OpenAI from 'openai';
 import type { LLMProvider, Message, ToolDefinition, ChatOptions, StreamChunk } from './base.js';
 
+const THINK_OPEN = '<think>';
+const THINK_CLOSE = '</think>';
+
+function trailingPrefix(text: string, token: string): string {
+  const max = Math.min(text.length, token.length - 1);
+  for (let len = max; len > 0; len--) {
+    const suffix = text.slice(-len).toLowerCase();
+    if (token.startsWith(suffix)) return text.slice(-len);
+  }
+  return '';
+}
+
+export class ThinkBlockFilter {
+  private buffer = '';
+  private insideThink = false;
+
+  push(text: string): string {
+    let input = this.buffer + text;
+    this.buffer = '';
+    let output = '';
+
+    while (input.length > 0) {
+      const lower = input.toLowerCase();
+
+      if (this.insideThink) {
+        const closeAt = lower.indexOf(THINK_CLOSE);
+        if (closeAt === -1) {
+          this.buffer = trailingPrefix(input, THINK_CLOSE);
+          return output;
+        }
+        input = input.slice(closeAt + THINK_CLOSE.length);
+        this.insideThink = false;
+        continue;
+      }
+
+      const openAt = lower.indexOf(THINK_OPEN);
+      if (openAt === -1) {
+        this.buffer = trailingPrefix(input, THINK_OPEN);
+        output += input.slice(0, input.length - this.buffer.length);
+        return output;
+      }
+
+      output += input.slice(0, openAt);
+      input = input.slice(openAt + THINK_OPEN.length);
+      this.insideThink = true;
+    }
+
+    return output;
+  }
+}
+
 export class OpenAIProvider implements LLMProvider {
   name = 'openai';
   private client: OpenAI;
@@ -182,7 +233,7 @@ export class OpenAIProvider implements LLMProvider {
         messages: ollamaMessages,
         tools: ollamaTools.length > 0 ? ollamaTools : undefined,
         stream: true,
-        think: false,
+        think: true,
         options: {
           temperature: options.temperature ?? 0.3,
           num_predict: options.maxTokens ?? 4096,
