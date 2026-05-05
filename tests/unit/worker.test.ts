@@ -1,5 +1,10 @@
-import { describe, it, expect } from 'vitest';
-import { shouldIgnoreIngestionPath } from '../../src/ingestion/worker.js';
+import { describe, it, expect, vi } from 'vitest';
+import Database from 'better-sqlite3';
+import { runMigrations } from '../../src/storage/migrations/001-initial.js';
+import { shouldIgnoreIngestionPath, IngestionWorker } from '../../src/ingestion/worker.js';
+import * as embedderModule from '../../src/ingestion/embedder.js';
+import * as watcherModule from '../../src/ingestion/watcher.js';
+import * as indexerModule from '../../src/ingestion/indexer.js';
 
 describe('shouldIgnoreIngestionPath', () => {
   it('ignores markdown files under Reading attachments', () => {
@@ -29,5 +34,26 @@ describe('shouldIgnoreIngestionPath', () => {
     expect(shouldIgnoreIngestionPath('Projects/P001-CM/_changelog.md')).toBe(true);
     expect(shouldIgnoreIngestionPath('Reading/Papers/_changelog.md')).toBe(true);
     expect(shouldIgnoreIngestionPath('Knowledge/Concepts/_changelog.md')).toBe(true);
+  });
+});
+
+describe('IngestionWorker.fullIndex error state', () => {
+  it('writes state=error when getAllMarkdownFiles throws', async () => {
+    const db = new Database(':memory:');
+    runMigrations(db);
+
+    vi.spyOn(embedderModule, 'preloadModel').mockResolvedValue(undefined);
+    vi.spyOn(watcherModule.VaultWatcher, 'getAllMarkdownFiles').mockRejectedValue(new Error('disk failure'));
+    const updateStatus = vi.spyOn(indexerModule, 'updateIndexingStatus');
+
+    vi.spyOn(indexerModule, 'getIndexingStatus').mockReturnValue({ state: 'idle', totalFiles: 0, indexedFiles: 0, lastError: null });
+
+    const worker = new IngestionWorker('/tmp/test-vault', { watchForChanges: false });
+
+    await expect(worker.start()).rejects.toThrow('disk failure');
+    expect(updateStatus).toHaveBeenCalledWith('error', 0, 0, 'disk failure');
+
+    db.close();
+    vi.restoreAllMocks();
   });
 });

@@ -12,6 +12,7 @@ import {
   needsReindex,
   updateIndexingStatus,
   markFullIndexComplete,
+  deleteStaleNotes,
 } from './indexer.js';
 import { logger } from '../utils/logger.js';
 
@@ -109,32 +110,44 @@ export class IngestionWorker extends EventEmitter<WorkerEvents> {
   private async fullIndex(): Promise<void> {
     this.emit('status', 'indexing', 'Starting full vault index...');
 
-    const allFiles = await VaultWatcher.getAllMarkdownFiles(this.vaultPath);
-    const totalFiles = allFiles.length;
+    let totalFiles = 0;
     let indexedCount = 0;
 
-    updateIndexingStatus('indexing', totalFiles, 0);
-    this.emit('progress', 0, totalFiles);
+    try {
+      const allFiles = await VaultWatcher.getAllMarkdownFiles(this.vaultPath);
+      const indexableFiles = allFiles.filter(f => !shouldIgnoreIngestionPath(f));
 
-    for (const relativePath of allFiles) {
-      if (!this.running) break;
+      totalFiles = indexableFiles.length;
+      updateIndexingStatus('indexing', totalFiles, 0);
+      this.emit('progress', 0, totalFiles);
 
-      try {
-        await this.processFile(relativePath);
-      } catch (error) {
-        const err = error instanceof Error ? error : new Error(String(error));
-        this.emit('error', err, relativePath);
-        // Continue with other files even if one fails
+      for (const relativePath of indexableFiles) {
+        if (!this.running) break;
+
+        try {
+          await this.processFile(relativePath);
+        } catch (error) {
+          const err = error instanceof Error ? error : new Error(String(error));
+          this.emit('error', err, relativePath);
+          // Continue with other files even if one fails
+        }
+
+        indexedCount++;
+        updateIndexingStatus('indexing', totalFiles, indexedCount);
+        this.emit('progress', indexedCount, totalFiles);
       }
 
-      indexedCount++;
-      updateIndexingStatus('indexing', totalFiles, indexedCount);
-      this.emit('progress', indexedCount, totalFiles);
+      deleteStaleNotes(indexableFiles);
+      markFullIndexComplete();
+      log.info('Full index complete', { indexed: indexedCount, total: totalFiles });
+      this.emit('status', 'idle', `Full index complete. ${indexedCount}/${totalFiles} files indexed.`);
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      updateIndexingStatus('error', totalFiles, indexedCount, err.message);
+      this.emit('status', 'error', `Full index failed: ${err.message}`);
+      this.emit('error', err);
+      throw err;
     }
-
-    markFullIndexComplete();
-    log.info('Full index complete', { indexed: indexedCount, total: totalFiles });
-    this.emit('status', 'idle', `Full index complete. ${indexedCount}/${totalFiles} files indexed.`);
   }
 
   /**
