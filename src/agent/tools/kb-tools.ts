@@ -664,9 +664,6 @@ ${rqBody}
 
         // -- Update mapping artifact target row ------------------------------
         const targetIndex = artifact.targets.findIndex(t => t.slug === slug);
-        if (targetIndex === -1) {
-          return JSON.stringify({ error: `Target slug "${slug}" not found in mapping artifact.` });
-        }
         artifact.targets[targetIndex] = {
           ...artifact.targets[targetIndex],
           state: state as MappingTargetState,
@@ -679,8 +676,6 @@ ${rqBody}
         const newStatus = artifact.status;
 
         writeMappingArtifact(artifactPath, artifact, vaultPath);
-
-        const allTargets = artifact.targets;
 
         // -- Finalisation: Update Log, index rebuild, kb_status --------------
         if (!anyPending) {
@@ -715,7 +710,7 @@ ${updateLog.deferred.map(d => `- ${d}`).join('\n') || '(none)'}
             if (fs.existsSync(kindDir)) rebuildKnowledgeIndex(kind, vaultPath);
           }
 
-          const anyDeferred = allTargets.some(t => t.state === 'deferred');
+          const anyDeferred = artifact.targets.some(t => t.state === 'deferred');
           const newKbStatus = anyDeferred ? 'merged_with_review' : 'merged';
           for (const prefix of ['Reading/Papers', 'Reading/Threads']) {
             const candidate = path.join(vaultPath, prefix, `${sourceSlug}.md`);
@@ -731,7 +726,7 @@ ${updateLog.deferred.map(d => `- ${d}`).join('\n') || '(none)'}
           status: state,
           target: slug,
           mappingStatus: newStatus,
-          remainingPending: anyPending ? allTargets.filter(t => t.state === 'pending').length : 0,
+          remainingPending: anyPending ? artifact.targets.filter(t => t.state === 'pending').length : 0,
           message: anyPending
             ? `Target [[${slug}]] marked ${state}. Call kb_apply again to process the next pending target.`
             : `All targets processed. Mapping status: ${newStatus}. kb_status updated.`,
