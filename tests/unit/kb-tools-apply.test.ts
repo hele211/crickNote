@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createKbTools } from '../../src/agent/tools/kb-tools.js';
+import { readMappingArtifact } from '../../src/knowledge/mapping-artifact.js';
 
 const SOURCE_NOTE = `---
 title: IL-42 mediated suppression
@@ -126,8 +127,10 @@ status: confirmed
       contradiction_added: false,
       update_log: { updated: ['[[cd4-cd8-interaction]]'], created: [], deferred: [] },
     });
-    const updated = fs.readFileSync(path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-il42-mapping.md'), 'utf-8');
-    expect(updated).toContain('| [[cd4-cd8-interaction]] | update | applied |');
+    const updated = readMappingArtifact(path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-il42-mapping.md'));
+    expect(updated.targets[0].slug).toBe('cd4-cd8-interaction');
+    expect(updated.targets[0].state).toBe('applied');
+    expect(updated.schemaVersion).toBe(2);
   });
 
   it('kb_apply_advance sets kb_status=merged when all targets done', async () => {
@@ -172,6 +175,23 @@ status: confirmed
     });
     const concept = fs.readFileSync(path.join(vaultPath, 'Knowledge', 'Concepts', 'cd4-cd8-interaction.md'), 'utf-8');
     expect(concept).toContain('needs_review: true');
+  });
+
+  it('kb_apply_advance migrates v1 artifact to v2 on write', async () => {
+    const advanceTool = tools.find(t => t.definition.name === 'kb_apply_advance')!;
+    const result = JSON.parse(await advanceTool.execute({
+      mapping: 'Reading/Papers/smith-2026-il42-mapping.md',
+      target_slug: 'cd4-cd8-interaction',
+      state: 'applied',
+      contradiction_added: false,
+      update_log: { updated: ['[[cd4-cd8-interaction]]'], created: [], deferred: [] },
+    }));
+
+    expect(result.status).toBe('applied');
+    const written = readMappingArtifact(path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-il42-mapping.md'));
+    expect(written.schemaVersion).toBe(2);
+    expect(written.targets[0].slug).toBe('cd4-cd8-interaction');
+    expect(written.targets[0].state).toBe('applied');
   });
 });
 

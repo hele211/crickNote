@@ -11,7 +11,7 @@ import {
 } from '../../knowledge/reading-note.js';
 import { logger } from '../../utils/logger.js';
 import { autoWrite, frontmatterFieldUpdate } from '../../editing/auto-writer.js';
-import { readMappingArtifact } from '../../knowledge/mapping-artifact.js';
+import { readMappingArtifact, writeMappingArtifact, MappingTargetState } from '../../knowledge/mapping-artifact.js';
 
 const log = logger.child('kb-tools');
 
@@ -576,9 +576,8 @@ ${rejectedLines || '(none)'}
         }
 
         // -- Parse mapping artifact ------------------------------------------
-        const raw = fs.readFileSync(artifactPath, 'utf-8');
-        const parsed = matter(raw);
-        const allTargetsBefore = parseMappingTargets(parsed.content);
+        const artifact = readMappingArtifact(artifactPath);
+        const allTargetsBefore = artifact.targets;
 
         if (allTargetsBefore.length === 0) {
           return JSON.stringify({ error: 'Mapping artifact has no parseable target rows.' });
@@ -600,7 +599,7 @@ ${rejectedLines || '(none)'}
         }
 
         // Validate sourceSlug from frontmatter before it is used in filenames/paths
-        const sourceSlugRaw = String(parsed.data['source'] || '').replace(/^\[\[|\]\]$/g, '').trim();
+        const sourceSlugRaw = artifact.sourceSlug;
         if (remainingAfter.length === 0 && !isValidSlug(sourceSlugRaw)) {
           return JSON.stringify({ error: `Invalid source slug in mapping frontmatter: "${sourceSlugRaw}"` });
         }
@@ -617,12 +616,12 @@ ${rejectedLines || '(none)'}
           const rqBody = args.review_queue_body as string;
           const rqContent = `---
 type: review-queue
-source: ${parsed.data['source'] || ''}
+source: ${artifact.source}
 target_concept: [[${slug}]]
 reason: ${(args.review_queue_reason as string) || 'ambiguous-relationship'}
 created: ${today}
 status: pending
-rq_source: ${String(parsed.data['source'] || '').replace(/^\[\[|\]\]$/g, '')}
+rq_source: ${artifact.sourceSlug}
 rq_target: ${slug}
 ---
 
@@ -664,16 +663,24 @@ ${rqBody}
         }
 
         // -- Update mapping artifact target row ------------------------------
-        const { content: newBody, updated: rowUpdated } = updateMappingTargetState(parsed.content, slug, state, rqLink);
-        if (!rowUpdated) {
-          return JSON.stringify({ error: `Could not update row for target "${slug}" in mapping artifact — row not found or already updated.` });
+        const targetIndex = artifact.targets.findIndex(t => t.slug === slug);
+        if (targetIndex === -1) {
+          return JSON.stringify({ error: `Target slug "${slug}" not found in mapping artifact.` });
         }
-        const allTargets = parseMappingTargets(newBody);
-        const anyPending = allTargets.some(t => t.state === 'pending');
-        const newStatus = anyPending ? 'confirmed' : 'applied';
+        artifact.targets[targetIndex] = {
+          ...artifact.targets[targetIndex],
+          state: state as MappingTargetState,
+          reviewQueue: rqLink || undefined,
+          updated: new Date().toISOString().slice(0, 16),
+        };
 
-        const updatedArtifact = matter.stringify(newBody, { ...parsed.data, status: newStatus });
-        autoWrite(artifactPath, updatedArtifact, vaultPath);
+        const anyPending = artifact.targets.some(t => t.state === 'pending');
+        artifact.status = anyPending ? 'confirmed' : 'applied';
+        const newStatus = artifact.status;
+
+        writeMappingArtifact(artifactPath, artifact, vaultPath);
+
+        const allTargets = artifact.targets;
 
         // -- Finalisation: Update Log, index rebuild, kb_status --------------
         if (!anyPending) {
@@ -684,7 +691,7 @@ ${rqBody}
           const updateLog = args.update_log as { updated: string[]; created: string[]; deferred: string[] };
           const logContent = `---
 type: update-log
-source: ${parsed.data['source'] || ''}
+source: ${artifact.source}
 date: ${today}
 ---
 
