@@ -61,6 +61,7 @@ export class IngestionWorker extends EventEmitter<WorkerEvents> {
 
     this.emit('status', 'indexing', 'Starting ingestion worker...');
 
+    let fullIndexStarted = false;
     try {
       // Pre-load embedding model
       log.info('Loading embedding model');
@@ -68,6 +69,7 @@ export class IngestionWorker extends EventEmitter<WorkerEvents> {
       await preloadModel();
 
       // Perform initial full index
+      fullIndexStarted = true;
       await this.fullIndex();
 
       if (this.watchForChanges) {
@@ -82,8 +84,12 @@ export class IngestionWorker extends EventEmitter<WorkerEvents> {
       }
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
-      this.emit('status', 'error', `Failed to start: ${err.message}`);
-      this.emit('error', err);
+      // fullIndex already emitted status/error events for its own failures;
+      // only re-emit here for errors that occurred before fullIndex was called.
+      if (!fullIndexStarted) {
+        this.emit('status', 'error', `Failed to start: ${err.message}`);
+        this.emit('error', err);
+      }
       throw err;
     }
   }
@@ -126,13 +132,13 @@ export class IngestionWorker extends EventEmitter<WorkerEvents> {
 
         try {
           await this.processFile(relativePath);
+          indexedCount++;
         } catch (error) {
           const err = error instanceof Error ? error : new Error(String(error));
           this.emit('error', err, relativePath);
           // Continue with other files even if one fails
         }
 
-        indexedCount++;
         updateIndexingStatus('indexing', totalFiles, indexedCount);
         this.emit('progress', indexedCount, totalFiles);
       }
