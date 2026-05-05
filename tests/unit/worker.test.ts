@@ -39,7 +39,7 @@ describe('IngestionWorker.fullIndex error state', () => {
   it('writes state=error when getAllMarkdownFiles throws', async () => {
     vi.spyOn(embedderModule, 'preloadModel').mockResolvedValue(undefined);
     vi.spyOn(watcherModule.VaultWatcher, 'getAllMarkdownFiles').mockRejectedValue(new Error('disk failure'));
-    const updateStatus = vi.spyOn(indexerModule, 'updateIndexingStatus');
+    const updateStatus = vi.spyOn(indexerModule, 'updateIndexingStatus').mockReturnValue(undefined);
 
     vi.spyOn(indexerModule, 'getIndexingStatus').mockReturnValue({ state: 'idle', totalFiles: 0, indexedFiles: 0, lastError: null });
 
