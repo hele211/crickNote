@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../../src/storage/migrations/001-initial.js';
-import { indexNote, deleteStaleNotes } from '../../src/ingestion/indexer.js';
+import { indexNote, deleteStaleNotes, getIndexingStatus, updateIndexingStatus } from '../../src/ingestion/indexer.js';
 
 function minNote(filePath: string) {
   return {
@@ -45,5 +45,19 @@ describe('deleteStaleNotes', () => {
     deleteStaleNotes([], db);
     const rows = db.prepare('SELECT path FROM note_metadata').all();
     expect(rows).toHaveLength(0);
+  });
+});
+
+describe('getIndexingStatus', () => {
+  let db: Database.Database;
+  beforeEach(() => { db = new Database(':memory:'); runMigrations(db); });
+  afterEach(() => { db.close(); });
+
+  it('returns current state from indexing_status', () => {
+    updateIndexingStatus('indexing', 20, 13, undefined, db);
+    const status = getIndexingStatus(db);
+    expect(status.state).toBe('indexing');
+    expect(status.totalFiles).toBe(20);
+    expect(status.indexedFiles).toBe(13);
   });
 });

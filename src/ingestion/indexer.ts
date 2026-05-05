@@ -269,6 +269,20 @@ export function updateIndexingStatus(
   `).run(state, totalFiles, indexedFiles, lastError ?? null, Date.now());
 }
 
+interface IndexingStatus {
+  state: 'idle' | 'indexing' | 'error';
+  totalFiles: number;
+  indexedFiles: number;
+  lastError: string | null;
+}
+
+export function getIndexingStatus(db?: Database.Database): IndexingStatus {
+  const database = db ?? getDatabase();
+  return database.prepare(
+    'SELECT state, total_files AS totalFiles, indexed_files AS indexedFiles, last_error AS lastError FROM indexing_status WHERE id = 1'
+  ).get() as IndexingStatus;
+}
+
 /**
  * Mark the last full index timestamp.
  */
