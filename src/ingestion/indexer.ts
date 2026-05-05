@@ -240,8 +240,8 @@ export function needsReindex(filePath: string, contentHash: string, db?: Databas
 export function deleteStaleNotes(validPaths: string[], db?: Database.Database): void {
   const database = db ?? getDatabase();
   const validSet = new Set(validPaths);
-  const dbPaths = database.prepare('SELECT path FROM note_metadata').all() as Array<{ path: string }>;
   database.transaction(() => {
+    const dbPaths = database.prepare('SELECT path FROM note_metadata').all() as Array<{ path: string }>;
     for (const { path } of dbPaths) {
       if (!validSet.has(path)) {
         deleteNote(path, database);
