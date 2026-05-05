@@ -78,6 +78,7 @@ export class IngestionWorker extends EventEmitter<WorkerEvents> {
       // Perform initial full index
       fullIndexStarted = true;
       await this.fullIndex();
+      fullIndexStarted = false;
 
       if (this.watchForChanges) {
         // Start file watcher for incremental updates
@@ -91,6 +92,7 @@ export class IngestionWorker extends EventEmitter<WorkerEvents> {
       }
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
+      this.running = false;
       // fullIndex already emitted status/error events for its own failures;
       // only re-emit here for errors that occurred before fullIndex was called.
       if (!fullIndexStarted) {
@@ -134,6 +136,8 @@ export class IngestionWorker extends EventEmitter<WorkerEvents> {
       updateIndexingStatus('indexing', totalFiles, 0);
       this.emit('progress', 0, totalFiles);
 
+      const fileErrors: Array<{ path: string; error: Error }> = [];
+
       for (const relativePath of indexableFiles) {
         if (!this.running) break;
 
@@ -143,11 +147,18 @@ export class IngestionWorker extends EventEmitter<WorkerEvents> {
         } catch (error) {
           const err = error instanceof Error ? error : new Error(String(error));
           this.emit('error', err, relativePath);
-          // Continue with other files even if one fails
+          fileErrors.push({ path: relativePath, error: err });
         }
 
         updateIndexingStatus('indexing', totalFiles, indexedCount);
         this.emit('progress', indexedCount, totalFiles);
+      }
+
+      if (fileErrors.length > 0) {
+        const first = fileErrors[0]!;
+        throw new Error(
+          `Full index completed with ${fileErrors.length} file error(s); first failure at ${first.path}: ${first.error.message}`
+        );
       }
 
       deleteStaleNotes(indexableFiles);
