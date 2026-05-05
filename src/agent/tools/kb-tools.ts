@@ -11,6 +11,7 @@ import {
 } from '../../knowledge/reading-note.js';
 import { logger } from '../../utils/logger.js';
 import { autoWrite, frontmatterFieldUpdate } from '../../editing/auto-writer.js';
+import { readMappingArtifact } from '../../knowledge/mapping-artifact.js';
 
 const log = logger.child('kb-tools');
 
@@ -410,18 +411,15 @@ ${rejectedLines || '(none)'}
           return JSON.stringify({ error: `Mapping artifact not found: ${args.mapping}` });
         }
 
-        const raw = fs.readFileSync(artifactPath, 'utf-8');
-        const parsed = matter(raw);
-        const targets = parseMappingTargets(parsed.content);
+        const artifact = readMappingArtifact(artifactPath);
 
-        const pending = targets.find(t => t.state === 'pending');
+        const pending = artifact.targets.find(t => t.state === 'pending');
         if (!pending) {
           return JSON.stringify({ status: 'all_done', message: 'No pending targets remain. Call kb_apply_advance with the final update_log to complete the workflow.' });
         }
 
         // Resolve source slug from mapping frontmatter; validate it
-        const sourceWikilink = String(parsed.data['source'] || '');
-        const sourceSlug = sourceWikilink.replace(/^\[\[|\]\]$/g, '').trim();
+        const sourceSlug = artifact.sourceSlug;
         if (!isValidSlug(sourceSlug)) {
           return JSON.stringify({ error: `Invalid source slug in mapping frontmatter: "${sourceSlug}"` });
         }
@@ -502,7 +500,7 @@ ${rejectedLines || '(none)'}
           targetAction: pending.action,
           targetPath: targetPath || `(determine correct Kind folder before creating)`,
           mappingPath: args.mapping,
-          remainingPending: targets.filter(t => t.state === 'pending').length,
+          remainingPending: artifact.targets.filter(t => t.state === 'pending').length,
           instruction: [
             `Update [[${pending.slug}]] (action: ${pending.action}) using the source content above.`,
             'Rules:',
