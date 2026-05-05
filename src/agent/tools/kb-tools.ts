@@ -11,7 +11,7 @@ import {
 } from '../../knowledge/reading-note.js';
 import { logger } from '../../utils/logger.js';
 import { autoWrite, frontmatterFieldUpdate } from '../../editing/auto-writer.js';
-import { readMappingArtifact, writeMappingArtifact, MappingTargetState } from '../../knowledge/mapping-artifact.js';
+import { readMappingArtifact, writeMappingArtifact, MappingArtifact, MappingTargetState, MappingTargetKind, MappingTargetAction, MappingTargetConfidence } from '../../knowledge/mapping-artifact.js';
 
 const log = logger.child('kb-tools');
 
@@ -242,6 +242,9 @@ export function createKbTools(
                   slug: { type: 'string' },
                   action: { type: 'string', enum: ['update', 'create'] },
                   kind: { type: 'string', description: 'Concepts|Entities|Methods (required for create)' },
+                  title: { type: 'string', description: 'Human-readable title for the knowledge note' },
+                  confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+                  reason: { type: 'string', description: 'Why this target was proposed' },
                 },
                 required: ['slug', 'action'],
               },
@@ -257,6 +260,15 @@ export function createKbTools(
                 },
                 required: ['slug'],
               },
+            },
+            source_hash: {
+              type: 'string',
+              description: 'SHA-256 of source note content from kb_suggest output',
+            },
+            status: {
+              type: 'string',
+              enum: ['draft', 'confirmed'],
+              description: 'Artifact status. Default: confirmed.',
             },
             rerun_confirmed: {
               type: 'boolean',
@@ -277,7 +289,7 @@ export function createKbTools(
           return JSON.stringify({ error: `File not found: ${args.source}` });
         }
 
-        const confirmedTargets = (args.confirmed_targets as Array<{ slug: string; action: string; kind?: string }>) || [];
+        const confirmedTargets = (args.confirmed_targets as Array<{ slug: string; action: string; kind?: string; title?: string; confidence?: string; reason?: string }>) || [];
         const rejectedTargets = (args.rejected_targets as Array<{ slug: string; reason?: string }>) || [];
         // Determine source type once — only Reading notes use kb_status
         const isReadingNote = /^Reading\/[^/]+\//.test(args.source as string);
@@ -310,34 +322,32 @@ export function createKbTools(
           }
         }
 
-        // Build mapping artifact content
-        const sanitize = (s: string) => s.replace(/[|\n\r]/g, ' ').trim();
+        // Build mapping artifact
         const sourceSlug = path.basename(sourceRel, '.md');
         const sourceDir = path.dirname(sourceRel); // vault-relative directory
         const today = new Date().toISOString().slice(0, 10);
-        const targetRows = confirmedTargets.map(t =>
-          `| [[${sanitize(t.slug)}]] | ${t.action} | pending | | |`
-        ).join('\n');
-        const rejectedLines = rejectedTargets.map(t =>
-          `- [[${sanitize(t.slug)}]]${t.reason ? ` — "${sanitize(t.reason)}"` : ''}`
-        ).join('\n');
+        const artifactStatus = ((args.status as string) === 'draft' ? 'draft' : 'confirmed') as 'draft' | 'confirmed';
+        const sourceHash = args.source_hash as string | undefined;
 
-        const artifactContent = `---
-type: kb-mapping
-source: [[${sourceSlug}]]
-created: ${today}
-status: confirmed
----
-
-## Targets
-
-| Target | Action | State | Review-Queue | Updated |
-|--------|--------|-------|--------------|---------|
-${targetRows}
-
-## Rejected
-${rejectedLines || '(none)'}
-`;
+        const artifactObj: MappingArtifact = {
+          schemaVersion: 2,
+          source: `[[${sourceSlug}]]`,
+          sourceSlug,
+          sourcePath: sourceRel,
+          ...(sourceHash != null ? { sourceHash } : {}),
+          created: today,
+          status: artifactStatus,
+          targets: confirmedTargets.map(t => ({
+            slug: t.slug,
+            title: t.title,
+            kind: t.kind as MappingTargetKind | undefined,
+            action: t.action as MappingTargetAction,
+            state: 'pending' as MappingTargetState,
+            confidence: t.confidence as MappingTargetConfidence | undefined,
+            reason: t.reason,
+          })),
+          rejected: rejectedTargets.map(t => ({ slug: t.slug, reason: t.reason })),
+        };
 
         // Determine artifact path (alongside source note) — vault-relative
         const artifactRel = `${sourceDir}/${sourceSlug}-mapping.md`;
@@ -356,7 +366,7 @@ ${rejectedLines || '(none)'}
             }
             const ts = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
             const newRel = `${sourceDir}/${sourceSlug}-mapping-${ts}.md`;
-            autoWrite(path.join(vaultPath, newRel), artifactContent, vaultPath);
+            writeMappingArtifact(path.join(vaultPath, newRel), artifactObj, vaultPath);
             if (isReadingNote) {
               frontmatterFieldUpdate(sourceAbsVault, 'kb_status', 'mapped', vaultPath);
             }
@@ -367,7 +377,7 @@ ${rejectedLines || '(none)'}
           // status: draft → overwrite
         }
 
-        autoWrite(path.join(vaultPath, artifactRel), artifactContent, vaultPath);
+        writeMappingArtifact(path.join(vaultPath, artifactRel), artifactObj, vaultPath);
         if (isReadingNote) {
           frontmatterFieldUpdate(sourceAbsVault, 'kb_status', 'mapped', vaultPath);
         }
