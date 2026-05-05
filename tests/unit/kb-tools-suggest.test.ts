@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { createKbTools } from '../../src/agent/tools/kb-tools.js';
 
 const READING_NOTE = `---
@@ -72,6 +73,25 @@ describe('kb_suggest tool', () => {
     const result = JSON.parse(await tool.execute({ source: 'Reading/Papers/smith-2026-il42.md' }));
     expect(result.instruction).toContain('vault_search');
     expect(result.instruction).toContain('STEP 1');
+  });
+
+  it('kb_suggest returns already_suggested when source_hash matches existing artifact', async () => {
+    const tool = tools.find(t => t.definition.name === 'kb_suggest')!;
+    const sourcePath = path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-il42.md');
+    const sourceContent = fs.readFileSync(sourcePath, 'utf-8');
+    const sourceHash = crypto.createHash('sha256').update(sourceContent).digest('hex');
+
+    // Write an existing confirmed artifact with matching hash
+    const artifactContent = `---\ntype: kb-mapping\nschema_version: 2\nsource: "[[smith-2026-il42]]"\nsource_hash: "${sourceHash}"\ncreated: 2026-04-08\nstatus: confirmed\ntargets: []\nrejected: []\n---\n`;
+    fs.writeFileSync(
+      path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-il42-mapping.md'),
+      artifactContent
+    );
+
+    const result = JSON.parse(await tool.execute({ source: 'Reading/Papers/smith-2026-il42.md' }));
+    expect(result.status).toBe('already_suggested');
+    expect(result.mappingStatus).toBe('confirmed');
+    expect(result.artifactPath).toContain('smith-2026-il42-mapping.md');
   });
 });
 
