@@ -91,7 +91,7 @@ Queries all `path` values from `note_metadata`, diffs against `validPaths`, call
 
 1. Startup with `state = 'indexing'` in DB logs a recovery warning and completes successfully.
 2. Full index removes DB rows for files deleted from the vault.
-3. Full index failure mid-run (e.g. `embedTexts()` throws during the loop) writes `state = 'error'`.
+3. Full index failure outside the per-file loop (e.g. `VaultWatcher.getAllMarkdownFiles()` or `deleteStaleNotes()` throws) writes `state = 'error'`. Per-file errors are caught individually and do not trigger this path.
 4. New files added to the vault appear in `note_metadata` after indexing.
 
 ---
@@ -141,6 +141,21 @@ export interface MappingArtifact {
 }
 ```
 
+#### TypeScript ↔ YAML field name mapping
+
+To prevent implementation drift, TypeScript camelCase fields serialize to snake_case YAML keys:
+
+| TypeScript field | YAML key | Notes |
+|---|---|---|
+| `schemaVersion` | `schema_version` | |
+| `sourceSlug` | — | Derived from `source`; not written to YAML |
+| `sourcePath` | `source_path` | |
+| `sourceHash` | `source_hash` | |
+| `MappingArtifactTarget.reviewQueue` | `review_queue` | |
+| `MappingArtifactTarget.updated` | `updated` | No rename needed |
+
+All other fields (`slug`, `title`, `kind`, `action`, `state`, `confidence`, `reason`, `source`, `created`, `status`, `targets`, `rejected`, `warnings`) are identical in both TypeScript and YAML.
+
 #### `normalizeMappingSource(value)`
 
 Handles malformed `source` values found in existing artifacts (nested arrays like `[['slug']]`, plain strings, `[[slug]]` wikilinks):
@@ -161,7 +176,7 @@ export function readMappingArtifact(absPath: string): MappingArtifact
 
 1. Read file and parse frontmatter via `gray-matter`.
 2. Call `normalizeMappingSource(frontmatter.source)` for `source` / `sourceSlug`.
-3. If `frontmatter.schema_version === 2` and `frontmatter.targets` is a non-empty array → use frontmatter targets as canonical (`schemaVersion: 2`).
+3. If `frontmatter.schema_version === 2` and `frontmatter.targets` is an array (including empty) → use frontmatter targets as canonical (`schemaVersion: 2`). An empty `targets: []` is a valid draft state and must not fall back to the table parser.
 4. Otherwise → fall back to `parseMappingTargets(body)` (`schemaVersion: 1`). Targets from the table are converted to `MappingArtifactTarget` objects with `action`, `state`, and `reviewQueue` only (no `kind`, `confidence`, `reason` — these were not in schema v1).
 5. Throws if file does not exist.
 
@@ -251,19 +266,19 @@ The agent's reasoning still generates the actual target list — the instruction
 **Writes via `writeMappingArtifact()`.** The hand-built template string is removed.
 
 **Collision handling** is unchanged from Spec 2 §10:
-- Existing `applied` artifact → require `rerun_confirmed: true` to overwrite
-- Existing `confirmed` artifact → return `already_in_progress`
-- Existing `draft` artifact → overwrite silently
+- Existing `applied` artifact → a new timestamped artifact (`{slug}-mapping-{YYYY-MM-DD}T{HHmmss}.md`) is created and the applied artifact is preserved. Requires `rerun_confirmed: true`; without it, returns a prompt asking for confirmation.
+- Existing `confirmed` artifact → return `already_in_progress`; user must run `kb_apply` to continue.
+- Existing `draft` artifact → overwrite silently.
 
 ### 2.4 `kb_apply`
 
-Replace `parseMappingTargets(parsed.content)` with `readMappingArtifact(artifactPath).targets`. The `pending` target lookup is unchanged. Schema v1 fallback is transparent.
+Replace the `matter(raw)` + `parseMappingTargets(parsed.content)` + raw `source` wikilink parsing sequence with `const artifact = readMappingArtifact(artifactPath)`. Use `artifact.targets` for the pending target lookup and `artifact.sourceSlug` wherever the source slug is needed (replaces the manual `replace(/^\[\[|\]\]$/)` extraction). Schema v1 fallback is transparent; `normalizeMappingSource` runs inside `readMappingArtifact` so malformed old source values are fixed on read.
 
 ### 2.5 `kb_apply_advance`
 
 Replace the `parseMappingTargets` + `updateMappingTargetState` + `matter.stringify` sequence with:
 
-1. `const artifact = readMappingArtifact(artifactPath)`
+1. `const artifact = readMappingArtifact(artifactPath)` — use `artifact.sourceSlug` for all source-slug references (replaces raw frontmatter extraction)
 2. Find `targets[N]` where `slug === target_slug`; update `state`, `reviewQueue`, `updated`
 3. Update `artifact.status` to `'confirmed'` or `'applied'` based on remaining pending targets
 4. `writeMappingArtifact(artifactPath, artifact, vaultPath)`
@@ -272,13 +287,14 @@ Old table-only artifacts are read as schema v1 and written back as schema v2 —
 
 `updateMappingTargetState()` is deleted once all advance tests pass.
 
-### Tests (5)
+### Tests (6)
 
 1. `writeMappingArtifact` + `readMappingArtifact` round-trip: schema v2 frontmatter is canonical; table is regenerated on write.
 2. `readMappingArtifact` on old table-only artifact: falls back to table parser, returns correct targets with `schemaVersion: 1`.
 3. `normalizeMappingSource` handles: clean `[[slug]]`, plain string, nested array `[['slug']]`.
 4. `kb_suggest` dedup: same `source_hash` on existing artifact returns `already_suggested` without re-proposing.
 5. `kb_apply_advance` on schema v1 artifact: reads table, updates state, writes back as schema v2.
+6. `readMappingArtifact` on a schema v2 artifact where the markdown table disagrees with `frontmatter.targets`: returns the frontmatter targets, not the table. Proves the table is display-only and guards against regression to table parsing.
 
 ---
 
