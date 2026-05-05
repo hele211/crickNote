@@ -51,3 +51,24 @@ describe('IngestionWorker.fullIndex error state', () => {
     vi.restoreAllMocks();
   });
 });
+
+describe('IngestionWorker startup recovery', () => {
+  it('completes start() and runs full index when indexing_status.state is indexing on startup', async () => {
+    vi.spyOn(embedderModule, 'preloadModel').mockResolvedValue(undefined);
+    vi.spyOn(watcherModule.VaultWatcher, 'getAllMarkdownFiles').mockResolvedValue([]);
+    vi.spyOn(indexerModule, 'updateIndexingStatus').mockReturnValue(undefined);
+    vi.spyOn(indexerModule, 'markFullIndexComplete').mockReturnValue(undefined);
+    vi.spyOn(indexerModule, 'deleteStaleNotes').mockReturnValue(undefined);
+    vi.spyOn(indexerModule, 'getIndexingStatus').mockReturnValue({
+      state: 'indexing', totalFiles: 20, indexedFiles: 13, lastError: null,
+    });
+
+    const worker = new IngestionWorker('/tmp/test-vault', { watchForChanges: false });
+    await worker.start();
+
+    // Verify start() completed and triggered a full index (updateIndexingStatus called with 'indexing')
+    expect(indexerModule.updateIndexingStatus).toHaveBeenCalledWith('indexing', 0, 0);
+
+    vi.restoreAllMocks();
+  });
+});

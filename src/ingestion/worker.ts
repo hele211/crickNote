@@ -13,6 +13,7 @@ import {
   updateIndexingStatus,
   markFullIndexComplete,
   deleteStaleNotes,
+  getIndexingStatus,
 } from './indexer.js';
 import { logger } from '../utils/logger.js';
 
@@ -63,6 +64,12 @@ export class IngestionWorker extends EventEmitter<WorkerEvents> {
 
     let fullIndexStarted = false;
     try {
+      // Check for interrupted previous run
+      const currentStatus = getIndexingStatus();
+      if (currentStatus?.state === 'indexing') {
+        log.warn('Previous index run did not complete — restarting full index.');
+      }
+
       // Pre-load embedding model
       log.info('Loading embedding model');
       this.emit('status', 'indexing', 'Loading embedding model...');
