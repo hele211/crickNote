@@ -234,6 +234,23 @@ export function needsReindex(filePath: string, contentHash: string, db?: Databas
 }
 
 /**
+ * Delete notes from the database whose paths are not in validPaths.
+ * Used after a full vault scan to remove orphan DB rows for deleted files.
+ */
+export function deleteStaleNotes(validPaths: string[], db?: Database.Database): void {
+  const database = db ?? getDatabase();
+  const validSet = new Set(validPaths);
+  const dbPaths = database.prepare('SELECT path FROM note_metadata').all() as Array<{ path: string }>;
+  database.transaction(() => {
+    for (const { path } of dbPaths) {
+      if (!validSet.has(path)) {
+        deleteNote(path, database);
+      }
+    }
+  })();
+}
+
+/**
  * Update the indexing_status table with current progress.
  */
 export function updateIndexingStatus(
