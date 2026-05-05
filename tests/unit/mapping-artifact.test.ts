@@ -163,10 +163,12 @@ describe('writeMappingArtifact round-trip', () => {
     expect(readBack.sourceHash).toBe('sha256abc');
     expect(readBack.targets).toHaveLength(2);
     expect(readBack.targets[0].slug).toBe('tirtl-seq');
+    expect(readBack.targets[0].title).toBe('TIRTL-seq');
     expect(readBack.targets[0].kind).toBe('Methods');
     expect(readBack.targets[0].confidence).toBe('high');
     expect(readBack.targets[1].slug).toBe('tcr-repertoire');
     expect(readBack.rejected[0].slug).toBe('western-blot');
+    expect(readBack.rejected[0].reason).toBe('not novel');
   });
 
   it('regenerates markdown table from frontmatter (table is display-only)', () => {
