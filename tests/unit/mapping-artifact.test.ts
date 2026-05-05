@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { normalizeMappingSource, readMappingArtifact } from '../../src/knowledge/mapping-artifact.js';
+import { MappingArtifact, normalizeMappingSource, readMappingArtifact, writeMappingArtifact } from '../../src/knowledge/mapping-artifact.js';
 
 describe('normalizeMappingSource', () => {
   it('handles clean [[slug]] wikilink', () => {
@@ -128,5 +128,62 @@ describe('readMappingArtifact', () => {
 
   it('throws if file does not exist', () => {
     expect(() => readMappingArtifact('/nonexistent/path.md')).toThrow();
+  });
+});
+
+describe('writeMappingArtifact round-trip', () => {
+  let tmpDir: string;
+  let vaultPath: string;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'maw-test-'));
+    vaultPath = tmpDir;
+  });
+  afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+
+  it('writes schema v2 and reads back identical targets', () => {
+    const artifact: MappingArtifact = {
+      schemaVersion: 2,
+      source: '[[pogorelyy-2026-tirtl-seq]]',
+      sourceSlug: 'pogorelyy-2026-tirtl-seq',
+      sourcePath: 'Reading/Papers/pogorelyy-2026-tirtl-seq.md',
+      sourceHash: 'sha256abc',
+      created: '2026-05-05',
+      status: 'confirmed',
+      targets: [
+        { slug: 'tirtl-seq', title: 'TIRTL-seq', kind: 'Methods', action: 'create', state: 'pending', confidence: 'high', reason: 'Main method' },
+        { slug: 'tcr-repertoire', kind: 'Concepts', action: 'update', state: 'pending' },
+      ],
+      rejected: [{ slug: 'western-blot', reason: 'not novel' }],
+    };
+    const p = path.join(vaultPath, 'Reading/Papers/pogorelyy-2026-tirtl-seq-mapping.md');
+    writeMappingArtifact(p, artifact, vaultPath);
+
+    const readBack = readMappingArtifact(p);
+    expect(readBack.schemaVersion).toBe(2);
+    expect(readBack.sourceHash).toBe('sha256abc');
+    expect(readBack.targets).toHaveLength(2);
+    expect(readBack.targets[0].slug).toBe('tirtl-seq');
+    expect(readBack.targets[0].kind).toBe('Methods');
+    expect(readBack.targets[0].confidence).toBe('high');
+    expect(readBack.targets[1].slug).toBe('tcr-repertoire');
+    expect(readBack.rejected[0].slug).toBe('western-blot');
+  });
+
+  it('regenerates markdown table from frontmatter (table is display-only)', () => {
+    const artifact: MappingArtifact = {
+      schemaVersion: 2,
+      source: '[[slug]]',
+      sourceSlug: 'slug',
+      created: '2026-05-05',
+      status: 'confirmed',
+      targets: [{ slug: 'tirtl-seq', kind: 'Methods', action: 'create', state: 'pending' }],
+      rejected: [],
+    };
+    const p = path.join(vaultPath, 'Reading/Papers/test-slug-mapping.md');
+    writeMappingArtifact(p, artifact, vaultPath);
+    const content = fs.readFileSync(p, 'utf-8');
+    expect(content).toContain('## Targets');
+    expect(content).toContain('| [[tirtl-seq]]');
+    expect(content).toContain('schema_version: 2');
   });
 });

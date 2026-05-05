@@ -127,3 +127,48 @@ export function readMappingArtifact(absPath: string): MappingArtifact {
     warnings: Array.isArray(fm['warnings']) ? (fm['warnings'] as unknown[]).map(String) : undefined,
   };
 }
+
+export function writeMappingArtifact(
+  absPath: string,
+  artifact: MappingArtifact,
+  vaultPath: string
+): void {
+  const sanitize = (s: string) => s.replace(/[|\n\r]/g, ' ').trim();
+
+  const fmTargets = artifact.targets.map(t => ({
+    slug: t.slug,
+    ...(t.title != null ? { title: t.title } : {}),
+    ...(t.kind != null ? { kind: t.kind } : {}),
+    action: t.action,
+    state: t.state,
+    ...(t.confidence != null ? { confidence: t.confidence } : {}),
+    ...(t.reason != null ? { reason: t.reason } : {}),
+    ...(t.reviewQueue != null ? { review_queue: t.reviewQueue } : {}),
+    ...(t.updated != null ? { updated: t.updated } : {}),
+  }));
+
+  const frontmatter: Record<string, unknown> = {
+    type: 'kb-mapping',
+    schema_version: 2,
+    source: artifact.source,
+    ...(artifact.sourcePath != null ? { source_path: artifact.sourcePath } : {}),
+    ...(artifact.sourceHash != null ? { source_hash: artifact.sourceHash } : {}),
+    created: artifact.created,
+    status: artifact.status,
+    targets: fmTargets,
+    rejected: artifact.rejected,
+    ...(artifact.warnings != null ? { warnings: artifact.warnings } : {}),
+  };
+
+  const tableRows = artifact.targets.map(t =>
+    `| [[${sanitize(t.slug)}]] | ${t.kind ?? ''} | ${t.action} | ${t.state} | ${t.confidence ?? ''} | ${t.reason ? sanitize(t.reason) : ''} | ${t.reviewQueue ?? ''} | ${t.updated ?? ''} |`
+  ).join('\n');
+
+  const rejectedLines = artifact.rejected.map(r =>
+    `- [[${sanitize(r.slug)}]]${r.reason ? ` — "${sanitize(r.reason)}"` : ''}`
+  ).join('\n') || '(none)';
+
+  const body = `\n## Targets\n\n| Target | Kind | Action | State | Confidence | Reason | Review-Queue | Updated |\n|--------|------|--------|-------|------------|--------|--------------|---------|${artifact.targets.length ? '\n' + tableRows : ''}\n\n## Rejected\n${rejectedLines}\n`;
+
+  autoWrite(absPath, matter.stringify(body, frontmatter), vaultPath);
+}
