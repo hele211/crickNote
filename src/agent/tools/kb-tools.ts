@@ -33,53 +33,6 @@ function safeVaultJoin(vaultRoot: string, rel: string): string {
 const SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 function isValidSlug(s: string): boolean { return SLUG_RE.test(s); }
 
-// Escape regex metacharacters in a literal string.
-function escapeRegex(s: string): string { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-
-// Helper: parse the Targets table from a mapping artifact body.
-// Scoped to the ## Targets section; supports [[slug|alias]] wikilinks.
-interface MappingTarget {
-  slug: string;
-  action: string;
-  state: string;
-  reviewQueue: string;
-  updated: string;
-}
-
-function parseMappingTargets(body: string): MappingTarget[] {
-  const targets: MappingTarget[] = [];
-  const sectionMatch = body.match(/## Targets\s*\n([\s\S]*?)(?=\n## |\s*$)/);
-  if (!sectionMatch) return targets;
-  for (const line of sectionMatch[1].split('\n')) {
-    if (!line.includes('[[')) continue;
-    // Collapse display aliases before splitting so | inside [[...]] doesn't fragment cells
-    const collapsed = line.replace(/\[\[([^\]]*?)\|([^\]]*?)\]\]/g, '[[$1]]');
-    const cells = collapsed.split('|').map(c => c.trim()).filter((_, i, a) => i > 0 && i < a.length - 1);
-    if (cells.length < 5) continue;
-    const slugMatch = cells[0].match(/\[\[([^\]]+)\]\]/);
-    if (!slugMatch) continue;
-    const slug = slugMatch[1].trim();
-    if (!slug) continue;
-    targets.push({ slug, action: cells[1], state: cells[2], reviewQueue: cells[3], updated: cells[4] });
-  }
-  return targets;
-}
-
-// Update a target row's state in the mapping body. Returns updated content and a flag.
-function updateMappingTargetState(
-  artifactContent: string,
-  slug: string,
-  newState: string,
-  reviewQueueLink: string,
-): { content: string; updated: boolean } {
-  const escapedSlug = escapeRegex(slug);
-  const rowRegex = new RegExp(
-    `(\\|\\s*\\[\\[${escapedSlug}(?:\\|[^\\]]*)?\\]\\]\\s*\\|\\s*\\S+\\s*\\|)\\s*\\S+\\s*(\\|[^|]*\\|)[^|]*(\\|)`,
-  );
-  const timestamp = new Date().toISOString().slice(0, 16);
-  const newContent = artifactContent.replace(rowRegex, `$1 ${newState} | ${reviewQueueLink} | ${timestamp} |`);
-  return { content: newContent, updated: newContent !== artifactContent };
-}
 
 export function createKbTools(
   vaultPath: string,
@@ -1028,17 +981,20 @@ ${updateLog.notes || ''}
         const mappingAbs = findMappingArtifact(path.join(vaultPath, 'Reading'))
           || findMappingArtifact(path.join(vaultPath, 'Projects'));
         if (mappingAbs) {
-          const mappingRaw = fs.readFileSync(mappingAbs, 'utf-8');
-          const mappingParsed = matter(mappingRaw);
-          const { content: updatedBody, updated: rowUpdated } = updateMappingTargetState(mappingParsed.content, rqTarget, 'applied', `[[${path.basename(rqPath, '.md')}]]`);
-          if (!rowUpdated) {
+          const resolveArtifact = readMappingArtifact(mappingAbs);
+          const resolveTargetIndex = resolveArtifact.targets.findIndex(t => t.slug === rqTarget);
+          if (resolveTargetIndex === -1) {
             log.warn('kb_resolve_review: target row not found in mapping artifact, skipping status update', { rqTarget, mappingAbs });
           } else {
-            const allTargets = parseMappingTargets(updatedBody);
-            const anyUnresolved = allTargets.some(t => t.state === 'pending' || t.state === 'deferred');
-            const newMappingStatus = anyUnresolved ? 'confirmed' : 'applied';
-            const updatedMapping = matter.stringify(updatedBody, { ...mappingParsed.data, status: newMappingStatus });
-            autoWrite(mappingAbs, updatedMapping, vaultPath);
+            resolveArtifact.targets[resolveTargetIndex] = {
+              ...resolveArtifact.targets[resolveTargetIndex],
+              state: 'applied' as MappingTargetState,
+              reviewQueue: `[[${path.basename(rqPath, '.md')}]]`,
+              updated: new Date().toISOString().slice(0, 16),
+            };
+            const anyUnresolved = resolveArtifact.targets.some(t => t.state === 'pending' || t.state === 'deferred');
+            resolveArtifact.status = anyUnresolved ? 'confirmed' : 'applied';
+            writeMappingArtifact(mappingAbs, resolveArtifact, vaultPath);
           }
         }
 

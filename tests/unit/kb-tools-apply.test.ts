@@ -351,10 +351,11 @@ status: confirmed
       resolution_summary: 'Cell-line effect confirmed.',
       confirmed_knowledge_write: true,
     });
-    const mapping = fs.readFileSync(
-      path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-il42-mapping.md'),
-      'utf-8'
+    const mapping = readMappingArtifact(
+      path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-il42-mapping.md')
     );
-    expect(mapping).toContain('| [[cd4-cd8-interaction]] | update | applied |');
+    expect(mapping.schemaVersion).toBe(2);
+    expect(mapping.targets[0].slug).toBe('cd4-cd8-interaction');
+    expect(mapping.targets[0].state).toBe('applied');
   });
 });
