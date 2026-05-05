@@ -118,7 +118,9 @@ export function readMappingArtifact(absPath: string): MappingArtifact {
     sourceSlug,
     sourcePath: fm['source_path'] != null ? String(fm['source_path']) : undefined,
     sourceHash: fm['source_hash'] != null ? String(fm['source_hash']) : undefined,
-    created: String(fm['created'] ?? new Date().toISOString().slice(0, 10)),
+    created: fm['created'] instanceof Date
+      ? fm['created'].toISOString().slice(0, 10)
+      : String(fm['created'] ?? new Date().toISOString().slice(0, 10)),
     status: (fm['status'] as MappingArtifact['status']) ?? 'confirmed',
     targets,
     rejected,

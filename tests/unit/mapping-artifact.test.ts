@@ -94,6 +94,7 @@ describe('readMappingArtifact', () => {
     expect(artifact.targets).toHaveLength(1);
     expect(artifact.targets[0].slug).toBe('cd4-cd8-interaction');
     expect(artifact.targets[0].state).toBe('pending');
+    expect(artifact.created).toBe('2026-04-08');
   });
 
   it('reads schema v2 frontmatter as canonical, ignores table content', () => {
