@@ -153,7 +153,7 @@ export function createKbTools(
           for (const entry of fs.readdirSync(artifactDirAbs).filter(e => artifactPattern.test(e))) {
             try {
               const existingArtifact = readMappingArtifact(path.join(artifactDirAbs, entry));
-              if (existingArtifact.sourceHash === sourceHash && ['draft', 'confirmed', 'applied'].includes(existingArtifact.status)) {
+              if (existingArtifact.sourceHash === sourceHash && ['confirmed', 'applied'].includes(existingArtifact.status)) {
                 const artifactRelForDedup = `${sourceDirForDedup}/${entry}`;
                 const message = existingArtifact.status === 'applied'
                   ? 'Mapping already applied. Use rerun_confirmed: true with kb_write_mapping to re-map.'
@@ -366,7 +366,7 @@ export function createKbTools(
         }
 
         writeMappingArtifact(path.join(vaultPath, artifactRel), artifactObj, vaultPath);
-        if (isReadingNote) {
+        if (isReadingNote && artifactStatus !== 'draft') {
           frontmatterFieldUpdate(sourceAbsVault, 'kb_status', 'mapped', vaultPath);
         }
 
@@ -974,11 +974,14 @@ ${updateLog.notes || ''}
 
         // Update mapping artifact: change deferred row → applied for this rq_source/rq_target pair
         const rqSourceSlug = rqSource;
+        const mappingArtifactPattern = new RegExp(
+          `^${rqSourceSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-mapping(?:-\\d{8}T\\d{6})?\\.md$`
+        );
         function findMappingArtifact(rootDir: string): string | null {
           if (!fs.existsSync(rootDir)) return null;
           for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
             if (entry.isDirectory()) { const r = findMappingArtifact(path.join(rootDir, entry.name)); if (r) return r; }
-            else if (entry.name === `${rqSourceSlug}-mapping.md`) return path.join(rootDir, entry.name);
+            else if (mappingArtifactPattern.test(entry.name)) return path.join(rootDir, entry.name);
           }
           return null;
         }

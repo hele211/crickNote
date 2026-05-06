@@ -233,7 +233,7 @@ function findRelevantMappingArtifact(vaultPath: string, noteRelPath: string, slu
     };
   }
 
-  const active = confirmedCandidates[0] ?? candidates[0];
+  const active = confirmedCandidates[0] ?? candidates.find((c) => c.status !== 'draft');
 
   if (!active) {
     return { pendingTargets: 0 };
