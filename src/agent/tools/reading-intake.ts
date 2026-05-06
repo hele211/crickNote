@@ -19,6 +19,7 @@ import {
   type ReadingPipelineStep,
   type ReadingSourceType,
 } from '../../knowledge/reading-note.js';
+import { readMappingArtifact } from '../../knowledge/mapping-artifact.js';
 import { resolveVaultPath } from '../../utils/paths.js';
 import { renderNoteTemplate, type RenderResult, type TemplateKind } from '../../templates/template-loader.js';
 
@@ -193,18 +194,6 @@ function findReadingNoteBySlug(vaultPath: string, slug: string): { absPath: stri
   return null;
 }
 
-function countPendingMappingTargets(body: string): number {
-  const sectionMatch = body.match(/## Targets\s*\n([\s\S]*?)(?=\n## |\s*$)/);
-  if (!sectionMatch) {
-    return 0;
-  }
-
-  return sectionMatch[1]
-    .split('\n')
-    .filter((line) => /\|\s*(pending|deferred)\s*\|/.test(line))
-    .length;
-}
-
 function findRelevantMappingArtifact(vaultPath: string, noteRelPath: string, slug: string): MappingArtifactSummary {
   const noteDir = path.dirname(noteRelPath);
   const absDir = resolveVaultPath(vaultPath, noteDir);
@@ -218,12 +207,11 @@ function findRelevantMappingArtifact(vaultPath: string, noteRelPath: string, slu
     .map((entry) => {
       const relPath = path.posix.join(noteDir, entry);
       const absPath = resolveVaultPath(vaultPath, relPath);
-      const raw = fs.readFileSync(absPath, 'utf-8');
-      const parsed = matter(raw);
+      const artifact = readMappingArtifact(absPath);
       return {
         relPath,
-        status: typeof parsed.data.status === 'string' ? parsed.data.status : undefined,
-        pendingTargets: countPendingMappingTargets(parsed.content),
+        status: artifact.status,
+        pendingTargets: artifact.targets.filter((t) => t.state === 'pending' || t.state === 'deferred').length,
         mtime: fs.statSync(absPath).mtimeMs,
       };
     })
