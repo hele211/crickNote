@@ -1023,6 +1023,7 @@ ${updateLog.notes || ''}
             null
           );
         })();
+        let mappingArtifactUpdated = false;
         if (mappingAbs) {
           const resolveArtifact = readMappingArtifact(mappingAbs);
           const resolveTargetIndex = (() => {
@@ -1044,7 +1045,10 @@ ${updateLog.notes || ''}
             const anyUnresolved = resolveArtifact.targets.some(t => t.state === 'pending' || t.state === 'deferred');
             resolveArtifact.status = anyUnresolved ? 'confirmed' : 'applied';
             writeMappingArtifact(mappingAbs, resolveArtifact, vaultPath);
+            mappingArtifactUpdated = true;
           }
+        } else {
+          log.warn('kb_resolve_review: no mapping artifact found, skipping status update', { rqSource, rqTarget });
         }
 
         return JSON.stringify({
@@ -1052,7 +1056,10 @@ ${updateLog.notes || ''}
           rqItem: args.review_item,
           needsReviewCleared: pendingForTarget === 0,
           kbStatusAdvanced: pendingForSource === 0,
-          message: `Review-Queue item ${resolution}. Mapping artifact row updated (deferred → applied). ${pendingForTarget === 0 ? `needs_review cleared on [[${rqTarget}]].` : ''} ${pendingForSource === 0 ? `kb_status advanced to merged.` : ''}`,
+          mappingArtifactUpdated,
+          message: mappingArtifactUpdated
+            ? `Review-Queue item ${resolution}. Mapping artifact row updated (deferred → applied). ${pendingForTarget === 0 ? `needs_review cleared on [[${rqTarget}]].` : ''} ${pendingForSource === 0 ? `kb_status advanced to merged.` : ''}`
+            : `Review-Queue item ${resolution}. No matching mapping artifact row was updated. ${pendingForTarget === 0 ? `needs_review cleared on [[${rqTarget}]].` : ''} ${pendingForSource === 0 ? `kb_status advanced to merged.` : ''}`,
         });
       },
     },
