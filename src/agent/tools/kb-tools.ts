@@ -989,7 +989,7 @@ ${updateLog.notes || ''}
           ...collectMappingArtifacts(path.join(vaultPath, 'Reading')),
           ...collectMappingArtifacts(path.join(vaultPath, 'Projects')),
         ];
-        // Pick the confirmed artifact with this target still deferred; fall back to any owner
+        // Prefer artifact with target still deferred + matching rq link; fall back to any owner
         const rqLink = `[[${path.basename(rqPath, '.md')}]]`;
         const mappingAbs = (() => {
           const parsed = allMappingCandidates.flatMap(abs => {
@@ -997,11 +997,9 @@ ${updateLog.notes || ''}
           });
           return (
             parsed.find(({ artifact }) =>
-              artifact.status === 'confirmed' &&
               artifact.targets.some(t => t.slug === rqTarget && t.state === 'deferred' && t.reviewQueue === rqLink)
             )?.abs ??
             parsed.find(({ artifact }) =>
-              artifact.status === 'confirmed' &&
               artifact.targets.some(t => t.slug === rqTarget && t.state === 'deferred')
             )?.abs ??
             parsed.find(({ artifact }) => artifact.targets.some(t => t.slug === rqTarget))?.abs ??
