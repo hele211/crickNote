@@ -160,7 +160,7 @@ export function createKbTools(
                   : 'A mapping already exists for this version of the source note. Run kb_apply to continue.';
                 return JSON.stringify({
                   status: 'already_suggested',
-                  sourceHash,
+                  source_hash: sourceHash,
                   artifactPath: artifactRelForDedup,
                   mappingStatus: existingArtifact.status,
                   message,
@@ -297,11 +297,19 @@ export function createKbTools(
           return JSON.stringify({ status: 'skipped', message: 'No targets confirmed. No mapping artifact written.' + (isReadingNote ? ' kb_status set to skipped.' : '') });
         }
 
-        // Runtime validation of action enum and slug format
+        // Runtime validation of action, kind, confidence enums and slug format
         const validActions = new Set(['update', 'create']);
+        const validKinds = new Set(['Concepts', 'Entities', 'Methods']);
+        const validConfidence = new Set(['high', 'medium', 'low']);
         for (const t of confirmedTargets) {
           if (!validActions.has(t.action)) {
             return JSON.stringify({ error: `Invalid action "${t.action}" for target "${t.slug}". Must be "update" or "create".` });
+          }
+          if (t.kind && !validKinds.has(t.kind)) {
+            return JSON.stringify({ error: `Invalid kind "${t.kind}" for target "${t.slug}". Must be Concepts, Entities, or Methods.` });
+          }
+          if (t.confidence && !validConfidence.has(t.confidence)) {
+            return JSON.stringify({ error: `Invalid confidence "${t.confidence}" for target "${t.slug}". Must be high, medium, or low.` });
           }
           if (t.action === 'create' && !t.kind) {
             return JSON.stringify({ error: `Target "${t.slug}" has action "create" but missing required "kind" field (Concepts|Entities|Methods).` });
@@ -358,7 +366,14 @@ export function createKbTools(
             if (isReadingNote && artifactStatus !== 'draft') {
               frontmatterFieldUpdate(sourceAbsVault, 'kb_status', 'mapped', vaultPath);
             }
-            return JSON.stringify({ status: 'mapped', artifactPath: newRel, targetCount: confirmedTargets.length, note: 'Previous applied artifact preserved; new timestamped artifact created.' });
+            return JSON.stringify({
+              status: artifactStatus === 'draft' ? 'draft' : 'mapped',
+              artifactPath: newRel,
+              targetCount: confirmedTargets.length,
+              note: artifactStatus === 'draft'
+                ? 'Previous applied artifact preserved; draft timestamped artifact created.'
+                : 'Previous applied artifact preserved; new timestamped artifact created.',
+            });
           } else if (existingArtifact.status === 'confirmed') {
             return JSON.stringify({ status: 'already_in_progress', message: 'A mapping is already in progress. Run kb_apply to continue.' });
           }
@@ -371,10 +386,12 @@ export function createKbTools(
         }
 
         return JSON.stringify({
-          status: 'mapped',
+          status: artifactStatus === 'draft' ? 'draft' : 'mapped',
           artifactPath: artifactRel,
           targetCount: confirmedTargets.length,
-          message: `Mapping artifact written. Run kb_apply with mapping: "${artifactRel}" to start applying updates.`,
+          message: artifactStatus === 'draft'
+            ? `Draft mapping artifact written at "${artifactRel}". Confirm it before running kb_apply.`
+            : `Mapping artifact written. Run kb_apply with mapping: "${artifactRel}" to start applying updates.`,
         });
       },
     },
@@ -1008,7 +1025,13 @@ ${updateLog.notes || ''}
         })();
         if (mappingAbs) {
           const resolveArtifact = readMappingArtifact(mappingAbs);
-          const resolveTargetIndex = resolveArtifact.targets.findIndex(t => t.slug === rqTarget);
+          const resolveTargetIndex = (() => {
+            const exact = resolveArtifact.targets.findIndex(t => t.slug === rqTarget && t.state === 'deferred' && t.reviewQueue === rqLink);
+            if (exact !== -1) return exact;
+            const deferred = resolveArtifact.targets.findIndex(t => t.slug === rqTarget && t.state === 'deferred');
+            if (deferred !== -1) return deferred;
+            return resolveArtifact.targets.findIndex(t => t.slug === rqTarget);
+          })();
           if (resolveTargetIndex === -1) {
             log.warn('kb_resolve_review: target row not found in mapping artifact, skipping status update', { rqTarget, mappingAbs });
           } else {
