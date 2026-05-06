@@ -214,6 +214,23 @@ export class SafeWriter {
     return this.pendingEdits.get(editId)?.meta;
   }
 
+  /**
+   * Check whether an edit can be applied without writing it.
+   * Used to preflight all members of a batch before committing any.
+   */
+  preflightEdit(editId: string, action: ConfirmAction): { ok: boolean; error?: string } {
+    const EDIT_TTL_MS = 30 * 60 * 1000;
+    const pending = this.pendingEdits.get(editId);
+    if (!pending) return { ok: false, error: 'Edit proposal not found or already resolved.' };
+    if (Date.now() - pending.createdAt > EDIT_TTL_MS) return { ok: false, error: 'Edit expired.' };
+    if (action === 'cancel') return { ok: true };
+    const finalConflict = this.conflictDetector.checkConflict(pending.filePath, pending.newContent);
+    if (finalConflict.hasConflict && action !== 'force') {
+      return { ok: false, error: 'File was modified after the proposal was created — use force or re-propose.' };
+    }
+    return { ok: true };
+  }
+
   // -----------------------------------------------------------------------
   // Cleanup
   // -----------------------------------------------------------------------

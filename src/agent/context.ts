@@ -7,6 +7,48 @@ import { localDateString } from '../utils/date.js';
 
 const contextCache: { [key: string]: { content: string; mtime: number } } = {};
 
+// Cache for the unfinished-KB count so we don't rescan every reading note on
+// every processMessage call.  Keyed by the combined mtime of both reading dirs;
+// invalidates automatically when files are added, removed, or renamed.
+let kbCountCache: { count: number; dirMtimeKey: string } | null = null;
+
+function readingDirMtimeKey(vaultPath: string): string {
+  let key = '';
+  for (const sub of ['Reading/Papers', 'Reading/Threads']) {
+    const dir = path.join(vaultPath, sub);
+    try {
+      key += fs.statSync(dir).mtimeMs.toString() + ':';
+    } catch {
+      key += '0:';
+    }
+  }
+  return key;
+}
+
+function getCachedUnfinishedKbCount(vaultPath: string): number {
+  const mtimeKey = readingDirMtimeKey(vaultPath);
+  if (kbCountCache && kbCountCache.dirMtimeKey === mtimeKey) {
+    return kbCountCache.count;
+  }
+
+  let count = 0;
+  for (const sub of ['Reading/Papers', 'Reading/Threads']) {
+    const dir = path.join(vaultPath, sub);
+    if (!fs.existsSync(dir)) continue;
+    for (const f of fs.readdirSync(dir).filter(n => n.endsWith('.md'))) {
+      try {
+        const fm = matter(fs.readFileSync(path.join(dir, f), 'utf-8')).data as Record<string, unknown>;
+        if (fm['status'] === 'complete' && ['pending', 'mapped', 'merged_with_review'].includes(fm['kb_status'] as string)) {
+          count++;
+        }
+      } catch { /* skip */ }
+    }
+  }
+
+  kbCountCache = { count, dirMtimeKey: mtimeKey };
+  return count;
+}
+
 function cachedReadFile(filePath: string): string | null {
   if (!fs.existsSync(filePath)) return null;
   const mtime = fs.statSync(filePath).mtimeMs;
@@ -24,94 +66,122 @@ export function assembleSystemPrompt(
   tools: ToolDefinition[]
 ): string {
   const { agentMd, soulMd, skills } = loadAgentConfig(vaultPath);
+  const activeToolNames = new Set(tools.map(t => t.name));
+  const hasTools = tools.length > 0;
+  const hasVaultWrite = activeToolNames.has('vault_write') || activeToolNames.has('vault_append');
+  const hasVaultSearch = activeToolNames.has('vault_search');
+  const hasReadingTools = activeToolNames.has('create_reading_note') || activeToolNames.has('ingest_reading_bundle');
+  const hasDiaryTool = activeToolNames.has('get_today_diary');
+  const hasWeekTool = activeToolNames.has('get_week_plan');
 
   const sections: string[] = [];
 
-  // Layer 1: Base instructions
-  sections.push(`You are CrickNote, a scientific research assistant for biology/life sciences.
+  // Layer 1: Base instructions — adapt to tool availability
+  if (hasTools) {
+    const rules: string[] = [
+      '- Be precise with scientific data — never fabricate results.',
+      '- When uncertain, say so and ask the user to clarify.',
+    ];
+    if (hasVaultWrite) {
+      rules.unshift('- When writing to the vault, you MUST use the appropriate tool. Never output vault content as plain text.');
+      rules.unshift('- Always use structured frontmatter when creating experiment or reading notes.');
+    }
+    if (hasVaultSearch) {
+      rules.unshift('- When asked about experiments, search the vault first before answering.');
+    }
+    sections.push(`You are CrickNote, a scientific research assistant for biology/life sciences.
 You help researchers record experiments, retrieve data, manage protocols, track literature, and plan their work.
-You operate on an Obsidian vault and can read, search, and write notes.
+You operate on an Obsidian vault and can use the active tools to assist you.
 
 IMPORTANT RULES:
-- When writing to the vault, you MUST use the appropriate tool. Never output vault content as plain text.
-- Always use structured frontmatter when creating experiment or reading notes.
-- When asked about experiments, search the vault first before answering.
-- Be precise with scientific data — never fabricate results.
-- When uncertain, say so and ask the user to clarify.`);
+${rules.join('\n')}`);
+  } else {
+    sections.push(`You are CrickNote, a scientific research assistant for biology/life sciences.
+No vault tools are loaded for this query.
+- If the user asks you to write, create, save, modify, or record anything in the vault or their notes, respond exactly: "I cannot write to your vault for this query."
+- If the user asks you to search, find, read, or look up anything in the vault or their notes, respond exactly: "I cannot access your vault for this query."
+- Otherwise, answer from your scientific knowledge — be precise, never fabricate results, and say so when uncertain.`);
+  }
 
-  // Layer 2: Agent config (user's core rules)
+  // Layer 2: Reading workflow — only when reading tools are active
+  if (hasReadingTools) {
+    const hasKbTools = activeToolNames.has('kb_suggest') || activeToolNames.has('kb_write_mapping') || activeToolNames.has('kb_apply');
+    const kbStep = hasKbTools
+      ? '5. Then continue with kb_suggest, kb_write_mapping, and kb_apply.'
+      : '5. KB integration (kb_suggest, kb_write_mapping, kb_apply) can be run in a separate KB session.';
+    sections.push(`## Reading Workflow
+
+Preferred reading-note order:
+1. Call reading_pipeline_status first.
+2. If the reading note does not exist yet, call discover_reading_bundle or ingest_reading_bundle.
+3. If the note is ready, call compile_reading_note.
+4. After the user reviews the draft, call set_reading_note_status with status: complete.
+${kbStep}`);
+  }
+
+  // Layer 3: Agent config (user's core rules)
   if (agentMd) {
     sections.push(`## User-Defined Agent Rules\n\n${agentMd}`);
   }
 
-  // Layer 3: Soul (personality)
+  // Layer 4: Soul (personality)
   if (soulMd) {
     sections.push(`## Personality\n\n${soulMd}`);
   }
 
-  // Layer 4: Skills
+  // Layer 5: Skills
   for (const skill of skills) {
     sections.push(`## Skill\n\n${skill}`);
   }
 
-  // Layer 5: Today's diary (cached to avoid repeated disk reads)
-  const today = localDateString();
-  const diaryPath = path.join(vaultPath, 'Memory', 'Daily', `${today}.md`);
-  const diary = cachedReadFile(diaryPath);
-  if (diary !== null) {
-    sections.push(`## Today's Diary (${today})\n\n${diary}`);
+  // Layer 6: Today's diary — only when diary tool is active
+  if (hasDiaryTool) {
+    const today = localDateString();
+    const diaryPath = path.join(vaultPath, 'Memory', 'Daily', `${today}.md`);
+    const diary = cachedReadFile(diaryPath);
+    if (diary !== null) {
+      sections.push(`## Today's Diary (${today})\n\n${diary}`);
+    }
   }
 
-  // Layer 5b: KB lint reminder + unfinished KB work count
-  const lintReportsDir = path.join(vaultPath, 'Knowledge', '_Ops', 'Lint-Reports');
-  if (fs.existsSync(lintReportsDir)) {
-    const reports = fs.readdirSync(lintReportsDir)
-      .filter(f => /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
-      .sort();
+  // Layer 7: KB lint reminder — only when kb_lint is active
+  if (activeToolNames.has('kb_lint')) {
+    const lintReportsDir = path.join(vaultPath, 'Knowledge', '_Ops', 'Lint-Reports');
+    if (fs.existsSync(lintReportsDir)) {
+      const reports = fs.readdirSync(lintReportsDir)
+        .filter(f => /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
+        .sort();
 
-    let unfinishedKbCount = 0;
-    for (const readingSubdir of ['Reading/Papers', 'Reading/Threads']) {
-      const readingDir = path.join(vaultPath, readingSubdir);
-      if (!fs.existsSync(readingDir)) continue;
-      for (const f of fs.readdirSync(readingDir).filter(n => n.endsWith('.md'))) {
-        try {
-          const fm = matter(fs.readFileSync(path.join(readingDir, f), 'utf-8')).data as Record<string, unknown>;
-          if (fm['status'] === 'complete' && ['pending', 'mapped', 'merged_with_review'].includes(fm['kb_status'] as string)) {
-            unfinishedKbCount++;
-          }
-        } catch { /* skip */ }
-      }
-    }
+      const unfinishedKbCount = getCachedUnfinishedKbCount(vaultPath);
 
-    if (reports.length === 0) {
-      const kbMsg = unfinishedKbCount > 0 ? ` ${unfinishedKbCount} reading note(s) have unfinished KB work.` : '';
-      sections.push(`**KB reminder:** KB lint has never run. Run kb_lint to check knowledge base health.${kbMsg}`);
-    } else {
-      const lastReport = reports[reports.length - 1];
-      const lastDate = new Date(lastReport.replace('.md', ''));
-      const daysAgo = (Date.now() - lastDate.getTime()) / 86400000;
-      const kbMsg = unfinishedKbCount > 0 ? ` ${unfinishedKbCount} reading note(s) have unfinished KB work.` : '';
-      if (daysAgo > 14) {
-        sections.push(`**KB reminder:** KB lint hasn't run in ${Math.floor(daysAgo)} days. Run kb_lint to check for issues.${kbMsg}`);
-      } else if (unfinishedKbCount > 0) {
-        sections.push(`**KB reminder:** ${unfinishedKbCount} reading note(s) have unfinished KB work (kb_status: pending/mapped/merged_with_review).`);
+      if (reports.length === 0) {
+        const kbMsg = unfinishedKbCount > 0 ? ` ${unfinishedKbCount} reading note(s) have unfinished KB work.` : '';
+        sections.push(`**KB reminder:** KB lint has never run. Run kb_lint to check knowledge base health.${kbMsg}`);
+      } else {
+        const lastReport = reports[reports.length - 1];
+        const lastDate = new Date(lastReport.replace('.md', ''));
+        const daysAgo = (Date.now() - lastDate.getTime()) / 86400000;
+        const kbMsg = unfinishedKbCount > 0 ? ` ${unfinishedKbCount} reading note(s) have unfinished KB work.` : '';
+        if (daysAgo > 14) {
+          sections.push(`**KB reminder:** KB lint hasn't run in ${Math.floor(daysAgo)} days. Run kb_lint to check for issues.${kbMsg}`);
+        } else if (unfinishedKbCount > 0) {
+          sections.push(`**KB reminder:** ${unfinishedKbCount} reading note(s) have unfinished KB work (kb_status: pending/mapped/merged_with_review).`);
+        }
       }
     }
   }
 
-  // Layer 6: Current week's plan (cached to avoid repeated disk reads)
+  // Layer 8: Current week's plan — only when week-plan tool is active
   // Use ISO week year (not calendar year) so late-December dates like 29 Dec 2025
   // (= ISO week 1 of 2026) map to the correct weekly file.
-  const { week: weekNum, isoYear } = getISOWeekInfo(new Date());
-  const weekPath = path.join(vaultPath, 'Memory', 'Weekly', `${isoYear}-W${String(weekNum).padStart(2, '0')}.md`);
-  const weekPlan = cachedReadFile(weekPath);
-  if (weekPlan !== null) {
-    sections.push(`## This Week's Plan\n\n${weekPlan}`);
+  if (hasWeekTool) {
+    const { week: weekNum, isoYear } = getISOWeekInfo(new Date());
+    const weekPath = path.join(vaultPath, 'Memory', 'Weekly', `${isoYear}-W${String(weekNum).padStart(2, '0')}.md`);
+    const weekPlan = cachedReadFile(weekPath);
+    if (weekPlan !== null) {
+      sections.push(`## This Week's Plan\n\n${weekPlan}`);
+    }
   }
-
-  // Layer 7: Tool definitions summary
-  const toolSummary = tools.map(t => `- ${t.name}: ${t.description}`).join('\n');
-  sections.push(`## Available Tools\n\n${toolSummary}`);
 
   return sections.join('\n\n---\n\n');
 }

@@ -31,4 +31,21 @@ describe('VaultWatcher.getAllMarkdownFiles', () => {
     expect(files).not.toContain('Reading/attachments/smith-2026/notes.md');
     expect(files).not.toContain('Projects/P001-CM/attachments/CM001/notes.md');
   });
+
+  it('excludes _changelog.md files from the full markdown scan', async () => {
+    fs.writeFileSync(
+      path.join(vaultPath, 'Reading', 'Papers', '_changelog.md'),
+      '2026-05-03T12:00:00Z | op | desc\n'
+    );
+    fs.writeFileSync(
+      path.join(vaultPath, 'Projects', 'P001-CM', '_changelog.md'),
+      '2026-05-03T12:00:00Z | op | desc\n'
+    );
+
+    const files = await VaultWatcher.getAllMarkdownFiles(vaultPath);
+
+    expect(files).not.toContain('Reading/Papers/_changelog.md');
+    expect(files).not.toContain('Projects/P001-CM/_changelog.md');
+    expect(files).toContain('Reading/Papers/smith-2026.md');
+  });
 });

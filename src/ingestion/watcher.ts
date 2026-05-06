@@ -24,6 +24,7 @@ const IGNORED_DIRS = [
 const IGNORED_PATH_PATTERNS = [
   /(^|[/\\])attachments([/\\]|$)/,
   /[/\\][^/\\]+-mapping(?:-\d{8}T\d{6})?\.md$/,
+  /(^|[/\\])_changelog\.md$/,
 ] as const;
 
 /** Debounce interval in milliseconds for file change events. */

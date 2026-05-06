@@ -1,11 +1,64 @@
 import OpenAI from 'openai';
 import type { LLMProvider, Message, ToolDefinition, ChatOptions, StreamChunk } from './base.js';
 
+const THINK_OPEN = '<think>';
+const THINK_CLOSE = '</think>';
+
+function trailingPrefix(text: string, token: string): string {
+  const max = Math.min(text.length, token.length - 1);
+  for (let len = max; len > 0; len--) {
+    const suffix = text.slice(-len).toLowerCase();
+    if (token.startsWith(suffix)) return text.slice(-len);
+  }
+  return '';
+}
+
+export class ThinkBlockFilter {
+  private buffer = '';
+  private insideThink = false;
+
+  push(text: string): string {
+    let input = this.buffer + text;
+    this.buffer = '';
+    let output = '';
+
+    while (input.length > 0) {
+      const lower = input.toLowerCase();
+
+      if (this.insideThink) {
+        const closeAt = lower.indexOf(THINK_CLOSE);
+        if (closeAt === -1) {
+          this.buffer = trailingPrefix(input, THINK_CLOSE);
+          return output;
+        }
+        input = input.slice(closeAt + THINK_CLOSE.length);
+        this.insideThink = false;
+        continue;
+      }
+
+      const openAt = lower.indexOf(THINK_OPEN);
+      if (openAt === -1) {
+        this.buffer = trailingPrefix(input, THINK_OPEN);
+        output += input.slice(0, input.length - this.buffer.length);
+        return output;
+      }
+
+      output += input.slice(0, openAt);
+      input = input.slice(openAt + THINK_OPEN.length);
+      this.insideThink = true;
+    }
+
+    return output;
+  }
+}
+
 export class OpenAIProvider implements LLMProvider {
   name = 'openai';
   private client: OpenAI;
+  private baseURL?: string;
 
   constructor(apiKey: string, baseURL?: string) {
+    this.baseURL = baseURL;
     this.client = new OpenAI({
       apiKey,
       ...(baseURL ? { baseURL } : {}),
@@ -17,6 +70,16 @@ export class OpenAIProvider implements LLMProvider {
     tools: ToolDefinition[],
     options: ChatOptions
   ): AsyncIterable<StreamChunk> {
+    const useNativeOllama = (() => {
+      if (!this.baseURL) return false;
+      const url = new URL(this.baseURL);
+      return (url.hostname === 'localhost' || url.hostname === '127.0.0.1') && url.port === '11434';
+    })();
+    if (useNativeOllama) {
+      yield* this.chatOllama(messages, tools, options);
+      return;
+    }
+
     const openaiMessages: OpenAI.ChatCompletionMessageParam[] = [];
 
     if (options.systemPrompt) {
@@ -110,6 +173,123 @@ export class OpenAIProvider implements LLMProvider {
         }
         yield { type: 'done' };
       }
+    }
+  }
+
+  private async *chatOllama(
+    messages: Message[],
+    tools: ToolDefinition[],
+    options: ChatOptions
+  ): AsyncIterable<StreamChunk> {
+    const ollamaMessages: Array<Record<string, unknown>> = [];
+
+    if (options.systemPrompt) {
+      ollamaMessages.push({ role: 'system', content: options.systemPrompt });
+    }
+
+    for (const m of messages) {
+      if (m.role === 'tool') {
+        ollamaMessages.push({
+          role: 'tool',
+          content: m.content,
+          tool_call_id: m.toolCallId,
+        });
+      } else if (m.role === 'assistant' && m.toolCalls?.length) {
+        ollamaMessages.push({
+          role: 'assistant',
+          content: m.content || '',
+          tool_calls: m.toolCalls.map(tc => ({
+            id: tc.id,
+            type: 'function',
+            function: {
+              name: tc.name,
+              arguments: tc.arguments,
+            },
+          })),
+        });
+      } else {
+        ollamaMessages.push({ role: m.role, content: m.content });
+      }
+    }
+
+    const ollamaTools = tools.map(t => ({
+      type: 'function',
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      },
+    }));
+
+    const nativeBaseURL = new URL(this.baseURL!);
+    if (nativeBaseURL.pathname.endsWith('/v1')) {
+      nativeBaseURL.pathname = nativeBaseURL.pathname.slice(0, -3) || '/';
+    }
+    const response = await fetch(new URL('/api/chat', nativeBaseURL), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: options.model ?? 'gpt-4o',
+        messages: ollamaMessages,
+        tools: ollamaTools.length > 0 ? ollamaTools : undefined,
+        stream: true,
+        think: true,
+        options: {
+          temperature: options.temperature ?? 0.3,
+          num_predict: options.maxTokens ?? 4096,
+        },
+      }),
+    });
+
+    if (!response.ok || !response.body) {
+      throw new Error(`Ollama chat failed: ${response.status} ${await response.text()}`);
+    }
+
+    const decoder = new TextDecoder();
+    const thinkFilter = new ThinkBlockFilter();
+    let buffer = '';
+    let toolCallIndex = 0;
+
+    const parseLine = (line: string): StreamChunk[] => {
+      if (!line.trim()) return [];
+      const parsed = JSON.parse(line) as {
+        done?: boolean;
+        message?: {
+          content?: string;
+          tool_calls?: Array<{ function?: { name?: string; arguments?: Record<string, unknown> } }>;
+        };
+      };
+      const events: StreamChunk[] = [];
+      if (parsed.message?.content) {
+        const filtered = thinkFilter.push(parsed.message.content);
+        if (filtered) events.push({ type: 'text', text: filtered });
+      }
+      for (const tc of parsed.message?.tool_calls ?? []) {
+        const id = `ollama-tool-${++toolCallIndex}`;
+        const name = tc.function?.name ?? '';
+        const args = JSON.stringify(tc.function?.arguments ?? {});
+        events.push({ type: 'tool_call_start', toolCall: { id, name, arguments: '' } });
+        events.push({ type: 'tool_call_delta', toolCall: { id, name, arguments: args } });
+        events.push({ type: 'tool_call_end', toolCall: { id, name, arguments: args } });
+      }
+      if (parsed.done) {
+        events.push({ type: 'done' });
+      }
+      return events;
+    };
+
+    for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
+      buffer += decoder.decode(chunk, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        for (const event of parseLine(line)) yield event;
+      }
+    }
+
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      for (const event of parseLine(buffer)) yield event;
     }
   }
 }

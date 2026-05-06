@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import matter from 'gray-matter';
 import { resolveVaultPath } from '../utils/paths.js';
+import { appendFolderChangelog } from './changelog.js';
 import { logger } from '../utils/logger.js';
 const log = logger.child('auto-writer');
 
@@ -25,7 +26,7 @@ function isFencedSectionAllowed(rel: string): boolean {
 }
 
 function isFrontmatterFieldAllowed(rel: string, field: string): boolean {
-  if (/^Reading\/[^/]+\//.test(rel) && field === 'kb_status') return true;
+  if (/^Reading\/(Papers|Threads)\//.test(rel) && ['status', 'kb_status'].includes(field)) return true;
   if (/^Knowledge\/(Concepts|Entities|Methods)\/(?!_index\.md)/.test(rel) && ['needs_review', 'review_flagged_at'].includes(field)) return true;
   return false;
 }
@@ -50,6 +51,7 @@ export function autoWrite(filePath: string, content: string, vaultPath: string):
   if (!isAutoWriteAllowed(rel)) throw new Error(`autoWrite not permitted for ${rel}`);
   writeFile(abs, content);
   log.info('autoWrite', { rel });
+  appendFolderChangelog({ vaultPath, targetPath: rel, operation: 'auto_write', description: `${rel} updated` });
 }
 
 export function fencedSectionUpdate(filePath: string, sectionName: string, newContent: string, vaultPath: string): void {
@@ -72,6 +74,7 @@ export function fencedSectionUpdate(filePath: string, sectionName: string, newCo
     return true;
   }
   if (!attempt() && !attempt()) throw new Error(`Conflict persists after retry in ${rel}`);
+  appendFolderChangelog({ vaultPath, targetPath: rel, operation: 'fenced_section_update', description: `${sectionName} section updated in ${rel}` });
 }
 
 export function frontmatterFieldUpdate(filePath: string, field: string, value: string | boolean | null, vaultPath: string): void {
@@ -89,4 +92,5 @@ export function frontmatterFieldUpdate(filePath: string, field: string, value: s
     return true;
   }
   if (!attempt() && !attempt()) throw new Error(`Conflict updating ${field} in ${rel}`);
+  appendFolderChangelog({ vaultPath, targetPath: rel, operation: 'frontmatter_update', description: `${field} updated in ${rel}` });
 }

@@ -48,12 +48,14 @@ export interface AuthMessage {
   token: string;
   protocolVersion: number;
   pluginVersion: string;
+  sessionId?: string;
 }
 
 export interface AuthOkMessage {
   type: 'auth_ok';
   protocolVersion: number;
   serviceVersion: string;
+  sessionId?: string;
 }
 
 export interface AuthErrorMessage {

@@ -1,12 +1,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import matter from 'gray-matter';
 import type Database from 'better-sqlite3';
 import type { ToolHandler } from './registry.js';
 import { resolveVaultPath } from '../../utils/paths.js';
 import { loadSources } from '../../knowledge/source-loader.js';
+import {
+  hasCreateHeadings,
+  inferReadingPipelineStep,
+} from '../../knowledge/reading-note.js';
 import { logger } from '../../utils/logger.js';
 import { autoWrite, frontmatterFieldUpdate } from '../../editing/auto-writer.js';
+import { readMappingArtifact, writeMappingArtifact, MappingArtifact, MappingTargetState, MappingTargetKind, MappingTargetAction, MappingTargetConfidence } from '../../knowledge/mapping-artifact.js';
 
 const log = logger.child('kb-tools');
 
@@ -27,51 +33,6 @@ function safeVaultJoin(vaultRoot: string, rel: string): string {
 const SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 function isValidSlug(s: string): boolean { return SLUG_RE.test(s); }
 
-// Escape regex metacharacters in a literal string.
-function escapeRegex(s: string): string { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-
-// Helper: parse the Targets table from a mapping artifact body.
-// Scoped to the ## Targets section; supports [[slug|alias]] wikilinks.
-interface MappingTarget {
-  slug: string;
-  action: string;
-  state: string;
-  reviewQueue: string;
-  updated: string;
-}
-
-function parseMappingTargets(body: string): MappingTarget[] {
-  const targets: MappingTarget[] = [];
-  const sectionMatch = body.match(/## Targets\s*\n([\s\S]*?)(?=\n## |\s*$)/);
-  if (!sectionMatch) return targets;
-  for (const line of sectionMatch[1].split('\n')) {
-    if (!line.includes('[[')) continue;
-    const cells = line.split('|').map(c => c.trim()).filter((_, i, a) => i > 0 && i < a.length - 1);
-    if (cells.length < 5) continue;
-    const slugMatch = cells[0].match(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/);
-    if (!slugMatch) continue;
-    const slug = slugMatch[1].trim();
-    if (!slug) continue;
-    targets.push({ slug, action: cells[1], state: cells[2], reviewQueue: cells[3], updated: cells[4] });
-  }
-  return targets;
-}
-
-// Update a target row's state in the mapping body. Returns updated content and a flag.
-function updateMappingTargetState(
-  artifactContent: string,
-  slug: string,
-  newState: string,
-  reviewQueueLink: string,
-): { content: string; updated: boolean } {
-  const escapedSlug = escapeRegex(slug);
-  const rowRegex = new RegExp(
-    `(\\|\\s*\\[\\[${escapedSlug}(?:\\|[^\\]]*)?\\]\\]\\s*\\|\\s*\\S+\\s*\\|)\\s*\\S+\\s*(\\|[^|]*\\|)[^|]*(\\|)`,
-  );
-  const timestamp = new Date().toISOString().slice(0, 16);
-  const newContent = artifactContent.replace(rowRegex, `$1 ${newState} | ${reviewQueueLink} | ${timestamp} |`);
-  return { content: newContent, updated: newContent !== artifactContent };
-}
 
 export function createKbTools(
   vaultPath: string,
@@ -110,11 +71,19 @@ export function createKbTools(
         const raw = fs.readFileSync(notePath, 'utf-8');
         const parsed = matter(raw);
         const fm = parsed.data as Record<string, unknown>;
+        const hasCreateSections = hasCreateHeadings(parsed.content);
+        const readingStatus = typeof fm.status === 'string' ? fm.status : undefined;
+        const kbStatus = typeof fm.kb_status === 'string' ? fm.kb_status : undefined;
 
         const sources = fm['sources'];
         if (!Array.isArray(sources) || sources.length === 0) {
           return JSON.stringify({
             note: { frontmatter: fm, body: parsed.content },
+            status: readingStatus,
+            kb_status: kbStatus,
+            has_create_headings: hasCreateSections,
+            sources_missing: true,
+            next_step: 'needs_sources',
             sources: [],
             warnings: ['No sources listed in frontmatter. Add a "sources:" array and re-run.'],
             instruction: 'No sources to load. Draft CREATE sections from any content already in the note body, or ask the user to add source files first.',
@@ -130,6 +99,11 @@ export function createKbTools(
 
         return JSON.stringify({
           note: { path: args.path, frontmatter: fm, body: parsed.content },
+          status: readingStatus,
+          kb_status: kbStatus,
+          has_create_headings: hasCreateSections,
+          sources_missing: false,
+          next_step: inferReadingPipelineStep(fm, parsed.content),
           sources: result.sources,
           warnings: result.warnings,
           totalTokens: result.totalTokens,
@@ -165,6 +139,38 @@ export function createKbTools(
         }
 
         const sourceContent = fs.readFileSync(notePath, 'utf-8');
+        const sourceHash = crypto.createHash('sha256').update(sourceContent).digest('hex');
+
+        // Dedup: scan for any artifact (base or timestamped rerun) with matching hash
+        const sourceSlugForDedup = path.basename(args.source as string, '.md');
+        const sourceDirForDedup = path.dirname((args.source as string).replace(/\\/g, '/'));
+        const artifactDirAbs = path.join(vaultPath, sourceDirForDedup);
+        const artifactPattern = new RegExp(
+          `^${sourceSlugForDedup.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-mapping(?:-\\d{8}T\\d{6})?\\.md$`
+        );
+
+        if (fs.existsSync(artifactDirAbs) && fs.statSync(artifactDirAbs).isDirectory()) {
+          for (const entry of fs.readdirSync(artifactDirAbs).filter(e => artifactPattern.test(e))) {
+            try {
+              const existingArtifact = readMappingArtifact(path.join(artifactDirAbs, entry));
+              if (existingArtifact.sourceHash === sourceHash && ['confirmed', 'applied'].includes(existingArtifact.status)) {
+                const artifactRelForDedup = `${sourceDirForDedup}/${entry}`;
+                const message = existingArtifact.status === 'applied'
+                  ? 'Mapping already applied. Use rerun_confirmed: true with kb_write_mapping to re-map.'
+                  : 'A mapping already exists for this version of the source note. Run kb_apply to continue.';
+                return JSON.stringify({
+                  status: 'already_suggested',
+                  source_hash: sourceHash,
+                  artifactPath: artifactRelForDedup,
+                  mappingStatus: existingArtifact.status,
+                  message,
+                });
+              }
+            } catch {
+              // Artifact unreadable — skip and continue scanning
+            }
+          }
+        }
 
         // Load all three indexes (missing index is not an error — just means empty KB)
         const indexes: Record<string, string> = {};
@@ -176,6 +182,7 @@ export function createKbTools(
         return JSON.stringify({
           sourceContent,
           sourcePath: args.source,
+          source_hash: sourceHash,
           indexes,
           instruction: [
             'STEP 1 (required): Call vault_search with query: key terms from the source content, search_path: "Knowledge/". This finds semantic matches in existing knowledge notes that the index may miss.',
@@ -196,7 +203,9 @@ export function createKbTools(
             'REJECTED (no KB value):',
             '  [[note-slug]] — reason',
             '',
-            'STEP 3: After the user confirms/edits this mapping, call kb_write_mapping with the confirmed and rejected targets.',
+            'STEP 3: Format your proposal as structured targets:',
+            '[{ slug, title, kind (Concepts|Entities|Methods), action (create|update), confidence (high|medium|low), reason }]',
+            'Then call kb_write_mapping with confirmed_targets (user-approved), rejected_targets (rejected), and source_hash from this tool output.',
           ].join('\n'),
         });
       },
@@ -222,6 +231,9 @@ export function createKbTools(
                   slug: { type: 'string' },
                   action: { type: 'string', enum: ['update', 'create'] },
                   kind: { type: 'string', description: 'Concepts|Entities|Methods (required for create)' },
+                  title: { type: 'string', description: 'Human-readable title for the knowledge note' },
+                  confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+                  reason: { type: 'string', description: 'Why this target was proposed' },
                 },
                 required: ['slug', 'action'],
               },
@@ -237,6 +249,15 @@ export function createKbTools(
                 },
                 required: ['slug'],
               },
+            },
+            source_hash: {
+              type: 'string',
+              description: 'SHA-256 of source note content from kb_suggest output',
+            },
+            status: {
+              type: 'string',
+              enum: ['draft', 'confirmed'],
+              description: 'Artifact status. Default: confirmed.',
             },
             rerun_confirmed: {
               type: 'boolean',
@@ -257,7 +278,7 @@ export function createKbTools(
           return JSON.stringify({ error: `File not found: ${args.source}` });
         }
 
-        const confirmedTargets = (args.confirmed_targets as Array<{ slug: string; action: string; kind?: string }>) || [];
+        const confirmedTargets = (args.confirmed_targets as Array<{ slug: string; action: string; kind?: string; title?: string; confidence?: string; reason?: string }>) || [];
         const rejectedTargets = (args.rejected_targets as Array<{ slug: string; reason?: string }>) || [];
         // Determine source type once — only Reading notes use kb_status
         const isReadingNote = /^Reading\/[^/]+\//.test(args.source as string);
@@ -276,45 +297,54 @@ export function createKbTools(
           return JSON.stringify({ status: 'skipped', message: 'No targets confirmed. No mapping artifact written.' + (isReadingNote ? ' kb_status set to skipped.' : '') });
         }
 
-        // Runtime validation of action enum
+        // Runtime validation of action, kind, confidence enums and slug format
         const validActions = new Set(['update', 'create']);
+        const validKinds = new Set(['Concepts', 'Entities', 'Methods']);
+        const validConfidence = new Set(['high', 'medium', 'low']);
         for (const t of confirmedTargets) {
           if (!validActions.has(t.action)) {
             return JSON.stringify({ error: `Invalid action "${t.action}" for target "${t.slug}". Must be "update" or "create".` });
           }
+          if (t.kind && !validKinds.has(t.kind)) {
+            return JSON.stringify({ error: `Invalid kind "${t.kind}" for target "${t.slug}". Must be Concepts, Entities, or Methods.` });
+          }
+          if (t.confidence && !validConfidence.has(t.confidence)) {
+            return JSON.stringify({ error: `Invalid confidence "${t.confidence}" for target "${t.slug}". Must be high, medium, or low.` });
+          }
           if (t.action === 'create' && !t.kind) {
             return JSON.stringify({ error: `Target "${t.slug}" has action "create" but missing required "kind" field (Concepts|Entities|Methods).` });
           }
+          if (!isValidSlug(t.slug)) {
+            return JSON.stringify({ error: `Target slug "${t.slug}" contains invalid characters. Use a filename-only slug (no path separators).` });
+          }
         }
 
-        // Build mapping artifact content
-        const sanitize = (s: string) => s.replace(/[|\n\r]/g, ' ').trim();
+        // Build mapping artifact
         const sourceSlug = path.basename(sourceRel, '.md');
         const sourceDir = path.dirname(sourceRel); // vault-relative directory
         const today = new Date().toISOString().slice(0, 10);
-        const targetRows = confirmedTargets.map(t =>
-          `| [[${sanitize(t.slug)}]] | ${t.action} | pending | | |`
-        ).join('\n');
-        const rejectedLines = rejectedTargets.map(t =>
-          `- [[${sanitize(t.slug)}]]${t.reason ? ` — "${sanitize(t.reason)}"` : ''}`
-        ).join('\n');
+        const artifactStatus = ((args.status as string) === 'draft' ? 'draft' : 'confirmed') as 'draft' | 'confirmed';
+        const sourceHash = args.source_hash as string | undefined;
 
-        const artifactContent = `---
-type: kb-mapping
-source: [[${sourceSlug}]]
-created: ${today}
-status: confirmed
----
-
-## Targets
-
-| Target | Action | State | Review-Queue | Updated |
-|--------|--------|-------|--------------|---------|
-${targetRows}
-
-## Rejected
-${rejectedLines || '(none)'}
-`;
+        const artifactObj: MappingArtifact = {
+          schemaVersion: 2,
+          source: `[[${sourceSlug}]]`,
+          sourceSlug,
+          sourcePath: sourceRel,
+          ...(sourceHash != null ? { sourceHash } : {}),
+          created: today,
+          status: artifactStatus,
+          targets: confirmedTargets.map(t => ({
+            slug: t.slug,
+            title: t.title,
+            kind: t.kind as MappingTargetKind | undefined,
+            action: t.action as MappingTargetAction,
+            state: 'pending' as MappingTargetState,
+            confidence: t.confidence as MappingTargetConfidence | undefined,
+            reason: t.reason,
+          })),
+          rejected: rejectedTargets.map(t => ({ slug: t.slug, reason: t.reason })),
+        };
 
         // Determine artifact path (alongside source note) — vault-relative
         const artifactRel = `${sourceDir}/${sourceSlug}-mapping.md`;
@@ -322,9 +352,8 @@ ${rejectedLines || '(none)'}
 
         // Check collision (spec §10)
         if (fs.existsSync(artifactAbs)) {
-          const existing = fs.readFileSync(artifactAbs, 'utf-8');
-          const existingParsed = matter(existing);
-          if (existingParsed.data.status === 'applied') {
+          const existingArtifact = readMappingArtifact(artifactAbs);
+          if (existingArtifact.status === 'applied') {
             if (!args.rerun_confirmed) {
               return JSON.stringify({
                 status: 'needs_confirmation',
@@ -333,27 +362,36 @@ ${rejectedLines || '(none)'}
             }
             const ts = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
             const newRel = `${sourceDir}/${sourceSlug}-mapping-${ts}.md`;
-            autoWrite(path.join(vaultPath, newRel), artifactContent, vaultPath);
-            if (isReadingNote) {
+            writeMappingArtifact(path.join(vaultPath, newRel), artifactObj, vaultPath);
+            if (isReadingNote && artifactStatus !== 'draft') {
               frontmatterFieldUpdate(sourceAbsVault, 'kb_status', 'mapped', vaultPath);
             }
-            return JSON.stringify({ status: 'mapped', artifactPath: newRel, targetCount: confirmedTargets.length, note: 'Previous applied artifact preserved; new timestamped artifact created.' });
-          } else if (existingParsed.data.status === 'confirmed') {
+            return JSON.stringify({
+              status: artifactStatus === 'draft' ? 'draft' : 'mapped',
+              artifactPath: newRel,
+              targetCount: confirmedTargets.length,
+              note: artifactStatus === 'draft'
+                ? 'Previous applied artifact preserved; draft timestamped artifact created.'
+                : 'Previous applied artifact preserved; new timestamped artifact created.',
+            });
+          } else if (existingArtifact.status === 'confirmed') {
             return JSON.stringify({ status: 'already_in_progress', message: 'A mapping is already in progress. Run kb_apply to continue.' });
           }
           // status: draft → overwrite
         }
 
-        autoWrite(path.join(vaultPath, artifactRel), artifactContent, vaultPath);
-        if (isReadingNote) {
+        writeMappingArtifact(path.join(vaultPath, artifactRel), artifactObj, vaultPath);
+        if (isReadingNote && artifactStatus !== 'draft') {
           frontmatterFieldUpdate(sourceAbsVault, 'kb_status', 'mapped', vaultPath);
         }
 
         return JSON.stringify({
-          status: 'mapped',
+          status: artifactStatus === 'draft' ? 'draft' : 'mapped',
           artifactPath: artifactRel,
           targetCount: confirmedTargets.length,
-          message: `Mapping artifact written. Run kb_apply with mapping: "${artifactRel}" to start applying updates.`,
+          message: artifactStatus === 'draft'
+            ? `Draft mapping artifact written at "${artifactRel}". Confirm it before running kb_apply.`
+            : `Mapping artifact written. Run kb_apply with mapping: "${artifactRel}" to start applying updates.`,
         });
       },
     },
@@ -388,18 +426,15 @@ ${rejectedLines || '(none)'}
           return JSON.stringify({ error: `Mapping artifact not found: ${args.mapping}` });
         }
 
-        const raw = fs.readFileSync(artifactPath, 'utf-8');
-        const parsed = matter(raw);
-        const targets = parseMappingTargets(parsed.content);
+        const artifact = readMappingArtifact(artifactPath);
 
-        const pending = targets.find(t => t.state === 'pending');
+        const pending = artifact.targets.find(t => t.state === 'pending');
         if (!pending) {
           return JSON.stringify({ status: 'all_done', message: 'No pending targets remain. Call kb_apply_advance with the final update_log to complete the workflow.' });
         }
 
         // Resolve source slug from mapping frontmatter; validate it
-        const sourceWikilink = String(parsed.data['source'] || '');
-        const sourceSlug = sourceWikilink.replace(/^\[\[|\]\]$/g, '').trim();
+        const sourceSlug = artifact.sourceSlug;
         if (!isValidSlug(sourceSlug)) {
           return JSON.stringify({ error: `Invalid source slug in mapping frontmatter: "${sourceSlug}"` });
         }
@@ -426,10 +461,16 @@ ${rejectedLines || '(none)'}
         if (sourceContent === '(source note not found)') {
           const projectsDir = path.join(vaultPath, 'Projects');
           if (fs.existsSync(projectsDir)) {
-            function findInDir(dir: string): string | null {
+            function findInDir(dir: string, depth = 0): string | null {
+              if (depth > 8) return null;
               for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-                if (entry.isDirectory()) { const r = findInDir(path.join(dir, entry.name)); if (r) return r; }
-                else if (entry.name === `${sourceSlug}.md`) return path.join(dir, entry.name);
+                if (entry.isSymbolicLink()) continue; // skip symlinks to avoid infinite loops
+                if (entry.isDirectory()) {
+                  const r = findInDir(path.join(dir, entry.name), depth + 1);
+                  if (r) return r;
+                } else if (entry.name === `${sourceSlug}.md`) {
+                  return path.join(dir, entry.name);
+                }
               }
               return null;
             }
@@ -474,7 +515,7 @@ ${rejectedLines || '(none)'}
           targetAction: pending.action,
           targetPath: targetPath || `(determine correct Kind folder before creating)`,
           mappingPath: args.mapping,
-          remainingPending: targets.filter(t => t.state === 'pending').length,
+          remainingPending: artifact.targets.filter(t => t.state === 'pending').length,
           instruction: [
             `Update [[${pending.slug}]] (action: ${pending.action}) using the source content above.`,
             'Rules:',
@@ -550,9 +591,8 @@ ${rejectedLines || '(none)'}
         }
 
         // -- Parse mapping artifact ------------------------------------------
-        const raw = fs.readFileSync(artifactPath, 'utf-8');
-        const parsed = matter(raw);
-        const allTargetsBefore = parseMappingTargets(parsed.content);
+        const artifact = readMappingArtifact(artifactPath);
+        const allTargetsBefore = artifact.targets;
 
         if (allTargetsBefore.length === 0) {
           return JSON.stringify({ error: 'Mapping artifact has no parseable target rows.' });
@@ -574,7 +614,7 @@ ${rejectedLines || '(none)'}
         }
 
         // Validate sourceSlug from frontmatter before it is used in filenames/paths
-        const sourceSlugRaw = String(parsed.data['source'] || '').replace(/^\[\[|\]\]$/g, '').trim();
+        const sourceSlugRaw = artifact.sourceSlug;
         if (remainingAfter.length === 0 && !isValidSlug(sourceSlugRaw)) {
           return JSON.stringify({ error: `Invalid source slug in mapping frontmatter: "${sourceSlugRaw}"` });
         }
@@ -591,12 +631,12 @@ ${rejectedLines || '(none)'}
           const rqBody = args.review_queue_body as string;
           const rqContent = `---
 type: review-queue
-source: ${parsed.data['source'] || ''}
+source: ${artifact.source}
 target_concept: [[${slug}]]
 reason: ${(args.review_queue_reason as string) || 'ambiguous-relationship'}
 created: ${today}
 status: pending
-rq_source: ${String(parsed.data['source'] || '').replace(/^\[\[|\]\]$/g, '')}
+rq_source: ${artifact.sourceSlug}
 rq_target: ${slug}
 ---
 
@@ -638,16 +678,19 @@ ${rqBody}
         }
 
         // -- Update mapping artifact target row ------------------------------
-        const { content: newBody, updated: rowUpdated } = updateMappingTargetState(parsed.content, slug, state, rqLink);
-        if (!rowUpdated) {
-          return JSON.stringify({ error: `Could not update row for target "${slug}" in mapping artifact — row not found or already updated.` });
-        }
-        const allTargets = parseMappingTargets(newBody);
-        const anyPending = allTargets.some(t => t.state === 'pending');
-        const newStatus = anyPending ? 'confirmed' : 'applied';
+        const targetIndex = artifact.targets.findIndex(t => t.slug === slug);
+        artifact.targets[targetIndex] = {
+          ...artifact.targets[targetIndex],
+          state: state as MappingTargetState,
+          reviewQueue: rqLink || undefined,
+          updated: new Date().toISOString().slice(0, 16),
+        };
 
-        const updatedArtifact = matter.stringify(newBody, { ...parsed.data, status: newStatus });
-        autoWrite(artifactPath, updatedArtifact, vaultPath);
+        const anyPending = artifact.targets.some(t => t.state === 'pending');
+        artifact.status = anyPending ? 'confirmed' : 'applied';
+        const newStatus = artifact.status;
+
+        writeMappingArtifact(artifactPath, artifact, vaultPath);
 
         // -- Finalisation: Update Log, index rebuild, kb_status --------------
         if (!anyPending) {
@@ -658,7 +701,7 @@ ${rqBody}
           const updateLog = args.update_log as { updated: string[]; created: string[]; deferred: string[] };
           const logContent = `---
 type: update-log
-source: ${parsed.data['source'] || ''}
+source: ${artifact.source}
 date: ${today}
 ---
 
@@ -682,7 +725,7 @@ ${updateLog.deferred.map(d => `- ${d}`).join('\n') || '(none)'}
             if (fs.existsSync(kindDir)) rebuildKnowledgeIndex(kind, vaultPath);
           }
 
-          const anyDeferred = allTargets.some(t => t.state === 'deferred');
+          const anyDeferred = artifact.targets.some(t => t.state === 'deferred');
           const newKbStatus = anyDeferred ? 'merged_with_review' : 'merged';
           for (const prefix of ['Reading/Papers', 'Reading/Threads']) {
             const candidate = path.join(vaultPath, prefix, `${sourceSlug}.md`);
@@ -698,7 +741,7 @@ ${updateLog.deferred.map(d => `- ${d}`).join('\n') || '(none)'}
           status: state,
           target: slug,
           mappingStatus: newStatus,
-          remainingPending: anyPending ? allTargets.filter(t => t.state === 'pending').length : 0,
+          remainingPending: anyPending ? artifact.targets.filter(t => t.state === 'pending').length : 0,
           message: anyPending
             ? `Target [[${slug}]] marked ${state}. Call kb_apply again to process the next pending target.`
             : `All targets processed. Mapping status: ${newStatus}. kb_status updated.`,
@@ -948,29 +991,64 @@ ${updateLog.notes || ''}
 
         // Update mapping artifact: change deferred row → applied for this rq_source/rq_target pair
         const rqSourceSlug = rqSource;
-        function findMappingArtifact(rootDir: string): string | null {
-          if (!fs.existsSync(rootDir)) return null;
+        const mappingArtifactPattern = new RegExp(
+          `^${rqSourceSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-mapping(?:-\\d{8}T\\d{6})?\\.md$`
+        );
+        function collectMappingArtifacts(rootDir: string, results: string[] = []): string[] {
+          if (!fs.existsSync(rootDir)) return results;
           for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
-            if (entry.isDirectory()) { const r = findMappingArtifact(path.join(rootDir, entry.name)); if (r) return r; }
-            else if (entry.name === `${rqSourceSlug}-mapping.md`) return path.join(rootDir, entry.name);
+            if (entry.isDirectory()) collectMappingArtifacts(path.join(rootDir, entry.name), results);
+            else if (mappingArtifactPattern.test(entry.name)) results.push(path.join(rootDir, entry.name));
           }
-          return null;
+          return results;
         }
-        const mappingAbs = findMappingArtifact(path.join(vaultPath, 'Reading'))
-          || findMappingArtifact(path.join(vaultPath, 'Projects'));
+        const allMappingCandidates = [
+          ...collectMappingArtifacts(path.join(vaultPath, 'Reading')),
+          ...collectMappingArtifacts(path.join(vaultPath, 'Projects')),
+        ];
+        // Prefer artifact with target still deferred + matching rq link; fall back to any owner
+        const rqLink = `[[${path.basename(rqPath, '.md')}]]`;
+        const mappingAbs = (() => {
+          const parsed = allMappingCandidates.flatMap(abs => {
+            try { return [{ abs, artifact: readMappingArtifact(abs) }]; } catch { return []; }
+          });
+          return (
+            parsed.find(({ artifact }) =>
+              artifact.targets.some(t => t.slug === rqTarget && t.state === 'deferred' && t.reviewQueue === rqLink)
+            )?.abs ??
+            parsed.find(({ artifact }) =>
+              artifact.targets.some(t => t.slug === rqTarget && t.state === 'deferred')
+            )?.abs ??
+            parsed.find(({ artifact }) => artifact.targets.some(t => t.slug === rqTarget))?.abs ??
+            null
+          );
+        })();
+        let mappingArtifactUpdated = false;
         if (mappingAbs) {
-          const mappingRaw = fs.readFileSync(mappingAbs, 'utf-8');
-          const mappingParsed = matter(mappingRaw);
-          const { content: updatedBody, updated: rowUpdated } = updateMappingTargetState(mappingParsed.content, rqTarget, 'applied', `[[${path.basename(rqPath, '.md')}]]`);
-          if (!rowUpdated) {
+          const resolveArtifact = readMappingArtifact(mappingAbs);
+          const resolveTargetIndex = (() => {
+            const exact = resolveArtifact.targets.findIndex(t => t.slug === rqTarget && t.state === 'deferred' && t.reviewQueue === rqLink);
+            if (exact !== -1) return exact;
+            const deferred = resolveArtifact.targets.findIndex(t => t.slug === rqTarget && t.state === 'deferred');
+            if (deferred !== -1) return deferred;
+            return resolveArtifact.targets.findIndex(t => t.slug === rqTarget);
+          })();
+          if (resolveTargetIndex === -1) {
             log.warn('kb_resolve_review: target row not found in mapping artifact, skipping status update', { rqTarget, mappingAbs });
           } else {
-            const allTargets = parseMappingTargets(updatedBody);
-            const anyUnresolved = allTargets.some(t => t.state === 'pending' || t.state === 'deferred');
-            const newMappingStatus = anyUnresolved ? 'confirmed' : 'applied';
-            const updatedMapping = matter.stringify(updatedBody, { ...mappingParsed.data, status: newMappingStatus });
-            autoWrite(mappingAbs, updatedMapping, vaultPath);
+            resolveArtifact.targets[resolveTargetIndex] = {
+              ...resolveArtifact.targets[resolveTargetIndex],
+              state: 'applied' as MappingTargetState,
+              reviewQueue: `[[${path.basename(rqPath, '.md')}]]`,
+              updated: new Date().toISOString().slice(0, 16),
+            };
+            const anyUnresolved = resolveArtifact.targets.some(t => t.state === 'pending' || t.state === 'deferred');
+            resolveArtifact.status = anyUnresolved ? 'confirmed' : 'applied';
+            writeMappingArtifact(mappingAbs, resolveArtifact, vaultPath);
+            mappingArtifactUpdated = true;
           }
+        } else {
+          log.warn('kb_resolve_review: no mapping artifact found, skipping status update', { rqSource, rqTarget });
         }
 
         return JSON.stringify({
@@ -978,7 +1056,10 @@ ${updateLog.notes || ''}
           rqItem: args.review_item,
           needsReviewCleared: pendingForTarget === 0,
           kbStatusAdvanced: pendingForSource === 0,
-          message: `Review-Queue item ${resolution}. Mapping artifact row updated (deferred → applied). ${pendingForTarget === 0 ? `needs_review cleared on [[${rqTarget}]].` : ''} ${pendingForSource === 0 ? `kb_status advanced to merged.` : ''}`,
+          mappingArtifactUpdated,
+          message: mappingArtifactUpdated
+            ? `Review-Queue item ${resolution}. Mapping artifact row updated (deferred → applied). ${pendingForTarget === 0 ? `needs_review cleared on [[${rqTarget}]].` : ''} ${pendingForSource === 0 ? `kb_status advanced to merged.` : ''}`
+            : `Review-Queue item ${resolution}. No matching mapping artifact row was updated. ${pendingForTarget === 0 ? `needs_review cleared on [[${rqTarget}]].` : ''} ${pendingForSource === 0 ? `kb_status advanced to merged.` : ''}`,
         });
       },
     },

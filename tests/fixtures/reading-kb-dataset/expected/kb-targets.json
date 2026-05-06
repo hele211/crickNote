@@ -1,0 +1,40 @@
+{
+  "source_note": "Reading/Papers/lee-2026-il42-cd8-suppression.md",
+  "expected_targets": {
+    "update": [
+      {
+        "path": "Knowledge/Entities/il-42.md",
+        "kind": "entity",
+        "reason": "IL-42 is the central named cytokine and already exists in the knowledge base."
+      }
+    ],
+    "create": [
+      {
+        "path": "Knowledge/Concepts/il-42-mediated-cd8-suppression.md",
+        "kind": "concept",
+        "reason": "This is the paper's main biological claim."
+      },
+      {
+        "path": "Knowledge/Entities/granzyme-b.md",
+        "kind": "entity",
+        "reason": "Granzyme B is the strongest mechanistic readout and should be reusable across sources."
+      },
+      {
+        "path": "Knowledge/Entities/jurkat-cells.md",
+        "kind": "entity",
+        "reason": "Jurkat cells are a named experimental system that help interpret effect-size differences."
+      },
+      {
+        "path": "Knowledge/Methods/flow-cytometry-activation-assay.md",
+        "kind": "method",
+        "reason": "The assay is central to the evidence and likely to recur in future notes."
+      }
+    ]
+  },
+  "rejected_candidates": [
+    {
+      "slug": "anti-il-42-neutralizing-antibody",
+      "reason": "Useful reagent detail, but not yet broad enough to deserve its own reusable knowledge note."
+    }
+  ]
+}

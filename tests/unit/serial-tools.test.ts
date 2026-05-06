@@ -180,20 +180,20 @@ describe('create_project', () => {
   });
   afterEach(() => { db.close(); fs.rmSync(vaultPath, { recursive: true, force: true }); });
 
-  it('returns pending_edit with correct path and reservation', async () => {
+  it('returns pending_edits with correct _index.md path and reservation', async () => {
     const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
     const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
     const r = JSON.parse(await tool.execute({ title: 'Cell Migration', prefix: 'CM' }));
-    expect(r.type).toBe('pending_edit');
-    expect(r.path).toMatch(/P001-CellMigration\/_index\.md$/);
-    expect(r.reservation).toEqual({ project_id: 'P001', prefix: 'CM' });
+    expect(r.type).toBe('pending_edits');
+    expect(r.edits[0].path).toMatch(/P001-CellMigration\/_index\.md$/);
+    expect(r.edits[0].reservation).toEqual({ project_id: 'P001', prefix: 'CM' });
   });
 
   it('frontmatter built via gray-matter — injection not possible', async () => {
     const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
     const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
     const r = JSON.parse(await tool.execute({ title: 'Cell:\nmalicious: injected', prefix: 'CM' }));
-    const parsed = matter(r.newContent);
+    const parsed = matter(r.edits[0].newContent);
     expect(parsed.data.malicious).toBeUndefined();
     expect(parsed.data.note_kind).toBe('project');
   });
@@ -231,6 +231,46 @@ describe('create_project', () => {
     expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('project') as { next_val: number } | undefined)?.next_val ?? -1).toBe(2);
     const res = db.prepare('SELECT project_id FROM prefix_reservations WHERE prefix = ?').get('CM') as { project_id: string } | undefined;
     expect(res?.project_id).toBe('P001');
+  });
+
+  it('returns pending_edits (plural) with exactly two edits: _index.md and _README.md', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
+    const r = JSON.parse(await tool.execute({ title: 'Cell Migration', prefix: 'CM' }));
+    expect(r.type).toBe('pending_edits');
+    expect(Array.isArray(r.edits)).toBe(true);
+    expect(r.edits).toHaveLength(2);
+  });
+
+  it('first edit is _index.md and carries the reservation', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
+    const r = JSON.parse(await tool.execute({ title: 'Cell Migration', prefix: 'CM' }));
+    const first = r.edits[0];
+    expect(first.type).toBe('pending_edit');
+    expect(first.path).toMatch(/P001-CellMigration\/_index\.md$/);
+    expect(first.reservation).toEqual({ project_id: 'P001', prefix: 'CM' });
+  });
+
+  it('second edit is _README.md with no reservation field', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
+    const r = JSON.parse(await tool.execute({ title: 'Cell Migration', prefix: 'CM' }));
+    const second = r.edits[1];
+    expect(second.type).toBe('pending_edit');
+    expect(second.path).toMatch(/P001-CellMigration\/_README\.md$/);
+    expect(second.reservation).toBeUndefined();
+  });
+
+  it('_README.md edit content is rendered via template pipeline with note_kind and title', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
+    const r = JSON.parse(await tool.execute({ title: 'Cell Migration', prefix: 'CM' }));
+    const readmeEdit = r.edits[1];
+    expect(readmeEdit.newContent).toContain('note_kind: folder-readme');
+    expect(readmeEdit.newContent).toContain('Cell Migration');
+    // template_version is stripped by the merge pipeline and must not appear
+    expect(readmeEdit.newContent).not.toContain('template_version');
   });
 });
 
@@ -410,5 +450,229 @@ describe('update_series_table', () => {
     const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'update_series_table')!;
     const r = JSON.parse(await tool.execute({ project_id: 'P001', series_id: 'CMS999', content: '...' }));
     expect(r.error).toContain('not found');
+  });
+});
+
+describe('create_experiment and create_protocol — template integration', () => {
+  let db: Database.Database;
+  let vaultPath: string;
+
+  beforeEach(() => {
+    db = new Database(':memory:');
+    runMigrations(db);
+    vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), 'st-tpl-'));
+    // Project folder must start with projectId- so resolveProject('P001') can find it
+    fs.mkdirSync(path.join(vaultPath, 'Projects', 'P001-CM'), { recursive: true });
+    fs.writeFileSync(
+      path.join(vaultPath, 'Projects', 'P001-CM', '_index.md'),
+      matter.stringify('\n', { note_kind: 'project', id: 'P001', prefix: 'CM', title: 'CM Project', status: 'active', created: '2026-01-01' })
+    );
+    db.prepare('INSERT INTO serial_counters (scope, next_val, project_id) VALUES (?, ?, ?)').run('CM', 1, 'P001');
+    db.prepare('INSERT INTO serial_counters (scope, next_val, project_id) VALUES (?, ?, ?)').run('CM-S', 1, 'P001');
+    // Permanent reservation (far-future expiry) so resolveProject does not auto-heal against a foreign reservation
+    db.prepare('INSERT INTO prefix_reservations (prefix, project_id, expires_at) VALUES (?, ?, ?)').run('CM', 'P001', 9999999999999);
+  });
+
+  afterEach(() => { db.close(); fs.rmSync(vaultPath, { recursive: true, force: true }); });
+
+  it('create_experiment returns warnings:[] when no template file is present', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_experiment')!;
+    const r = JSON.parse(await tool.execute({
+      project_id: 'P001',
+      title: 'My Experiment',
+      experiment_type: 'western-blot',
+    }));
+    expect(r.type).toBe('pending_edit');
+    expect(Array.isArray(r.warnings)).toBe(true);
+    // No templates folder — builtin used, warning about missing templates
+    expect(r.warnings.some((w: string) => w.includes('Editable templates are missing'))).toBe(true);
+  });
+
+  it('create_experiment applies custom template fields and warns on protected field', async () => {
+    fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'experiment.md'),
+      `---\ntemplate_version: 1\ncell_line: HEK293\nid: BAD\n---\n\n# {{title}}\n\n## {{date}} - Start\n`
+    );
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_experiment')!;
+    const r = JSON.parse(await tool.execute({
+      project_id: 'P001',
+      title: 'My Experiment',
+      experiment_type: 'western-blot',
+    }));
+    expect(r.type).toBe('pending_edit');
+    const parsed = matter(r.newContent);
+    expect(parsed.data.cell_line).toBe('HEK293');
+    expect(parsed.data.id).toBe('CM001'); // protected field wins
+    expect(r.warnings.some((w: string) => w.includes("'id'") && w.includes('ignored'))).toBe(true);
+  });
+
+  it('create_experiment emits each structural warning exactly once (no duplicates from preload path)', async () => {
+    fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
+    // Template with no version and a protected-field collision — both produce structural warnings
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'experiment.md'),
+      `---\nid: BAD\n---\n\n# {{title}}\n`
+    );
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_experiment')!;
+    const r = JSON.parse(await tool.execute({
+      project_id: 'P001',
+      title: 'My Experiment',
+      experiment_type: 'western-blot',
+    }));
+    expect(r.type).toBe('pending_edit');
+    const idWarnings = (r.warnings as string[]).filter((w: string) => w.includes("'id'") && w.includes('ignored'));
+    expect(idWarnings).toHaveLength(1);
+    const versionWarnings = (r.warnings as string[]).filter((w: string) => w.includes('no version'));
+    expect(versionWarnings).toHaveLength(1);
+  });
+
+  it('create_experiment does not consume a serial when template rendering fails', async () => {
+    fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'experiment.md'),
+      `---\nkey: [oops\n---\n\n# {{title}}\n`
+    );
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_experiment')!;
+
+    const failed = JSON.parse(await tool.execute({
+      project_id: 'P001',
+      title: 'My Experiment',
+      experiment_type: 'western-blot',
+    }));
+    expect(failed.error).toMatch(/invalid YAML/i);
+    expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('CM') as { next_val: number }).next_val).toBe(1);
+  });
+
+  it('create_protocol returns warnings:[] and uses builtin body when no templates', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_protocol')!;
+    fs.mkdirSync(path.join(vaultPath, 'Protocols'), { recursive: true });
+    const r = JSON.parse(await tool.execute({ title: 'Western Blot', category: 'gel' }));
+    expect(r.type).toBe('pending_edit');
+    expect(Array.isArray(r.warnings)).toBe(true);
+    const parsed = matter(r.newContent);
+    expect(parsed.content).toContain('## Materials');
+    expect(parsed.content).toContain('## Procedure');
+  });
+
+  it('create_project returns warnings array and body has AUTO-GENERATED markers', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
+    // create_project allocates its own reservation — do NOT pre-insert one or the tool will reject it as a collision
+    const r = JSON.parse(await tool.execute({ title: 'My Project', prefix: 'XY' }));
+    expect(r.type).toBe('pending_edits');
+    const indexEdit = r.edits[0];
+    expect(Array.isArray(indexEdit.warnings)).toBe(true);
+    const parsed = matter(indexEdit.newContent);
+    expect(parsed.content).toContain('<!-- AUTO-GENERATED: experiment-log -->');
+    expect(parsed.content).toContain('<!-- AUTO-GENERATED: project-summary -->');
+  });
+
+  it('create_project substitutes generated id and prefix placeholders', async () => {
+    fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'project-index.md'),
+      `---\ntemplate_version: 1\n---\n\n# {{title}}\n\nProject ID: {{id}}\nPrefix: {{prefix}}\n\n<!-- AUTO-GENERATED: experiment-log -->\n## Experiment Log\n| Series | ID | Name | Status | Created |\n|--------|-----|------|--------|---------|\n<!-- END AUTO-GENERATED: experiment-log -->\n\n<!-- AUTO-GENERATED: project-summary -->\n## Project Summary\n(auto-updated)\n<!-- END AUTO-GENERATED: project-summary -->\n`
+    );
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
+
+    const r = JSON.parse(await tool.execute({ title: 'My Project', prefix: 'XY' }));
+    const indexEdit = r.edits[0];
+    expect(indexEdit.warnings).toEqual([]);
+    const parsed = matter(indexEdit.newContent);
+    expect(parsed.data.id).toBe('P001');
+    expect(parsed.data.prefix).toBe('XY');
+    expect(parsed.content).toContain('Project ID: P001');
+    expect(parsed.content).toContain('Prefix: XY');
+    expect(parsed.content).not.toContain('{{id}}');
+    expect(parsed.content).not.toContain('{{prefix}}');
+  });
+
+  it('create_series returns warnings array and body has AUTO-GENERATED experiment-list', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_series')!;
+    const r = JSON.parse(await tool.execute({
+      project_id: 'P001',
+      title: 'My Series',
+      objective: 'Test objective',
+    }));
+    expect(r.type).toBe('pending_edit');
+    expect(Array.isArray(r.warnings)).toBe(true);
+    const parsed = matter(r.newContent);
+    expect(parsed.content).toContain('<!-- AUTO-GENERATED: experiment-list -->');
+    expect(parsed.content).toContain('<!-- END AUTO-GENERATED: experiment-list -->');
+  });
+
+  it('create_series injects experiment rows into AUTO-GENERATED block when experiments provided', async () => {
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    // Create an experiment file so validation passes
+    fs.writeFileSync(
+      path.join(vaultPath, 'Projects', 'P001-CM', 'CM001-my-exp.md'),
+      matter.stringify('\n# My Exp\n', { note_kind: 'experiment', id: 'CM001', project_id: 'P001' })
+    );
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_series')!;
+    const r = JSON.parse(await tool.execute({
+      project_id: 'P001',
+      title: 'My Series',
+      objective: 'Test',
+      experiments: ['CM001'],
+    }));
+    expect(r.type).toBe('pending_edit');
+    const parsed = matter(r.newContent);
+    expect(parsed.content).toContain('| CM001 |');
+    expect(parsed.content).toContain('<!-- END AUTO-GENERATED: experiment-list -->');
+    // Rows must appear BEFORE the END marker
+    const endIdx = parsed.content.indexOf('<!-- END AUTO-GENERATED: experiment-list -->');
+    const rowIdx = parsed.content.indexOf('| CM001 |');
+    expect(rowIdx).toBeLessThan(endIdx);
+  });
+
+  it('create_project does not consume a serial when template rendering fails', async () => {
+    fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
+    // Unique key name avoids gray-matter's parse-error cache stale-hit from sibling tests
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'project-index.md'),
+      `---\ncreate_project_bad: [oops\n---\n\n# {{title}}\n`
+    );
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_project')!;
+    const failed = JSON.parse(await tool.execute({ title: 'My Project', prefix: 'XY' }));
+    expect(failed.error).toMatch(/invalid YAML/i);
+    expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('project') as { next_val: number }).next_val).toBe(1);
+  });
+
+  it('create_series does not consume a serial when template rendering fails', async () => {
+    fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
+    // Unique key name avoids gray-matter's parse-error cache stale-hit from sibling tests
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'series.md'),
+      `---\ncreate_series_bad: [oops\n---\n\n# {{title}}\n`
+    );
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_series')!;
+    const failed = JSON.parse(await tool.execute({ project_id: 'P001', title: 'My Series' }));
+    expect(failed.error).toMatch(/invalid YAML/i);
+    expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('CM-S') as { next_val: number }).next_val).toBe(1);
+  });
+
+  it('create_protocol does not consume a serial when template rendering fails', async () => {
+    fs.mkdirSync(path.join(vaultPath, 'Agent', 'templates'), { recursive: true });
+    // Unique key name avoids gray-matter's parse-error cache stale-hit from sibling tests
+    fs.writeFileSync(
+      path.join(vaultPath, 'Agent', 'templates', 'protocol.md'),
+      `---\ncreate_protocol_bad: [oops\n---\n\n# {{title}}\n`
+    );
+    const { createSerialTools } = await import('../../src/agent/tools/serial-tools.js');
+    const tool = createSerialTools(vaultPath, db).find(t => t.definition.name === 'create_protocol')!;
+    fs.mkdirSync(path.join(vaultPath, 'Protocols'), { recursive: true });
+    const failed = JSON.parse(await tool.execute({ title: 'Western Blot', category: 'gel' }));
+    expect(failed.error).toMatch(/invalid YAML/i);
+    expect((db.prepare('SELECT next_val FROM serial_counters WHERE scope = ?').get('protocol') as { next_val: number }).next_val).toBe(1);
   });
 });

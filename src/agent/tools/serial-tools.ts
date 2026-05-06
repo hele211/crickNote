@@ -8,6 +8,7 @@ import { validatePrefix, getNextSerial } from '../../storage/serial.js';
 import { resolveVaultPath } from '../../utils/paths.js';
 import { fencedSectionUpdate } from '../../editing/auto-writer.js';
 import { logger } from '../../utils/logger.js';
+import { renderNoteTemplate, loadAndValidateTemplate, type RenderResult, type LoadResult, type TemplateKind } from '../../templates/template-loader.js';
 
 const log = logger.child('serial-tools');
 const RESERVED_PREFIXES = new Set(['PR', 'P']);
@@ -86,6 +87,15 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
     }
 
     return { prefix, folderPath };
+  }
+
+  function validateTemplateBeforeAllocation(
+    kind: TemplateKind,
+    context: Record<string, string>,
+  ): LoadResult | string {
+    const result = loadAndValidateTemplate(vaultPath, kind, context);
+    if (result instanceof Error) return result.message;
+    return result;
   }
 
   return [
@@ -220,6 +230,22 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         const rawPrefix = (args.prefix as string).toUpperCase();
         try { validatePrefix(rawPrefix); } catch (e) { return JSON.stringify({ error: (e as Error).message }); }
 
+        // Validate and load template before any state mutations so a bad template doesn't leave a stale reservation
+        const today = new Date().toISOString().slice(0, 10);
+        const projectTemplate = validateTemplateBeforeAllocation('project-index', {
+          title,
+          date: today,
+          id: 'P000',
+          prefix: rawPrefix,
+        });
+        if (typeof projectTemplate === 'string') {
+          return JSON.stringify({ error: projectTemplate });
+        }
+        const readmeTemplate = validateTemplateBeforeAllocation('folder-readme', { title, date: today });
+        if (typeof readmeTemplate === 'string') {
+          return JSON.stringify({ error: readmeTemplate });
+        }
+
         database.prepare('DELETE FROM prefix_reservations WHERE expires_at < ?').run(Date.now());
 
         const existingCounter = database.prepare('SELECT project_id FROM serial_counters WHERE scope = ?').get(rawPrefix) as { project_id: string | null } | undefined;
@@ -245,18 +271,49 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
 
         const slug = title.replace(/[^a-zA-Z0-9]+/g, '') || 'Untitled';
         const folderName = `${projectId}-${slug}`;
-        const today = new Date().toISOString().slice(0, 10);
         const fmData: Record<string, unknown> = { note_kind: 'project', id: projectId, prefix: rawPrefix, title, status: 'active', created: today };
         if (args.description) fmData.description = args.description as string;
-        const body = `\n<!-- AUTO-GENERATED: experiment-log -->\n## Experiment Log\n| Series | ID | Name | Status | Created |\n|--------|-----|------|--------|----------|\n<!-- END AUTO-GENERATED: experiment-log -->\n\n<!-- AUTO-GENERATED: project-summary -->\n## Project Summary\n(auto-updated)\n<!-- END AUTO-GENERATED: project-summary -->\n\n## Related Knowledge Concepts\n\n## Related Reading\n\n## Related Protocols\n\n## Open Questions\n`;
-        const newContent = matter.stringify(body, fmData);
-        let absPath: string;
+        let renderResult: RenderResult;
         try {
-          absPath = resolveVaultPath(vaultPath, path.join('Projects', folderName, '_index.md'));
+          renderResult = await renderNoteTemplate({
+            vaultPath,
+            kind: 'project-index',
+            protectedFrontmatter: fmData,
+            context: { title, date: today, id: projectId, prefix: rawPrefix },
+            preloadedTemplate: projectTemplate,
+          });
+        } catch (err) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+        const newContent = matter.stringify(renderResult.body, renderResult.frontmatter);
+        let absIndexPath: string;
+        let absReadmePath: string;
+        try {
+          absIndexPath = resolveVaultPath(vaultPath, path.join('Projects', folderName, '_index.md'));
+          absReadmePath = resolveVaultPath(vaultPath, path.join('Projects', folderName, '_README.md'));
         } catch {
           return JSON.stringify({ error: 'Resolved project path is outside the vault.' });
         }
-        return JSON.stringify({ type: 'pending_edit', operation: 'create_project', path: absPath, newContent, reservation: { project_id: projectId, prefix: rawPrefix } });
+        let readmeRenderResult: RenderResult;
+        try {
+          readmeRenderResult = await renderNoteTemplate({
+            vaultPath,
+            kind: 'folder-readme',
+            protectedFrontmatter: { note_kind: 'folder-readme', created: today },
+            context: { title, date: today },
+            preloadedTemplate: readmeTemplate,
+          });
+        } catch (err) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+        const readmeContent = matter.stringify(readmeRenderResult.body, readmeRenderResult.frontmatter);
+        return JSON.stringify({
+          type: 'pending_edits',
+          edits: [
+            { type: 'pending_edit', operation: 'create_project', path: absIndexPath, newContent, reservation: { project_id: projectId, prefix: rawPrefix }, warnings: renderResult.warnings },
+            { type: 'pending_edit', operation: 'create_readme', path: absReadmePath, newContent: readmeContent, warnings: readmeRenderResult.warnings },
+          ],
+        });
       },
     },
 
@@ -327,10 +384,19 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
           if (seriesFm.data.project_id !== projectId) return JSON.stringify({ error: `Series ${seriesId} belongs to project ${seriesFm.data.project_id}, not ${projectId}.` });
         }
 
+        const today = new Date().toISOString().slice(0, 10);
+        const experimentTemplate = validateTemplateBeforeAllocation('experiment', {
+          title: args.title as string,
+          date: today,
+          id: `${prefix}000`,
+          project_id: projectId,
+        });
+        if (typeof experimentTemplate === 'string') {
+          return JSON.stringify({ error: experimentTemplate });
+        }
         const serial = getNextSerial(prefix, database);
         const expId = `${prefix}${serial}`;
         const slug = (args.title as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-        const today = new Date().toISOString().slice(0, 10);
         const samples = (args.samples as Array<{ name: string; condition: string }> | undefined) ?? [];
         const reagents = (args.reagents as string[] | undefined) ?? [];
 
@@ -342,8 +408,19 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         if (args.protocol) fmData.protocol = `[[${args.protocol as string}]]`;
         if (args.series) fmData.series = args.series as string;
 
-        const body = `\n# ${args.title as string}\n\n## ${today} - Initial Setup\n\nTODO: Record experiment here.\n`;
-        const newContent = matter.stringify(body, fmData);
+        let renderResult: RenderResult;
+        try {
+          renderResult = await renderNoteTemplate({
+            vaultPath,
+            kind: 'experiment',
+            protectedFrontmatter: fmData,
+            context: { title: args.title as string, date: today, id: expId, project_id: projectId },
+            preloadedTemplate: experimentTemplate,
+          });
+        } catch (err) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+        const newContent = matter.stringify(renderResult.body, renderResult.frontmatter);
         const fileName = `${expId}-${slug}.md`;
         let absPath: string;
         try {
@@ -351,7 +428,7 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         } catch {
           return JSON.stringify({ error: 'Resolved experiment path is outside the vault.' });
         }
-        return JSON.stringify({ type: 'pending_edit', operation: 'create_experiment', path: absPath, newContent });
+        return JSON.stringify({ type: 'pending_edit', operation: 'create_experiment', path: absPath, newContent, warnings: renderResult.warnings });
       },
     },
 
@@ -421,6 +498,16 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
           }
         }
 
+        // Validate and load template before allocating serial so a bad template doesn't cause a serial gap
+        const seriesTemplate = validateTemplateBeforeAllocation('series', {
+          title: args.title as string,
+          objective: (args.objective as string | undefined) ?? 'TODO',
+          id: `${prefix}S000`,
+          project_id: projectId,
+        });
+        if (typeof seriesTemplate === 'string') {
+          return JSON.stringify({ error: seriesTemplate });
+        }
         const serial = getNextSerial(`${prefix}-S`, database);
         const seriesId = `${prefix}S${serial}`;
         const slug = (args.title as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
@@ -434,8 +521,26 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         const experimentListRows = validatedExperimentIds.length > 0
           ? validatedExperimentIds.map(id => `| ${id} | (see note) | draft | ${today} |`).join('\n')
           : '';
-        const body = `\n# ${args.title as string}\n\n## Objective\n${(args.objective as string | undefined) ?? 'TODO'}\n\n<!-- AUTO-GENERATED: experiment-list -->\n## Experiments\n| ID | Name | Status | Created |\n|----|------|--------|----------|\n${experimentListRows}\n<!-- END AUTO-GENERATED: experiment-list -->\n\n## Summary\n<!-- User-owned synthesis -->\n`;
-        const newContent = matter.stringify(body, fmData);
+        let renderResult: RenderResult;
+        try {
+          renderResult = await renderNoteTemplate({
+            vaultPath,
+            kind: 'series',
+            protectedFrontmatter: fmData,
+            context: { title: args.title as string, objective: (args.objective as string | undefined) ?? 'TODO', id: seriesId, project_id: projectId },
+            preloadedTemplate: seriesTemplate,
+          });
+        } catch (err) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+        let body = renderResult.body;
+        if (experimentListRows.length > 0) {
+          body = body.replace(
+            '<!-- END AUTO-GENERATED: experiment-list -->',
+            `${experimentListRows}\n<!-- END AUTO-GENERATED: experiment-list -->`
+          );
+        }
+        const newContent = matter.stringify(body, renderResult.frontmatter);
         const fileName = `${seriesId}-${slug}.md`;
         let absPath: string;
         try {
@@ -443,7 +548,7 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
         } catch {
           return JSON.stringify({ error: 'Resolved series path is outside the vault.' });
         }
-        return JSON.stringify({ type: 'pending_edit', operation: 'create_series', path: absPath, newContent, series_id: seriesId });
+        return JSON.stringify({ type: 'pending_edit', operation: 'create_series', path: absPath, newContent, series_id: seriesId, warnings: renderResult.warnings });
       },
     },
 
@@ -464,21 +569,39 @@ export function createSerialTools(vaultPath: string, injectedDb?: Database.Datab
       },
       execute: async (args) => {
         const database = db();
+        const today = new Date().toISOString().slice(0, 10);
+        const protocolTemplate = validateTemplateBeforeAllocation('protocol', {
+          title: args.title as string,
+          id: 'PR000',
+        });
+        if (typeof protocolTemplate === 'string') {
+          return JSON.stringify({ error: protocolTemplate });
+        }
         const serial = getNextSerial('protocol', database);
         const protId = `PR${serial}`;
         const slug = (args.title as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-        const today = new Date().toISOString().slice(0, 10);
         const fmData: Record<string, unknown> = { note_kind: 'protocol', id: protId, title: args.title as string, version: 1, category: args.category as string, created: today, last_updated: today };
         if (args.derived_from) fmData.derived_from = `[[${args.derived_from as string}]]`;
-        const body = `\n# ${args.title as string}\n\n## Materials\n\n## Procedure\n\n## Notes\n`;
-        const newContent = matter.stringify(body, fmData);
+        let renderResult: RenderResult;
+        try {
+          renderResult = await renderNoteTemplate({
+            vaultPath,
+            kind: 'protocol',
+            protectedFrontmatter: fmData,
+            context: { title: args.title as string, id: protId },
+            preloadedTemplate: protocolTemplate,
+          });
+        } catch (err) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
+        const newContent = matter.stringify(renderResult.body, renderResult.frontmatter);
         let absPath: string;
         try {
           absPath = resolveVaultPath(vaultPath, path.join('Protocols', `${protId}-${slug}.md`));
         } catch {
           return JSON.stringify({ error: 'Resolved protocol path is outside the vault.' });
         }
-        return JSON.stringify({ type: 'pending_edit', operation: 'create_protocol', path: absPath, newContent });
+        return JSON.stringify({ type: 'pending_edit', operation: 'create_protocol', path: absPath, newContent, warnings: renderResult.warnings });
       },
     },
 

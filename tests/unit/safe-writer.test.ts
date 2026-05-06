@@ -95,4 +95,80 @@ describe('SafeWriter', () => {
   it('getConflictDetector returns the injected detector', () => {
     expect(writer.getConflictDetector()).toBe(detector);
   });
+
+  describe('preflightEdit', () => {
+    it('returns ok:true for a valid apply on a conflict-free proposal', () => {
+      const filePath = path.join(tmpDir, 'preflight-ok.md');
+      const proposal = writer.proposeEdit(filePath, '# content\n', 'q', 'sess');
+      expect(writer.preflightEdit(proposal.editId, 'apply')).toEqual({ ok: true });
+    });
+
+    it('returns ok:true for cancel regardless of conflict state', () => {
+      const filePath = path.join(tmpDir, 'preflight-cancel.md');
+      const proposal = writer.proposeEdit(filePath, '# content\n', 'q', 'sess');
+      expect(writer.preflightEdit(proposal.editId, 'cancel')).toEqual({ ok: true });
+    });
+
+    it('returns ok:false for unknown editId', () => {
+      const result = writer.preflightEdit('nonexistent-id', 'apply');
+      expect(result.ok).toBe(false);
+      expect(result.error).toBeDefined();
+    });
+
+    it('returns ok:false when file is modified between propose and preflight', () => {
+      const filePath = path.join(tmpDir, 'preflight-conflict.md');
+      const original = '# Original\n';
+      fs.writeFileSync(filePath, original, 'utf-8');
+      detector.recordFileRead(filePath, original);
+
+      const proposal = writer.proposeEdit(filePath, '# Updated\n', 'q', 'sess');
+      // Simulate file change after proposal
+      fs.writeFileSync(filePath, '# Changed externally\n', 'utf-8');
+
+      const result = writer.preflightEdit(proposal.editId, 'apply');
+      expect(result.ok).toBe(false);
+      expect(result.error).toBeDefined();
+    });
+
+    it('returns ok:true for force action even when conflict exists', () => {
+      const filePath = path.join(tmpDir, 'preflight-force.md');
+      const original = '# Original\n';
+      fs.writeFileSync(filePath, original, 'utf-8');
+      detector.recordFileRead(filePath, original);
+
+      const proposal = writer.proposeEdit(filePath, '# Updated\n', 'q', 'sess');
+      fs.writeFileSync(filePath, '# Changed externally\n', 'utf-8');
+
+      expect(writer.preflightEdit(proposal.editId, 'force')).toEqual({ ok: true });
+    });
+
+    it('does not consume the proposal — confirmEdit still succeeds after preflight', () => {
+      const filePath = path.join(tmpDir, 'preflight-non-consuming.md');
+      const content = '# Preflighted\n';
+      const proposal = writer.proposeEdit(filePath, content, 'q', 'sess');
+
+      expect(writer.preflightEdit(proposal.editId, 'apply')).toEqual({ ok: true });
+      // preflight must not write the file
+      expect(fs.existsSync(filePath)).toBe(false);
+      // proposal must still be consumable by confirmEdit
+      const result = writer.confirmEdit(proposal.editId, 'apply');
+      expect(result.success).toBe(true);
+      expect(fs.readFileSync(filePath, 'utf-8')).toBe(content);
+    });
+
+    it('returns ok:false for an expired proposal', () => {
+      vi.useFakeTimers();
+      try {
+        const filePath = path.join(tmpDir, 'preflight-expired.md');
+        const proposal = writer.proposeEdit(filePath, '# content\n', 'q', 'sess');
+        vi.advanceTimersByTime(30 * 60 * 1000 + 1);
+        const result = writer.preflightEdit(proposal.editId, 'apply');
+        expect(result.ok).toBe(false);
+        expect(result.error).toMatch(/expired/i);
+        expect(fs.existsSync(filePath)).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });

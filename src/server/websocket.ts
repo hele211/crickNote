@@ -3,17 +3,38 @@ import path from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { CrickNoteConfig } from '../config/config.js';
 import { validateAuthMessage, type AuthMessage } from './auth.js';
-import { AgentRuntime } from '../agent/runtime.js';
+import { AgentRuntime, type RuntimeResponse } from '../agent/runtime.js';
 import { RateLimiter } from './rate-limiter.js';
 import { logger } from '../utils/logger.js';
 
 const log = logger.child('websocket');
+
+export function mapPendingEditForPlugin(
+  pe: RuntimeResponse['pendingEdits'][number],
+  vaultPath: string,
+): { editId: string; batchId: string | undefined; path: string; diff: string; hasConflict: boolean; warnings: string[] } {
+  return {
+    editId: pe.editId,
+    batchId: pe.batchId,
+    path: path.relative(vaultPath, pe.proposal.filePath),
+    diff: pe.proposal.diff,
+    hasConflict: pe.proposal.hasConflict,
+    warnings: pe.warnings,
+  };
+}
 
 interface AuthenticatedClient {
   ws: WebSocket;
   pluginVersion: string;
   sessionId: string;
   connectionId: string;
+}
+
+export function normalizeClientSessionId(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!/^[A-Za-z0-9._:-]{8,128}$/.test(trimmed)) return null;
+  return trimmed;
 }
 
 export function createWebSocketServer(config: CrickNoteConfig): Promise<WebSocketServer> {
@@ -95,7 +116,7 @@ export function createWebSocketServer(config: CrickNoteConfig): Promise<WebSocke
         const result = validateAuthMessage(msg as unknown as AuthMessage, '0.1.0');
 
         if (result.type === 'auth_ok') {
-          const sessionId = `obsidian-${Date.now()}`;
+          const sessionId = normalizeClientSessionId(msg.sessionId) ?? `obsidian-${Date.now()}-${connectionCounter}`;
           clients.set(ws, {
             ws,
             pluginVersion: (msg as unknown as AuthMessage).pluginVersion,
@@ -103,7 +124,7 @@ export function createWebSocketServer(config: CrickNoteConfig): Promise<WebSocke
             connectionId,
           });
           log.info('Client authenticated', { sessionId, pluginVersion: (msg as unknown as AuthMessage).pluginVersion });
-          ws.send(JSON.stringify(result));
+          ws.send(JSON.stringify({ ...result, sessionId }));
         } else {
           log.warn('Auth rejected', { reason: result.reason });
           ws.send(JSON.stringify(result));
@@ -127,15 +148,16 @@ export function createWebSocketServer(config: CrickNoteConfig): Promise<WebSocke
         }
         try {
           log.info('Chat message received', { sessionId: client.sessionId, length: (msg.content as string).length });
-          const response = await runtime.processMessage(msg.content, client.sessionId);
-          // Flatten EditProposal into a shape the plugin can render directly.
-          // Strip newContent (large, not needed by UI) and normalize filePath → path.
-          const pendingEdits = response.pendingEdits.map(pe => ({
-            editId: pe.editId,
-            path: path.relative(realVaultPath, pe.proposal.filePath),
-            diff: pe.proposal.diff,
-            hasConflict: pe.proposal.hasConflict,
-          }));
+          const response = await runtime.processMessage(
+            msg.content,
+            client.sessionId,
+            (text) => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'chat_chunk', text }));
+              }
+            },
+          );
+          const pendingEdits = response.pendingEdits.map(pe => mapPendingEditForPlugin(pe, realVaultPath));
           log.info('Chat response sent', {
             sessionId: client.sessionId,
             toolCalls: response.toolCalls.length,

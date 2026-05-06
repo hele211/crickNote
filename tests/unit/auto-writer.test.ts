@@ -38,6 +38,15 @@ describe('autoWrite', () => {
     expect(() => autoWrite(escapeTarget, 'x', vaultPath))
       .toThrow(/traversal rejected|autoWrite not permitted/);
   });
+
+  it('appends a changelog entry after writing a Reading/Papers file', () => {
+    const target = path.join(vaultPath, 'Reading', 'Papers', 'jones-2026-mapping.md');
+    autoWrite(target, '# mapping', vaultPath);
+    const changelog = path.join(vaultPath, 'Reading', 'Papers', '_changelog.md');
+    expect(fs.existsSync(changelog)).toBe(true);
+    const lines = fs.readFileSync(changelog, 'utf-8');
+    expect(lines).toMatch(/auto_write/);
+  });
 });
 
 describe('fencedSectionUpdate', () => {
@@ -88,6 +97,16 @@ describe('fencedSectionUpdate', () => {
     expect(() => fencedSectionUpdate(filePath, 'experiment-log', 'x', vaultPath))
       .toThrow("Duplicate AUTO-GENERATED fence 'experiment-log'");
   });
+
+  it('appends a changelog entry after updating a fenced section', () => {
+    // _index.md is excluded from changelog; use a series note instead
+    const filePath = path.join(vaultPath, 'Projects', 'P001-CellMigration', 'CMS001-test.md');
+    fs.writeFileSync(filePath, `---\nnote_kind: series\n---\n\n<!-- AUTO-GENERATED: summary -->\nold\n<!-- END AUTO-GENERATED: summary -->\n`);
+    fencedSectionUpdate(filePath, 'summary', 'new row', vaultPath);
+    const changelog = path.join(vaultPath, 'Projects', 'P001-CellMigration', '_changelog.md');
+    expect(fs.existsSync(changelog)).toBe(true);
+    expect(fs.readFileSync(changelog, 'utf-8')).toMatch(/fenced_section_update/);
+  });
 });
 
 describe('frontmatterFieldUpdate', () => {
@@ -95,6 +114,7 @@ describe('frontmatterFieldUpdate', () => {
   beforeEach(() => {
     vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ffu-test-'));
     fs.mkdirSync(path.join(vaultPath, 'Reading', 'Papers'), { recursive: true });
+    fs.mkdirSync(path.join(vaultPath, 'Reading', 'Threads'), { recursive: true });
     fs.mkdirSync(path.join(vaultPath, 'Knowledge', 'Concepts'), { recursive: true });
   });
   afterEach(() => { fs.rmSync(vaultPath, { recursive: true, force: true }); });
@@ -106,6 +126,16 @@ describe('frontmatterFieldUpdate', () => {
     const content = fs.readFileSync(filePath, 'utf-8');
     expect(content).toContain('kb_status: mapped');
     expect(content).not.toContain('kb_status: pending');
+    expect(content).toContain('# Body');
+  });
+
+  it('updates status in a Reading/Threads note', () => {
+    const filePath = path.join(vaultPath, 'Reading', 'Threads', 'smith-2026.md');
+    fs.writeFileSync(filePath, '---\ntitle: Test\nstatus: draft\n---\n\n# Body');
+    frontmatterFieldUpdate(filePath, 'status', 'complete', vaultPath);
+    const content = fs.readFileSync(filePath, 'utf-8');
+    expect(content).toContain('status: complete');
+    expect(content).not.toContain('status: draft');
     expect(content).toContain('# Body');
   });
 
@@ -130,5 +160,20 @@ describe('frontmatterFieldUpdate', () => {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, '---\ntitle: x\n---\n');
     expect(() => frontmatterFieldUpdate(filePath, 'needs_review', true, vaultPath)).toThrow('not permitted');
+  });
+
+  it('still rejects unrelated reading-note fields', () => {
+    const filePath = path.join(vaultPath, 'Reading', 'Threads', 'smith-2026.md');
+    fs.writeFileSync(filePath, '---\ntitle: x\nstatus: draft\n---\n');
+    expect(() => frontmatterFieldUpdate(filePath, 'authors', 'Alice', vaultPath)).toThrow('not permitted');
+  });
+
+  it('appends a changelog entry after updating a frontmatter field', () => {
+    const filePath = path.join(vaultPath, 'Reading', 'Papers', 'jones-2026.md');
+    fs.writeFileSync(filePath, '---\ntitle: Jones\nkb_status: pending\n---\n\n# Body');
+    frontmatterFieldUpdate(filePath, 'kb_status', 'mapped', vaultPath);
+    const changelog = path.join(vaultPath, 'Reading', 'Papers', '_changelog.md');
+    expect(fs.existsSync(changelog)).toBe(true);
+    expect(fs.readFileSync(changelog, 'utf-8')).toMatch(/frontmatter_update/);
   });
 });
