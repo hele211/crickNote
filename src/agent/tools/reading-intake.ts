@@ -474,13 +474,28 @@ export function createReadingIntakeTools(
         }
         const newContent = matter.stringify(body, frontmatter);
 
-        return JSON.stringify({
+        const resultPayload: Record<string, unknown> = {
           type: 'pending_edit',
           operation: exists ? 'update' : 'create',
           path: notePath,
           newContent,
           warnings: templateWarnings,
-        });
+        };
+
+        if (args.zotero_managed === true) {
+          let resolvedVaultPath: string;
+          try { resolvedVaultPath = fs.realpathSync(vaultPath); } catch { resolvedVaultPath = vaultPath; }
+          const noteRelPath = notePath.startsWith(resolvedVaultPath + path.sep)
+            ? notePath.slice(resolvedVaultPath.length + 1).replace(/\\/g, '/')
+            : notePath;
+          resultPayload.meta = {
+            zotero_slug: slug,
+            zotero_files_created: Array.isArray(args.zotero_files_created) ? args.zotero_files_created : [],
+            note_rel_path: noteRelPath,
+          };
+        }
+
+        return JSON.stringify(resultPayload);
       },
     },
     {

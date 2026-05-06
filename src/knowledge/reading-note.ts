@@ -59,6 +59,22 @@ export function slugifyReadingTitle(title: string): string {
   return normalized || 'reading-note';
 }
 
+const DOI_RESOLVER_HOSTS = new Set(['doi.org', 'dx.doi.org']);
+
+export function normalizeDoi(doi: string): string {
+  const trimmed = doi.trim().toLowerCase();
+  if (!trimmed) return '';
+  try {
+    const url = new URL(trimmed);
+    if ((url.protocol === 'http:' || url.protocol === 'https:') && DOI_RESOLVER_HOSTS.has(url.hostname)) {
+      return decodeURIComponent(url.pathname.replace(/^\/+/, '')).replace(/^doi:\s*/, '');
+    }
+  } catch {
+    // Not a valid URL — fall through
+  }
+  return trimmed.replace(/^doi:\s*/, '');
+}
+
 export function normalizeReadingSourcePath(sourcePath: string): string {
   const slashNormalized = sourcePath.replace(/\\/g, '/').trim();
   const normalized = path.posix.normalize(slashNormalized).replace(/^\.\/+/, '');
