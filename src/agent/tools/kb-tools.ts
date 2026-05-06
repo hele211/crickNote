@@ -989,10 +989,25 @@ ${updateLog.notes || ''}
           ...collectMappingArtifacts(path.join(vaultPath, 'Reading')),
           ...collectMappingArtifacts(path.join(vaultPath, 'Projects')),
         ];
-        // Pick the artifact that owns rqTarget; prefer confirmed/active over applied
-        const mappingAbs = allMappingCandidates.find(abs => {
-          try { return readMappingArtifact(abs).targets.some(t => t.slug === rqTarget); } catch { return false; }
-        }) ?? null;
+        // Pick the confirmed artifact with this target still deferred; fall back to any owner
+        const rqLink = `[[${path.basename(rqPath, '.md')}]]`;
+        const mappingAbs = (() => {
+          const parsed = allMappingCandidates.flatMap(abs => {
+            try { return [{ abs, artifact: readMappingArtifact(abs) }]; } catch { return []; }
+          });
+          return (
+            parsed.find(({ artifact }) =>
+              artifact.status === 'confirmed' &&
+              artifact.targets.some(t => t.slug === rqTarget && t.state === 'deferred' && t.reviewQueue === rqLink)
+            )?.abs ??
+            parsed.find(({ artifact }) =>
+              artifact.status === 'confirmed' &&
+              artifact.targets.some(t => t.slug === rqTarget && t.state === 'deferred')
+            )?.abs ??
+            parsed.find(({ artifact }) => artifact.targets.some(t => t.slug === rqTarget))?.abs ??
+            null
+          );
+        })();
         if (mappingAbs) {
           const resolveArtifact = readMappingArtifact(mappingAbs);
           const resolveTargetIndex = resolveArtifact.targets.findIndex(t => t.slug === rqTarget);
