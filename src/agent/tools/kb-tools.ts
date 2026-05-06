@@ -355,7 +355,7 @@ export function createKbTools(
             const ts = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
             const newRel = `${sourceDir}/${sourceSlug}-mapping-${ts}.md`;
             writeMappingArtifact(path.join(vaultPath, newRel), artifactObj, vaultPath);
-            if (isReadingNote) {
+            if (isReadingNote && artifactStatus !== 'draft') {
               frontmatterFieldUpdate(sourceAbsVault, 'kb_status', 'mapped', vaultPath);
             }
             return JSON.stringify({ status: 'mapped', artifactPath: newRel, targetCount: confirmedTargets.length, note: 'Previous applied artifact preserved; new timestamped artifact created.' });
@@ -977,16 +977,22 @@ ${updateLog.notes || ''}
         const mappingArtifactPattern = new RegExp(
           `^${rqSourceSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-mapping(?:-\\d{8}T\\d{6})?\\.md$`
         );
-        function findMappingArtifact(rootDir: string): string | null {
-          if (!fs.existsSync(rootDir)) return null;
+        function collectMappingArtifacts(rootDir: string, results: string[] = []): string[] {
+          if (!fs.existsSync(rootDir)) return results;
           for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
-            if (entry.isDirectory()) { const r = findMappingArtifact(path.join(rootDir, entry.name)); if (r) return r; }
-            else if (mappingArtifactPattern.test(entry.name)) return path.join(rootDir, entry.name);
+            if (entry.isDirectory()) collectMappingArtifacts(path.join(rootDir, entry.name), results);
+            else if (mappingArtifactPattern.test(entry.name)) results.push(path.join(rootDir, entry.name));
           }
-          return null;
+          return results;
         }
-        const mappingAbs = findMappingArtifact(path.join(vaultPath, 'Reading'))
-          || findMappingArtifact(path.join(vaultPath, 'Projects'));
+        const allMappingCandidates = [
+          ...collectMappingArtifacts(path.join(vaultPath, 'Reading')),
+          ...collectMappingArtifacts(path.join(vaultPath, 'Projects')),
+        ];
+        // Pick the artifact that owns rqTarget; prefer confirmed/active over applied
+        const mappingAbs = allMappingCandidates.find(abs => {
+          try { return readMappingArtifact(abs).targets.some(t => t.slug === rqTarget); } catch { return false; }
+        }) ?? null;
         if (mappingAbs) {
           const resolveArtifact = readMappingArtifact(mappingAbs);
           const resolveTargetIndex = resolveArtifact.targets.findIndex(t => t.slug === rqTarget);
