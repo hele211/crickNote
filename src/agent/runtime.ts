@@ -18,10 +18,38 @@ import { assembleSystemPrompt } from './context.js';
 import { SafeWriter, type EditProposal } from '../editing/safe-writer.js';
 import { appendFolderChangelog } from '../editing/changelog.js';
 import { getDatabase } from '../storage/database.js';
-import { routeTools, needsVaultAccess, SEARCH_BUNDLE } from './tool-router.js';
+import { routeTools, needsVaultAccess, needsVaultWriteAccess, SEARCH_BUNDLE, FULL_WRITE_BUNDLE } from './tool-router.js';
 import { logger } from '../utils/logger.js';
 
 const log = logger.child('runtime');
+
+const HISTORY_MESSAGE_LIMIT = 16;
+
+/**
+ * Strip large body fields from a stored tool result before replaying it in
+ * conversation history. The LLM already acted on the full content in the turn
+ * it appeared; replaying thousands of extra tokens adds cost with no benefit.
+ * path and frontmatter are preserved so the model knows which file was read.
+ */
+export function compactToolResultForHistory(content: string): string {
+  if (content.length <= 500) return content;
+  try {
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    let modified = false;
+    if (typeof parsed.context === 'string') {
+      parsed.context = '[omitted from history]';
+      modified = true;
+    }
+    if (typeof parsed.content === 'string' && parsed.content.length > 300) {
+      parsed.content = '[omitted from history]';
+      modified = true;
+    }
+    if (modified) return JSON.stringify(parsed);
+  } catch {
+    // Not JSON — leave as-is.
+  }
+  return content;
+}
 
 interface PendingEdit {
   editId: string;
@@ -34,6 +62,45 @@ export interface RuntimeResponse {
   content: string;
   toolCalls: ToolCall[];
   pendingEdits: PendingEdit[];
+}
+
+function normalizeFollowUpText(message: string): string {
+  return message
+    .toLowerCase()
+    .replace(/[’‘]/g, "'")
+    .replace(/[^a-z0-9'./-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isShortWriteFollowUp(message: string): boolean {
+  const text = normalizeFollowUpText(message);
+  if (!text || text.length > 60) return false;
+  return /^(yes|yep|yeah|ok|okay|sure|please|do it|go ahead|continue|proceed|update it|add it|write it|save it|that one|this one|option [a-z0-9]+|[a-z])$/.test(text);
+}
+
+function recentHistoryHasWriteIntent(history: Message[]): boolean {
+  const prior = history.slice(0, -1).slice(-8);
+  return prior.some((m) => {
+    if (m.role === 'tool') return false;
+    const text = normalizeFollowUpText(m.content);
+    const hasWriteVerb = /\b(add|append|update|write|save|record|put|edit|modify|apply)\b/.test(text);
+    const hasVaultTarget = /\b(note|file|vault|obsidian|experiment|protocol|diary)\b|\b(?:kb|exp|prot|ser)\d{3,}\b|\.md\b/.test(text);
+    return (
+      (hasWriteVerb && hasVaultTarget) ||
+      /\bwould you like me to\b.*\b(add|append|update|write|save|record)\b/.test(text) ||
+      /\bpending confirmation\b/.test(text)
+    );
+  });
+}
+
+function selectToolsForMessage(userMessage: string, history: Message[]): string[] {
+  const selectedNames = routeTools(userMessage);
+  if (selectedNames.length > 0) return selectedNames;
+  if (isShortWriteFollowUp(userMessage) && recentHistoryHasWriteIntent(history)) {
+    return [...FULL_WRITE_BUNDLE];
+  }
+  return selectedNames;
 }
 
 export class AgentRuntime {
@@ -91,10 +158,8 @@ export class AgentRuntime {
     for (const tool of createKbTools(config.vaultPath)) {
       this.registry.register(tool);
     }
-    if (config.zotero?.enabled === true) {
-      for (const tool of createZoteroTools(config.vaultPath)) {
-        this.registry.register(tool);
-      }
+    for (const tool of createZoteroTools(config.vaultPath, config)) {
+      this.registry.register(tool);
     }
   }
 
@@ -279,37 +344,23 @@ export class AgentRuntime {
     }
 
     const recentMessages = db.prepare(
-      'SELECT role, content, tool_calls, tool_call_id FROM chat_messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT 20'
+      `SELECT role, content, tool_calls, tool_call_id FROM chat_messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT ${HISTORY_MESSAGE_LIMIT}`
     ).all(sessionId) as Array<{ role: string; content: string; tool_calls: string | null; tool_call_id: string | null }>;
 
-    const history: Message[] = recentMessages.reverse().map(m => {
-      let content = m.content;
-      // Search results embed full note bodies in a "context" key; strip to keep history compact.
-      if (m.role === 'tool' && content.length > 500) {
-        try {
-          const parsed = JSON.parse(content) as Record<string, unknown>;
-          if (typeof parsed.context === 'string') {
-            parsed.context = '[omitted from history]';
-            content = JSON.stringify(parsed);
-          }
-        } catch {
-          // Not JSON — leave as-is.
-        }
-      }
-      return {
-        role: m.role as 'user' | 'assistant' | 'tool',
-        content,
-        toolCalls: m.tool_calls ? JSON.parse(m.tool_calls) : undefined,
-        toolCallId: m.tool_call_id ?? undefined,
-      };
-    });
+    const history: Message[] = recentMessages.reverse().map(m => ({
+      role: m.role as 'user' | 'assistant' | 'tool',
+      content: m.role === 'tool' ? compactToolResultForHistory(m.content) : m.content,
+      toolCalls: m.tool_calls ? JSON.parse(m.tool_calls) : undefined,
+      toolCallId: m.tool_call_id ?? undefined,
+    }));
 
     history.push({ role: 'user', content: userMessage });
     db.prepare('INSERT INTO chat_messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)')
       .run(sessionId, 'user', userMessage, Date.now());
 
-    // Route: select tool bundle from user message keywords. Default is no tools.
-    const selectedNames = routeTools(userMessage);
+    // Route: select tool bundle from the user message, with short replies
+    // interpreted against recent history.
+    const selectedNames = selectToolsForMessage(userMessage, history);
     const toolDefs = this.registry.getDefinitionsByName(selectedNames);
 
     // When no tools are selected, buffer chunks during the first pass so we can
@@ -321,15 +372,16 @@ export class AgentRuntime {
 
     let result = await this.runAgentLoop(history, toolDefs, userMessage, sessionId, firstPassOnChunk);
 
-    if (selectedNames.length === 0 && needsVaultAccess(result.content)) {
+    if (selectedNames.length === 0 && (needsVaultAccess(result.content) || needsVaultWriteAccess(result.content))) {
       // Delete the stale assistant DB row so history replay stays clean.
       db.prepare(
         'DELETE FROM chat_messages WHERE rowid = (SELECT rowid FROM chat_messages WHERE session_id = ? AND role = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT 1)'
       ).run(sessionId, 'assistant', firstCallTs);
       if (history[history.length - 1].role === 'assistant') history.pop();
 
-      const searchDefs = this.registry.getDefinitionsByName([...SEARCH_BUNDLE]);
-      result = await this.runAgentLoop(history, searchDefs, userMessage, sessionId, onChunk);
+      const retryBundle = needsVaultWriteAccess(result.content) ? FULL_WRITE_BUNDLE : SEARCH_BUNDLE;
+      const retryDefs = this.registry.getDefinitionsByName([...retryBundle]);
+      result = await this.runAgentLoop(history, retryDefs, userMessage, sessionId, onChunk);
     } else if (selectedNames.length === 0) {
       // No retry needed — replay buffered chunks so the caller receives streaming output.
       for (const chunk of bufferedChunks) onChunk?.(chunk);

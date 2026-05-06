@@ -1,5 +1,6 @@
 import { ItemView, MarkdownRenderer, WorkspaceLeaf } from 'obsidian';
 import type CrickNotePlugin from './main';
+import type { CrickNotePluginData } from './main';
 
 export const CHAT_VIEW_TYPE = 'cricknote-chat';
 
@@ -54,13 +55,22 @@ export class ChatView extends ItemView {
 
     // Messages area
     this.messagesEl = container.createDiv({ cls: 'cricknote-messages' });
+    this.messages = [];
 
-    // Welcome message
-    this.addMessage({
-      role: 'system',
-      content: 'Welcome to CrickNote! Ask me about your experiments, or tell me what to record.',
-      timestamp: Date.now(),
-    });
+    // Replay persisted history, or show welcome for new sessions.
+    const savedData = ((await this.plugin.loadData()) as CrickNotePluginData | null) ?? {};
+    const history = savedData.chatHistory ?? [];
+    if (history.length > 0) {
+      for (const msg of history) {
+        this.addMessage({ ...msg, pendingEdits: undefined });
+      }
+    } else {
+      this.addMessage({
+        role: 'system',
+        content: 'Welcome to CrickNote! Ask me about your experiments, or tell me what to record.',
+        timestamp: Date.now(),
+      });
+    }
 
     // Input area
     const inputContainer = container.createDiv({ cls: 'cricknote-input-container' });
@@ -113,9 +123,11 @@ export class ChatView extends ItemView {
         ? msg.pendingEdits as ChatMessage['pendingEdits']
         : undefined;
 
-      this.messages.push({ role: 'assistant', content, timestamp: Date.now(), pendingEdits });
+      const assistantMessage: ChatMessage = { role: 'assistant', content, timestamp: Date.now(), pendingEdits };
 
       if (this.streamingMessageEl && this.streamingContentEl) {
+        this.messages.push(assistantMessage);
+        void this.saveHistory();
         // Finalize the streaming bubble: replace plain text with rendered markdown.
         this.streamingContentEl.empty();
         MarkdownRenderer.render(this.plugin.app, content, this.streamingContentEl, '', this);
@@ -127,7 +139,8 @@ export class ChatView extends ItemView {
         this.streamingText = '';
       } else {
         // No chunks arrived (e.g. streaming disabled or very fast empty reply).
-        this.addMessage({ role: 'assistant', content, timestamp: Date.now(), pendingEdits });
+        this.addMessage(assistantMessage);
+        void this.saveHistory();
       }
 
       if (this.messagesEl) {
@@ -261,11 +274,21 @@ export class ChatView extends ItemView {
     this.addMessage({ role: 'user', content, timestamp: Date.now() });
     this.plugin.ws?.sendChat(content);
     this.inputEl.value = '';
+    void this.saveHistory();
   }
 
   private sendMessageText(text: string): void {
     this.addMessage({ role: 'user', content: text, timestamp: Date.now() });
     this.plugin.ws?.sendChat(text);
+    void this.saveHistory();
+  }
+
+  private async saveHistory(): Promise<void> {
+    const data = ((await this.plugin.loadData()) as CrickNotePluginData | null) ?? {};
+    const chatHistory = this.messages
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .map(({ role, content, timestamp }) => ({ role: role as 'user' | 'assistant', content, timestamp }));
+    await this.plugin.saveData({ ...data, chatHistory });
   }
 
   private addMessage(msg: ChatMessage): void {

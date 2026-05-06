@@ -234,6 +234,23 @@ export function needsReindex(filePath: string, contentHash: string, db?: Databas
 }
 
 /**
+ * Delete notes from the database whose paths are not in validPaths.
+ * Used after a full vault scan to remove orphan DB rows for deleted files.
+ */
+export function deleteStaleNotes(validPaths: string[], db?: Database.Database): void {
+  const database = db ?? getDatabase();
+  const validSet = new Set(validPaths);
+  database.transaction(() => {
+    const dbPaths = database.prepare('SELECT path FROM note_metadata').all() as Array<{ path: string }>;
+    for (const { path } of dbPaths) {
+      if (!validSet.has(path)) {
+        deleteNote(path, database);
+      }
+    }
+  })();
+}
+
+/**
  * Update the indexing_status table with current progress.
  */
 export function updateIndexingStatus(
@@ -250,6 +267,20 @@ export function updateIndexingStatus(
     SET state = ?, total_files = ?, indexed_files = ?, last_error = ?, updated_at = ?
     WHERE id = 1
   `).run(state, totalFiles, indexedFiles, lastError ?? null, Date.now());
+}
+
+interface IndexingStatus {
+  state: 'idle' | 'indexing' | 'error';
+  totalFiles: number;
+  indexedFiles: number;
+  lastError: string | null;
+}
+
+export function getIndexingStatus(db?: Database.Database): IndexingStatus {
+  const database = db ?? getDatabase();
+  return database.prepare(
+    'SELECT state, total_files AS totalFiles, indexed_files AS indexedFiles, last_error AS lastError FROM indexing_status WHERE id = 1'
+  ).get() as IndexingStatus;
 }
 
 /**

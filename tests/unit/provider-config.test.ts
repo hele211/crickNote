@@ -44,3 +44,22 @@ describe('Provider constructor accepts baseURL', () => {
     expect(() => new OpenAIProvider('test-key', 'https://open.bigmodel.cn/api/paas/v4/')).not.toThrow();
   });
 });
+
+describe('ThinkBlockFilter', () => {
+  it('removes complete think blocks', async () => {
+    const { ThinkBlockFilter } = await import('../../src/agent/providers/openai.js');
+    const filter = new ThinkBlockFilter();
+
+    expect(filter.push('Before <think>hidden</think> after')).toBe('Before  after');
+  });
+
+  it('removes think blocks split across chunks', async () => {
+    const { ThinkBlockFilter } = await import('../../src/agent/providers/openai.js');
+    const filter = new ThinkBlockFilter();
+
+    expect(filter.push('Hello <thi')).toBe('Hello ');
+    expect(filter.push('nk>hidden')).toBe('');
+    expect(filter.push('</thi')).toBe('');
+    expect(filter.push('nk> world')).toBe(' world');
+  });
+});

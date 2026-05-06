@@ -102,10 +102,10 @@ IMPORTANT RULES:
 ${rules.join('\n')}`);
   } else {
     sections.push(`You are CrickNote, a scientific research assistant for biology/life sciences.
-You help researchers think through experiments, explain techniques, and answer scientific questions.
-Vault access is not available for this query — answer from your scientific knowledge only.
-Be precise with scientific data — never fabricate results.
-When uncertain, say so and ask the user to clarify.`);
+No vault tools are loaded for this query.
+- If the user asks you to write, create, save, modify, or record anything in the vault or their notes, respond exactly: "I cannot write to your vault for this query."
+- If the user asks you to search, find, read, or look up anything in the vault or their notes, respond exactly: "I cannot access your vault for this query."
+- Otherwise, answer from your scientific knowledge — be precise, never fabricate results, and say so when uncertain.`);
   }
 
   // Layer 2: Reading workflow — only when reading tools are active
@@ -150,6 +150,7 @@ ${autoSummarize
   ? '9. auto_summarize is ON: when you receive "continue", immediately call compile_reading_note({ path: note_rel_path }). Then call vault_write with the returned content → second Apply/Continue cycle. Append to your message: "Note: PDF extraction is capped at 20 pages. If longer, review the summary manually."'
   : '9. auto_summarize is OFF: after the scaffold Apply, stop. Report the note path and offer to summarize on demand. Only call compile_reading_note if the user explicitly asks.'}`);
   }
+
 
   // Layer 3: Agent config (user's core rules)
   if (agentMd) {
