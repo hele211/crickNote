@@ -79,7 +79,8 @@ describe('kb_suggest tool', () => {
     const tool = tools.find(t => t.definition.name === 'kb_suggest')!;
     const sourcePath = path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-il42.md');
     const sourceContent = fs.readFileSync(sourcePath, 'utf-8');
-    const sourceHash = crypto.createHash('sha256').update(sourceContent).digest('hex');
+    const sourceForHash = sourceContent.replace(/^kb_status:.*$/m, 'kb_status: __stripped__');
+    const sourceHash = crypto.createHash('sha256').update(sourceForHash).digest('hex');
 
     // Write an existing confirmed artifact with matching hash
     const artifactContent = `---\ntype: kb-mapping\nschema_version: 2\nsource: "[[smith-2026-il42]]"\nsource_hash: "${sourceHash}"\ncreated: 2026-04-08\nstatus: confirmed\ntargets: []\nrejected: []\n---\n`;

@@ -158,7 +158,7 @@ export class AgentRuntime {
     for (const tool of createKbTools(config.vaultPath)) {
       this.registry.register(tool);
     }
-    for (const tool of createZoteroTools(config.vaultPath, config)) {
+    for (const tool of createZoteroTools(config.vaultPath)) {
       this.registry.register(tool);
     }
   }

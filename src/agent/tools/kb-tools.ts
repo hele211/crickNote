@@ -139,7 +139,10 @@ export function createKbTools(
         }
 
         const sourceContent = fs.readFileSync(notePath, 'utf-8');
-        const sourceHash = crypto.createHash('sha256').update(sourceContent).digest('hex');
+        // Hash on kb_status-stripped content so that kb_write_mapping's kb_status update
+        // doesn't invalidate the hash and break the already_suggested dedup check.
+        const sourceForHash = sourceContent.replace(/^kb_status:.*$/m, 'kb_status: __stripped__');
+        const sourceHash = crypto.createHash('sha256').update(sourceForHash).digest('hex');
 
         // Dedup: scan for any artifact (base or timestamped rerun) with matching hash
         const sourceSlugForDedup = path.basename(args.source as string, '.md');
