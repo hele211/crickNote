@@ -141,29 +141,34 @@ export function createKbTools(
         const sourceContent = fs.readFileSync(notePath, 'utf-8');
         const sourceHash = crypto.createHash('sha256').update(sourceContent).digest('hex');
 
-        // Dedup: if artifact exists with matching hash, skip re-suggesting
+        // Dedup: scan for any artifact (base or timestamped rerun) with matching hash
         const sourceSlugForDedup = path.basename(args.source as string, '.md');
         const sourceDirForDedup = path.dirname((args.source as string).replace(/\\/g, '/'));
-        const artifactRelForDedup = `${sourceDirForDedup}/${sourceSlugForDedup}-mapping.md`;
-        const artifactAbsForDedup = path.join(vaultPath, artifactRelForDedup);
+        const artifactDirAbs = path.join(vaultPath, sourceDirForDedup);
+        const artifactPattern = new RegExp(
+          `^${sourceSlugForDedup.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-mapping(?:-\\d{8}T\\d{6})?\\.md$`
+        );
 
-        if (fs.existsSync(artifactAbsForDedup)) {
-          try {
-            const existingArtifact = readMappingArtifact(artifactAbsForDedup);
-            if (existingArtifact.sourceHash === sourceHash && ['draft', 'confirmed', 'applied'].includes(existingArtifact.status)) {
-              const message = existingArtifact.status === 'applied'
-                ? 'Mapping already applied. Use rerun_confirmed: true with kb_write_mapping to re-map.'
-                : 'A mapping already exists for this version of the source note. Run kb_apply to continue.';
-              return JSON.stringify({
-                status: 'already_suggested',
-                sourceHash,
-                artifactPath: artifactRelForDedup,
-                mappingStatus: existingArtifact.status,
-                message,
-              });
+        if (fs.existsSync(artifactDirAbs) && fs.statSync(artifactDirAbs).isDirectory()) {
+          for (const entry of fs.readdirSync(artifactDirAbs).filter(e => artifactPattern.test(e))) {
+            try {
+              const existingArtifact = readMappingArtifact(path.join(artifactDirAbs, entry));
+              if (existingArtifact.sourceHash === sourceHash && ['draft', 'confirmed', 'applied'].includes(existingArtifact.status)) {
+                const artifactRelForDedup = `${sourceDirForDedup}/${entry}`;
+                const message = existingArtifact.status === 'applied'
+                  ? 'Mapping already applied. Use rerun_confirmed: true with kb_write_mapping to re-map.'
+                  : 'A mapping already exists for this version of the source note. Run kb_apply to continue.';
+                return JSON.stringify({
+                  status: 'already_suggested',
+                  sourceHash,
+                  artifactPath: artifactRelForDedup,
+                  mappingStatus: existingArtifact.status,
+                  message,
+                });
+              }
+            } catch {
+              // Artifact unreadable — skip and continue scanning
             }
-          } catch {
-            // Artifact exists but unreadable — proceed with fresh suggestion
           }
         }
 
@@ -339,9 +344,8 @@ export function createKbTools(
 
         // Check collision (spec §10)
         if (fs.existsSync(artifactAbs)) {
-          const existing = fs.readFileSync(artifactAbs, 'utf-8');
-          const existingParsed = matter(existing);
-          if (existingParsed.data.status === 'applied') {
+          const existingArtifact = readMappingArtifact(artifactAbs);
+          if (existingArtifact.status === 'applied') {
             if (!args.rerun_confirmed) {
               return JSON.stringify({
                 status: 'needs_confirmation',
@@ -355,7 +359,7 @@ export function createKbTools(
               frontmatterFieldUpdate(sourceAbsVault, 'kb_status', 'mapped', vaultPath);
             }
             return JSON.stringify({ status: 'mapped', artifactPath: newRel, targetCount: confirmedTargets.length, note: 'Previous applied artifact preserved; new timestamped artifact created.' });
-          } else if (existingParsed.data.status === 'confirmed') {
+          } else if (existingArtifact.status === 'confirmed') {
             return JSON.stringify({ status: 'already_in_progress', message: 'A mapping is already in progress. Run kb_apply to continue.' });
           }
           // status: draft → overwrite
