@@ -58,7 +58,7 @@ CLI and skills.
 | `src/agent/runtime.ts` + `src/agent/providers/` | ~900 | The agent IS the LLM loop |
 | `src/server/` (WebSocket, auth, rate-limiter) | ~400 | No UI to serve |
 | `src/editing/safe-writer.ts` confirm machinery, `conflict-detector.ts`, `diff-generator.ts` | ~540 | Agent's own permission prompt + diff display |
-| `src/retrieval/` (context-assembler, query-parser, semantic-ranker, structured-filter) | ~950 | Agent assembles its own context |
+| `src/retrieval/semantic-ranker.ts` | ~130 | BM25 + grep are sufficient. **Correction (2026-06-10):** the rest of `src/retrieval/` (query-parser, structured-filter, context-assembler) is NOT scaffolding — `vault_search` depends on it and it stays |
 | `src/ingestion/embedder.ts` + chunk embeddings | ~110 + deps | BM25 + grep are sufficient; drops `@xenova/transformers` |
 | `obsidian-plugin/` chat UI | (separate) | Obsidian becomes viewer only |
 
@@ -213,6 +213,25 @@ serialized note types).
    reliable.
 3. Remove `node-cron` from `package.json` (declared, never imported).
 
+### Corrections found during implementation planning (2026-06-10)
+
+4. **Semantic ranking comes out of `vault_search` in phase 1, not phase 3.**
+   `vault_search` lazy-loads the embedding model at query time when candidates
+   exceed 5. Through the CLI every invocation is a fresh process, so this
+   would add seconds of model-load latency per search. The semantic re-rank
+   step (already wrapped in a fall-through try/catch) is removed in phase 1;
+   structured filters + BM25 remain.
+5. **`cricknote reindex` must be rewritten in phase 1.** Today it only clears
+   derived tables and instructs the user to restart the service — it cannot
+   index standalone. With the service retired, phase 1 gives it a real
+   standalone full-index loop (parse → chunk → BM25/metadata, no embeddings,
+   no model load).
+6. **Reservation lifecycle (verified):** `create_project` returns a
+   `pending_edit` carrying `reservation: {project_id, prefix}`. The apply path
+   stamps `prefix_reservations.edit_id`; on failure/cancel the reservation row
+   is deleted; on success it remains until `register_project_counters`
+   upgrades it to permanent. The dispatcher must mirror exactly this.
+
 ## 10. Pruning (phase 3)
 
 Delete once the bridge has covered real lab work for a week or two:
@@ -223,7 +242,9 @@ Delete once the bridge has covered real lab work for a week or two:
   `conflict-detector.ts` — **keep** the atomic-write + audit internals consumed
   by `applyPendingEdit()` (relocate as needed), and **keep** `auto-writer.ts`
   (used by kb-tools/serial-tools)
-- `src/retrieval/` entire stack
+- `src/retrieval/semantic-ranker.ts` only — **keep** `query-parser.ts`,
+  `structured-filter.ts`, `context-assembler.ts` (all consumed by
+  `vault_search`; correction 2026-06-10)
 - `src/ingestion/embedder.ts`, `chunk_embeddings` usage, watcher daemon;
   drop `@xenova/transformers`, `ws`, LLM SDK deps (`@anthropic-ai/sdk`,
   `openai`), `node-cron`
