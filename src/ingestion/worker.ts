@@ -6,6 +6,7 @@ import { VaultWatcher, type FileChange } from './watcher.js';
 import { parseNote } from './parser.js';
 import { chunkText } from './chunker.js';
 import { embedTexts, preloadModel } from './embedder.js';
+import { shouldIgnoreIngestionPath } from './ignore.js';
 import {
   indexNote,
   deleteNote,
@@ -282,13 +283,4 @@ export class IngestionWorker extends EventEmitter<WorkerEvents> {
   }
 }
 
-export function shouldIgnoreIngestionPath(relativePath: string): boolean {
-  const normalized = relativePath.replace(/\\/g, '/');
-  return (
-    /(^|\/)attachments\//.test(normalized) ||
-    /^(Reading\/[^/]+|Projects\/[^/]+)\/[^/]+-mapping(?:-\d{8}T\d{6})?\.md$/.test(normalized) ||
-    normalized.startsWith('Knowledge/_Ops/') ||
-    /^Knowledge\/(Concepts|Entities|Methods)\/_index\.md$/.test(normalized) ||
-    /(^|\/)_changelog\.md$/.test(normalized)
-  );
-}
+export { shouldIgnoreIngestionPath };
