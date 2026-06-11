@@ -65,13 +65,26 @@ export function createVaultTools(
         },
       },
       execute: async (args) => {
-        const folder = args.folder as string;
-        if (!folder || folder.includes('..')) {
-          return JSON.stringify({ error: 'folder must be a non-empty string without path traversal' });
+        const rawFolder = String(args.folder ?? '').trim();
+        const folder = rawFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+        if (
+          !folder ||
+          path.isAbsolute(rawFolder) ||
+          folder.split('/').some(part => part === '' || part === '..')
+        ) {
+          return JSON.stringify({ error: 'folder must be a non-empty relative folder path without traversal' });
         }
         const database = injectedDb ?? getDatabase();
-        const conditions: string[] = ['folder LIKE ?'];
-        const params: unknown[] = [`${folder}%`];
+        const conditions: string[] = [];
+        const params: unknown[] = [];
+
+        if (folder.includes('/')) {
+          conditions.push('path LIKE ?');
+          params.push(`${folder}/%`);
+        } else {
+          conditions.push('folder = ?');
+          params.push(folder);
+        }
 
         if (args.date) { conditions.push('date = ?'); params.push(args.date); }
         if (args.experiment_type) { conditions.push('experiment_type = ?'); params.push(args.experiment_type); }

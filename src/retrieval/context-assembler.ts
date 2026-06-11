@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type Database from 'better-sqlite3';
+import { resolveVaultPath } from '../utils/paths.js';
 
 // --- Types ---
 
@@ -38,6 +39,47 @@ export interface ContextAssemblerOptions {
   vaultPath: string;
   /** Maximum number of related notes to include */
   maxRelatedNotes?: number;
+}
+
+function resolveVaultRoot(vaultPath: string): string {
+  try {
+    return fs.realpathSync(vaultPath);
+  } catch {
+    return path.resolve(vaultPath);
+  }
+}
+
+function resolveContextNotePath(
+  vaultPath: string,
+  notePath: string,
+): { fullPath: string; normalizedNotePath: string } | null {
+  const realVault = resolveVaultRoot(vaultPath);
+
+  if (path.isAbsolute(notePath)) {
+    let realTarget: string;
+    try {
+      realTarget = fs.realpathSync(notePath);
+    } catch {
+      realTarget = path.resolve(notePath);
+    }
+    if (realTarget !== realVault && !realTarget.startsWith(realVault + path.sep)) {
+      return null;
+    }
+    return {
+      fullPath: realTarget,
+      normalizedNotePath: path.relative(realVault, realTarget).replace(/\\/g, '/'),
+    };
+  }
+
+  try {
+    const fullPath = resolveVaultPath(vaultPath, notePath);
+    return {
+      fullPath,
+      normalizedNotePath: path.relative(realVault, fullPath).replace(/\\/g, '/'),
+    };
+  } catch {
+    return null;
+  }
 }
 
 // --- Wikilink extraction ---
@@ -258,9 +300,11 @@ export function assembleNoteContext(
   const { vaultPath, maxRelatedNotes = 5 } = options;
 
   // Read the note from disk (vault is source of truth)
-  const fullPath = path.isAbsolute(notePath)
-    ? notePath
-    : path.join(vaultPath, notePath);
+  const resolved = resolveContextNotePath(vaultPath, notePath);
+  if (!resolved) {
+    return null;
+  }
+  const { fullPath, normalizedNotePath } = resolved;
 
   if (!fs.existsSync(fullPath)) {
     return null;
@@ -276,7 +320,7 @@ export function assembleNoteContext(
   // Get metadata from DB for project/date info
   const meta = db.prepare(
     'SELECT project, date FROM note_metadata WHERE path = ?',
-  ).get(notePath) as { project: string | null; date: string | null } | undefined;
+  ).get(normalizedNotePath) as { project: string | null; date: string | null } | undefined;
 
   // Resolve linked protocols
   const linkedProtocols = resolveLinkedProtocols(body, vaultPath);
@@ -287,14 +331,14 @@ export function assembleNoteContext(
   // Find related notes
   const relatedNotes = findRelatedNotes(
     db,
-    notePath,
+    normalizedNotePath,
     meta?.project ?? null,
     meta?.date ?? null,
     maxRelatedNotes,
   );
 
   return {
-    notePath,
+    notePath: normalizedNotePath,
     body,
     linkedProtocols,
     attachments,

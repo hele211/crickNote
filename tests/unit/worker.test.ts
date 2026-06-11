@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { shouldIgnoreIngestionPath, IngestionWorker } from '../../src/ingestion/worker.js';
 import * as embedderModule from '../../src/ingestion/embedder.js';
 import * as watcherModule from '../../src/ingestion/watcher.js';
@@ -49,6 +52,31 @@ describe('IngestionWorker.fullIndex error state', () => {
     expect(updateStatus).toHaveBeenCalledWith('error', 0, 0, 'disk failure');
 
     vi.restoreAllMocks();
+  });
+});
+
+describe('IngestionWorker.processFile path safety', () => {
+  it('skips symlinked markdown files before reading file contents', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cricknote-worker-symlink-'));
+    const vaultPath = path.join(tmpDir, 'vault');
+    const outsidePath = path.join(tmpDir, 'outside.md');
+    const linkedPath = path.join(vaultPath, 'linked.md');
+    fs.mkdirSync(vaultPath);
+    fs.writeFileSync(outsidePath, '# Outside vault\n', 'utf-8');
+    fs.symlinkSync(outsidePath, linkedPath);
+
+    const readSpy = vi.spyOn(fs, 'readFileSync');
+    const worker = new IngestionWorker(vaultPath, { watchForChanges: false });
+
+    try {
+      await (worker as unknown as { processFile(relativePath: string): Promise<void> })
+        .processFile('linked.md');
+
+      expect(readSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 

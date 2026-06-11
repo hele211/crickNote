@@ -19,6 +19,10 @@ describe('vault_list with project_id and series filter (injectable db)', () => {
       .run('Projects/P001-CM/CM001-wb.md', 'Projects', 'experiment', '2026-04-11', 'P001', 'CMS001', 'CM001', 'abc', 1000, 1000);
     db.prepare(`INSERT INTO note_metadata (path, folder, note_type, date, project_id, series, note_id, content_hash, mtime, last_indexed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run('Projects/P002-PCR/PCR001-pcr.md', 'Projects', 'experiment', '2026-04-11', 'P002', null, 'PCR001', 'def', 1000, 1000);
+    db.prepare(`INSERT INTO note_metadata (path, folder, note_type, date, content_hash, mtime, last_indexed) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run('Memory/Daily/2026-04-11.md', 'Memory', 'diary', '2026-04-11', 'ghi', 1000, 1000);
+    db.prepare(`INSERT INTO note_metadata (path, folder, note_type, date, content_hash, mtime, last_indexed) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run('Memory/Weekly/2026-W15.md', 'Memory', 'diary', '2026-04-12', 'jkl', 1000, 1000);
   });
 
   afterEach(() => { db.close(); fs.rmSync(vaultPath, { recursive: true, force: true }); });
@@ -37,6 +41,32 @@ describe('vault_list with project_id and series filter (injectable db)', () => {
     const result = JSON.parse(await tool.execute({ folder: 'Projects' }));
     const withSeries = result.find((r: Record<string, unknown>) => r.series === 'CMS001');
     expect(withSeries).toBeDefined();
+  });
+
+  it('lists top-level Memory notes', async () => {
+    const tools = createVaultTools(vaultPath, undefined, db);
+    const tool = tools.find(t => t.definition.name === 'vault_list')!;
+    const result = JSON.parse(await tool.execute({ folder: 'Memory' }));
+    const paths = result.map((row: { path: string }) => row.path);
+
+    expect(paths).toContain('Memory/Daily/2026-04-11.md');
+    expect(paths).toContain('Memory/Weekly/2026-W15.md');
+  });
+
+  it('lists only notes under a requested subfolder', async () => {
+    const tools = createVaultTools(vaultPath, undefined, db);
+    const tool = tools.find(t => t.definition.name === 'vault_list')!;
+    const result = JSON.parse(await tool.execute({ folder: 'Memory/Daily' }));
+
+    expect(result.map((row: { path: string }) => row.path)).toEqual(['Memory/Daily/2026-04-11.md']);
+  });
+
+  it('rejects folder path traversal', async () => {
+    const tools = createVaultTools(vaultPath, undefined, db);
+    const tool = tools.find(t => t.definition.name === 'vault_list')!;
+    const result = JSON.parse(await tool.execute({ folder: 'Memory/../Daily' }));
+
+    expect(result.error).toContain('without traversal');
   });
 });
 
