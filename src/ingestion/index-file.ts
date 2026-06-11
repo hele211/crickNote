@@ -23,6 +23,8 @@ export function indexFileSync(relativePath: string, vaultRoot: string, db?: Data
   try {
     absolutePath = resolveVaultPath(vaultRoot, relativePath);
   } catch {
+    // resolveVaultPath throws on traversal/escape attempts — treat as skipped
+    // (the file is outside the vault boundary, not indexable).
     return 'skipped';
   }
 

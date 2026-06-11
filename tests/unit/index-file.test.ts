@@ -64,6 +64,25 @@ describe('indexFileSync', () => {
     expect(indexFileSync(rel, vault, db)).toBe('gone');
     const meta = db.prepare('SELECT path FROM note_metadata WHERE path = ?').get(rel);
     expect(meta).toBeUndefined();
+    const chunks = db.prepare('SELECT COUNT(*) AS n FROM note_chunks WHERE path = ?').get(rel) as { n: number };
+    expect(chunks.n).toBe(0);
+    const bm25 = db.prepare(
+      `SELECT COUNT(*) AS n FROM bm25_index bi JOIN note_chunks nc ON nc.id = CAST(bi.chunk_id AS INTEGER) WHERE nc.path = ?`
+    ).get(rel) as { n: number };
+    expect(bm25.n).toBe(0);
+  });
+
+  it('skips symlinks', () => {
+    const target = path.join(vault, 'Projects', 'real.md');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, '---\nnote_kind: experiment\nid: IL900\n---\n\nbody');
+    const linkRel = 'Projects/link.md';
+    try {
+      fs.symlinkSync(target, path.join(vault, linkRel));
+    } catch {
+      return; // platform without symlink privilege — nothing to assert
+    }
+    expect(indexFileSync(linkRel, vault, db)).toBe('skipped');
   });
 
   it('listMarkdownFiles returns relative md paths and skips dot dirs', () => {
