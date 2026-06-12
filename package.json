@@ -7,8 +7,7 @@
     "cricknote": "./dist/cli.js"
   },
   "scripts": {
-    "build": "tsc && bash scripts/build-plugin.sh",
-    "build:plugin": "bash scripts/build-plugin.sh",
+    "build": "tsc",
     "dev": "tsc --watch",
     "start": "node dist/cli.js start",
     "setup": "node dist/cli.js setup",
