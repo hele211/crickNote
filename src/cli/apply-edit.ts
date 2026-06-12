@@ -44,6 +44,10 @@ export function applyPendingEdit(edit: PendingEditPayload, ctx: ApplyContext): A
   const operation = edit.operation ?? 'edit';
   const absPath = path.normalize(edit.path);
 
+  // edit.path is already an absolute, vault-resolved path emitted by the tool.
+  // resolveVaultPath's second arg is named for relative paths, but path.resolve
+  // returns an absolute second arg unchanged, so the symlink-aware boundary
+  // check (it throws on any path that escapes the vault) still applies here.
   try {
     resolveVaultPath(vaultRoot, absPath);
   } catch {
