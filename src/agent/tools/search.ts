@@ -1,9 +1,6 @@
 import type { ToolHandler } from './registry.js';
 import { parseQuery, type ParserContext } from '../../retrieval/query-parser.js';
 import { buildNoteQuery, parsedQueryToFilterInput } from '../../retrieval/structured-filter.js';
-import { semanticRank } from '../../retrieval/semantic-ranker.js';
-import { assembleContext } from '../../retrieval/context-assembler.js';
-import { embedText } from '../../ingestion/embedder.js';
 import { getDatabase } from '../../storage/database.js';
 import type Database from 'better-sqlite3';
 
@@ -132,53 +129,8 @@ export function createSearchTools(vaultPath: string, injectedDb?: Database.Datab
           });
         }
 
-        // Step 3: Semantic ranking — only when candidates > 5 (per architecture spec)
-        if (candidates.length > 5) {
-          try {
-            const candidatePaths = candidates.map(c => c.path);
-            const placeholders = candidatePaths.map(() => '?').join(',');
-            const chunks = database.prepare(
-              `SELECT id, path FROM note_chunks WHERE path IN (${placeholders})`
-            ).all(...candidatePaths) as Array<{ id: number; path: string }>;
-
-            if (chunks.length > 0) {
-              const queryEmbedding = await embedText(query);
-              const chunkIds = chunks.map(c => c.id);
-              const ranked = semanticRank(database, queryEmbedding, chunkIds, 10);
-
-              // Map ranked chunk IDs back to note paths (deduplicated, rank-ordered)
-              const chunkIdToPath = new Map(chunks.map(c => [c.id, c.path]));
-              const seenPaths = new Set<string>();
-              const rankedPaths: string[] = [];
-              for (const r of ranked) {
-                const p = chunkIdToPath.get(r.chunkId);
-                if (p && !seenPaths.has(p)) {
-                  seenPaths.add(p);
-                  rankedPaths.push(p);
-                }
-              }
-
-              // Reorder candidates: ranked paths first, then any unranked remainder
-              const pathToCandidateMap = new Map(candidates.map(c => [c.path, c]));
-              candidates = [
-                ...rankedPaths.map(p => pathToCandidateMap.get(p)!).filter(Boolean),
-                ...candidates.filter(c => !seenPaths.has(c.path)),
-              ];
-            }
-          } catch {
-            // Embedding or ranking failed — fall through with unranked candidates
-          }
-        }
-
-        candidates = filterSearchCandidates(candidates);
-
-        // Step 4: Assemble context
-        const topPaths = candidates.slice(0, 5).map(c => c.path);
-        const assembledContext = assembleContext(database, topPaths, { vaultPath });
-
         return JSON.stringify({
           results: candidates.slice(0, 10),
-          context: assembledContext,
           totalCandidates: candidates.length,
         });
       },
