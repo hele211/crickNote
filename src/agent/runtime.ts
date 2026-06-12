@@ -5,15 +5,7 @@ import type { LLMProvider, Message, ToolCall, StreamChunk, ToolDefinition } from
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAIProvider } from './providers/openai.js';
 import { ToolRegistry, type ToolContext } from './tools/registry.js';
-import { createVaultTools } from './tools/vault.js';
-import { createSearchTools } from './tools/search.js';
-import { createTaskTools } from './tools/tasks.js';
-import { createTemplateTools } from './tools/templates.js';
-import { createReadingIntakeTools } from './tools/reading-intake.js';
-import { createContextTools } from './tools/context.js';
-import { createSerialTools } from './tools/serial-tools.js';
-import { createKbTools } from './tools/kb-tools.js';
-import { createZoteroTools } from './tools/zotero-tools.js';
+import { buildToolRegistry } from './build-registry.js';
 import { assembleSystemPrompt } from './context.js';
 import { SafeWriter, type EditProposal } from '../editing/safe-writer.js';
 import { appendFolderChangelog } from '../editing/changelog.js';
@@ -132,35 +124,8 @@ export class AgentRuntime {
     this.safeWriter = new SafeWriter();
     const conflictDetector = this.safeWriter.getConflictDetector();
 
-    // Register tools — pass conflict detector so vault_read/vault_append record snapshots
-    this.registry = new ToolRegistry();
-    for (const tool of createVaultTools(config.vaultPath, conflictDetector)) {
-      this.registry.register(tool);
-    }
-    for (const tool of createSearchTools(config.vaultPath)) {
-      this.registry.register(tool);
-    }
-    for (const tool of createTaskTools(config.vaultPath, conflictDetector)) {
-      this.registry.register(tool);
-    }
-    for (const tool of createTemplateTools(config.vaultPath, conflictDetector)) {
-      this.registry.register(tool);
-    }
-    for (const tool of createReadingIntakeTools(config.vaultPath, conflictDetector)) {
-      this.registry.register(tool);
-    }
-    for (const tool of createContextTools(config.vaultPath)) {
-      this.registry.register(tool);
-    }
-    for (const tool of createSerialTools(config.vaultPath)) {
-      this.registry.register(tool);
-    }
-    for (const tool of createKbTools(config.vaultPath)) {
-      this.registry.register(tool);
-    }
-    for (const tool of createZoteroTools(config.vaultPath)) {
-      this.registry.register(tool);
-    }
+    // Register tools — shared with the CLI dispatcher via buildToolRegistry.
+    this.registry = buildToolRegistry(config.vaultPath, conflictDetector);
   }
 
   private async runAgentLoop(
