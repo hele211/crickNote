@@ -3,9 +3,7 @@
 import { Command } from 'commander';
 import crypto from 'node:crypto';
 import { setup } from './cli/setup.js';
-import { start } from './cli/start.js';
 import { reindex } from './cli/reindex.js';
-import { rotateToken } from './server/auth.js';
 import { loadConfig } from './config/config.js';
 import { runTool, listToolCatalog } from './cli/tool-dispatch.js';
 
@@ -24,27 +22,12 @@ program
   });
 
 program
-  .command('start')
-  .description('Start the CrickNote agent service')
-  .action(async () => {
-    await start();
-  });
-
-program
   .command('reindex')
   .description('Force a full vault re-index')
   .action(async () => {
     await reindex();
   });
 
-program
-  .command('rotate-token')
-  .description('Generate a new auth token')
-  .action(() => {
-    const token = rotateToken();
-    console.log('New auth token generated.');
-    console.log('Restart the agent service and Obsidian plugin to use the new token.');
-  });
 
 program
   .command('tool <name> [argsJson]')

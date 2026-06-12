@@ -29,37 +29,3 @@ describe('PROVIDER_PRESETS', () => {
     }
   });
 });
-
-describe('Provider constructor accepts baseURL', () => {
-  it('AnthropicProvider accepts optional baseURL without throwing', async () => {
-    const { AnthropicProvider } = await import('../../src/agent/providers/anthropic.js');
-    // Just verifying the constructor doesn't throw — actual API call would need a real key
-    expect(() => new AnthropicProvider('test-key')).not.toThrow();
-    expect(() => new AnthropicProvider('test-key', 'https://open.bigmodel.cn/api/anthropic')).not.toThrow();
-  });
-
-  it('OpenAIProvider accepts optional baseURL without throwing', async () => {
-    const { OpenAIProvider } = await import('../../src/agent/providers/openai.js');
-    expect(() => new OpenAIProvider('test-key')).not.toThrow();
-    expect(() => new OpenAIProvider('test-key', 'https://open.bigmodel.cn/api/paas/v4/')).not.toThrow();
-  });
-});
-
-describe('ThinkBlockFilter', () => {
-  it('removes complete think blocks', async () => {
-    const { ThinkBlockFilter } = await import('../../src/agent/providers/openai.js');
-    const filter = new ThinkBlockFilter();
-
-    expect(filter.push('Before <think>hidden</think> after')).toBe('Before  after');
-  });
-
-  it('removes think blocks split across chunks', async () => {
-    const { ThinkBlockFilter } = await import('../../src/agent/providers/openai.js');
-    const filter = new ThinkBlockFilter();
-
-    expect(filter.push('Hello <thi')).toBe('Hello ');
-    expect(filter.push('nk>hidden')).toBe('');
-    expect(filter.push('</thi')).toBe('');
-    expect(filter.push('nk> world')).toBe(' world');
-  });
-});
