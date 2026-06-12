@@ -176,8 +176,16 @@ export async function setup(): Promise<void> {
   // src/cli/setup.ts  -> src/cli/../../  = repo root (same relative path works in both modes).
   const repoRoot = path.resolve(import.meta.dirname, '..', '..');
   try {
-    installAgentAssets(resolvedVaultPath, repoRoot);
-    console.log('Installed CrickNote skills and agent guides into the vault.');
+    const assets = installAgentAssets(resolvedVaultPath, repoRoot);
+    console.log('Installed CrickNote skills into the vault (.claude/skills, .agents/skills).');
+    for (const doc of [...assets.guidesWritten, ...assets.guidesRefreshed]) {
+      console.log(`✓ Agent guide ${doc} ready at the vault root.`);
+    }
+    for (const sidecar of assets.sidecarsWritten) {
+      const original = sidecar.replace('CrickNote-', '');
+      console.log(`⚠  You already have a ${original}; left it untouched and wrote CrickNote's guidance to ${sidecar}.`);
+      console.log(`   Add "@${sidecar}" to your ${original} (or merge it) to enable the CrickNote agent guide.`);
+    }
   } catch (err) {
     console.warn(`Could not install agent assets: ${(err as Error).message}`);
   }
