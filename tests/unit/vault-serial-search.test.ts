@@ -86,7 +86,7 @@ describe('vault_search serial ID fast path', () => {
   afterEach(() => { db.close(); fs.rmSync(vaultPath, { recursive: true, force: true }); });
 
   it('returns serial_exact match for known note_id', async () => {
-    const tools = createSearchTools(vaultPath, db);
+    const tools = createSearchTools(db);
     const tool = tools.find(t => t.definition.name === 'vault_search')!;
     const result = JSON.parse(await tool.execute({ query: 'CM001' }));
     expect(result.results).toHaveLength(1);
@@ -96,7 +96,7 @@ describe('vault_search serial ID fast path', () => {
   });
 
   it('does not apply serial fast path for non-serial queries', async () => {
-    const tools = createSearchTools(vaultPath, db);
+    const tools = createSearchTools(db);
     const tool = tools.find(t => t.definition.name === 'vault_search')!;
     const result = JSON.parse(await tool.execute({ query: 'western blot' }));
     expect(result).toHaveProperty('results');
@@ -108,7 +108,7 @@ describe('vault_search serial ID fast path', () => {
   });
 
   it('falls through to normal search when serial ID is not in DB', async () => {
-    const tools = createSearchTools(vaultPath, db);
+    const tools = createSearchTools(db);
     const tool = tools.find(t => t.definition.name === 'vault_search')!;
     const result = JSON.parse(await tool.execute({ query: 'CM999' }));
     expect(result.results?.every((r: Record<string, unknown>) => r.match_type !== 'serial_exact')).toBe(true);

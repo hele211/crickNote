@@ -14,12 +14,12 @@ function filterSearchCandidates<T extends { path: string }>(candidates: T[]): T[
   return candidates.filter(candidate => !isSearchHousekeepingPath(candidate.path));
 }
 
-export function createSearchTools(vaultPath: string, injectedDb?: Database.Database): ToolHandler[] {
+export function createSearchTools(injectedDb?: Database.Database): ToolHandler[] {
   return [
     {
       definition: {
         name: 'vault_search',
-        description: 'Search the vault using structured filters (date, experiment type, project) and semantic similarity. Use this when the user asks about specific experiments, results, or information in their vault.',
+        description: 'Search the vault using structured filters (date, experiment type, project) and full-text (BM25) matching. Use this when the user asks about specific experiments, results, or information in their vault.',
         parameters: {
           type: 'object',
           properties: {
@@ -43,7 +43,7 @@ export function createSearchTools(vaultPath: string, injectedDb?: Database.Datab
             'SELECT path, note_type, date, project_id, note_id, series FROM note_metadata WHERE note_id = ?'
           ).get(query) as Record<string, unknown> | undefined;
           if (exact) {
-            return JSON.stringify({ results: [{ ...exact, match_type: 'serial_exact' }], context: '', totalCandidates: 1 });
+            return JSON.stringify({ results: [{ ...exact, match_type: 'serial_exact' }], totalCandidates: 1 });
           }
         }
 

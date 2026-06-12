@@ -407,7 +407,7 @@ describe('E2E: CrickNote server', () => {
   describe('search tools — direct execution', () => {
     it('vault_search finds notes matching a query', async () => {
       const { createSearchTools } = await import('../../src/agent/tools/search.js');
-      const tools = createSearchTools(vaultPath);
+      const tools = createSearchTools();
       const searchTool = tools.find(t => t.definition.name === 'vault_search')!;
 
       const result = JSON.parse(await searchTool.execute({ query: 'western blot p53' }));
@@ -420,7 +420,7 @@ describe('E2E: CrickNote server', () => {
 
     it('vault_search returns empty results for nonsense query', async () => {
       const { createSearchTools } = await import('../../src/agent/tools/search.js');
-      const tools = createSearchTools(vaultPath);
+      const tools = createSearchTools();
       const searchTool = tools.find(t => t.definition.name === 'vault_search')!;
 
       const result = JSON.parse(await searchTool.execute({ query: 'zzzyyyxxx_no_match_12345' }));

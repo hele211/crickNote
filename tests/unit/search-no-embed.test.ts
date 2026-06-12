@@ -30,7 +30,7 @@ describe('vault_search does not load the embedding model', () => {
 
   it('never calls embedText', async () => {
     const spy = vi.spyOn(embedder, 'embedText');
-    const tools = createSearchTools(vault, db);
+    const tools = createSearchTools(db);
     const tool = tools.find(t => t.definition.name === 'vault_search')!;
     const res = JSON.parse(await tool.execute({ query: 'western blot' }));
     expect(res.results.length).toBeGreaterThan(0);

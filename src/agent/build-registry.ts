@@ -32,7 +32,7 @@ export function buildToolRegistry(
   };
 
   add(createVaultTools(vaultPath, conflictDetector, db));
-  add(createSearchTools(vaultPath, db));
+  add(createSearchTools(db));
   add(createTaskTools(vaultPath, conflictDetector));
   add(createTemplateTools(vaultPath, conflictDetector));
   add(createReadingIntakeTools(vaultPath, conflictDetector));
