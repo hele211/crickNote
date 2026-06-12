@@ -2,7 +2,10 @@
 
 **Date:** 2026-06-12
 **Branch:** `claude/general-session-Gs88j`
-**Status:** PLAN — awaiting approval before execution
+**Status:** EXECUTED — committed directly to the session branch (468a329, d481918,
+39cfc01, 334fcc6, + docs). Decisions: delete the Obsidian plugin; leave the
+`chunk_embeddings` table. Note: compile-ordering forced service/start removal into
+L2 and the config trim into L3 (each commit stays tsc-clean and test-green).
 
 ## Why
 

@@ -1,11 +1,11 @@
 # CrickNote
 
-CrickNote is a local research assistant for an Obsidian vault. It indexes your markdown notes, lets an AI search them, and can propose safe edits that you approve before anything is written.
+CrickNote is a local research assistant for an Obsidian vault. It indexes your markdown notes, lets an AI search them, and can propose safe edits that you approve before anything is written. CrickNote runs as a set of command-line tools that an AI agent drives directly — there is no long-running service.
 
 ## What You Need
 
 - Node.js 22 or newer
-- An Obsidian vault
+- An Obsidian vault (or any folder of markdown notes)
 - An API key for the language model provider you choose during setup
 
 ## First-Time Setup
@@ -16,7 +16,7 @@ Install the project dependencies:
 npm install
 ```
 
-Build the TypeScript code and the Obsidian plugin:
+Build the TypeScript code:
 
 ```bash
 npm run build
@@ -28,15 +28,26 @@ Run setup:
 npm run setup
 ```
 
-Setup asks where your Obsidian vault is and which AI provider to use. It saves the app config under your home folder in `.cricknote`.
+Setup asks where your vault is and which AI provider to use. It saves the app config under your home folder in `.cricknote`.
 
-## Start CrickNote
+## Index Your Vault
 
 ```bash
-npm run start
+npm run reindex
 ```
 
-Leave this running while you use the Obsidian plugin. The service starts a local WebSocket server and indexes your vault in the background.
+This performs a full BM25 + metadata index of every markdown file in the vault. Re-run it whenever notes change; no background process is needed.
+
+## Driving CrickNote from an Agent
+
+An AI agent interacts with the vault through the CLI:
+
+```bash
+cricknote tools                 # list the available tools and their parameters
+cricknote tool <name> '<json>'  # execute a tool with JSON arguments
+```
+
+Most write tools return a pending edit by default; pass `--no-apply` to inspect the diff without writing.
 
 ## Run Checks
 
@@ -52,32 +63,23 @@ Run the build check:
 npm run build
 ```
 
-Run the optional socket end-to-end tests:
-
-```bash
-CRICKNOTE_RUN_SOCKET_TESTS=1 npm test
-```
-
-Those optional tests start a real local WebSocket server, so they are useful before a release.
-
 ## Project Map
 
-- `src/ingestion`: reads markdown files, parses metadata, chunks note text, and indexes notes
-- `src/retrieval`: searches indexed notes and assembles context for the AI
-- `src/agent`: connects the AI provider to CrickNote tools
+- `src/ingestion`: reads markdown files, parses metadata, chunks note text, and indexes notes (BM25 + metadata)
+- `src/retrieval`: parses queries and builds structured filters over the index
+- `src/agent`: connects the AI provider to CrickNote tools and routes tool calls
+- `src/cli`: setup, reindex, and the `tool`/`tools` dispatch entrypoints
 - `src/editing`: creates safe edit proposals, diffs, conflict checks, and audit logs
 - `src/storage`: owns the SQLite database and migrations
-- `src/server`: runs the local WebSocket server used by the Obsidian plugin
-- `obsidian-plugin`: plugin code that connects Obsidian to the local service
-- `tests`: unit, integration, and end-to-end tests
+- `tests`: unit and integration tests
 
 ## Common Commands
 
 ```bash
-npm test        # run tests
-npm run build   # compile TypeScript and build the plugin
-npm run start   # start the local CrickNote service
-npm run setup   # configure CrickNote after building
+npm test          # run tests
+npm run build     # compile TypeScript
+npm run reindex   # full vault re-index
+npm run setup     # configure CrickNote after building
 ```
 
 ## Safety Notes
