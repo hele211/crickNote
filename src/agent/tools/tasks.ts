@@ -115,6 +115,7 @@ export function createTaskTools(vaultPath: string, conflictDetector?: ConflictDe
           type: 'object',
           properties: {
             task_description: { type: 'string', description: 'Text of the task to mark complete (partial match supported)' },
+            days: { type: 'number', description: 'How many days of diary history to scan (default 90)' },
           },
           required: ['task_description'],
         },
@@ -126,7 +127,8 @@ export function createTaskTools(vaultPath: string, conflictDetector?: ConflictDe
         }
 
         const search = (args.task_description as string).toLowerCase();
-        const files = fs.readdirSync(diaryDir).filter(f => f.endsWith('.md')).sort().reverse().slice(0, 14);
+        const windowDays = typeof args.days === 'number' && args.days > 0 ? Math.floor(args.days) : 90;
+        const files = fs.readdirSync(diaryDir).filter(f => f.endsWith('.md')).sort().reverse().slice(0, windowDays);
 
         for (const file of files) {
           const fullPath = resolveVaultPath(vaultPath, path.join('Memory', 'Daily', file));
