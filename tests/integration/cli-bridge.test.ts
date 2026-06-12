@@ -56,6 +56,8 @@ describe('CLI bridge — full lab cycle', () => {
     // 5. Search finds the experiment by serial
     const search = await runTool('vault_search', JSON.stringify({ query: 'IL001' }), opts());
     expect(search.ok).toBe(true);
-    expect(JSON.stringify(search.result)).toContain('IL001');
+    const searchResult = search.result as { results: Array<{ note_id?: string }> };
+    expect(searchResult.results.length).toBeGreaterThan(0);
+    expect(searchResult.results.some(r => r.note_id === 'IL001')).toBe(true);
   });
 });
