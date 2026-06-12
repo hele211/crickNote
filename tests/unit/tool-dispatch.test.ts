@@ -32,6 +32,24 @@ describe('runTool', () => {
     expect(out.error).toMatch(/json/i);
   });
 
+  it('rejects non-object JSON arguments: null', async () => {
+    const out = await runTool('vault_read', 'null', { vaultPath: vault, sessionId: 's', apply: true, db });
+    expect(out.ok).toBe(false);
+    expect(out.error).toBe('Arguments must be a JSON object');
+  });
+
+  it('rejects non-object JSON arguments: array', async () => {
+    const out = await runTool('vault_read', '[1,2,3]', { vaultPath: vault, sessionId: 's', apply: true, db });
+    expect(out.ok).toBe(false);
+    expect(out.error).toBe('Arguments must be a JSON object');
+  });
+
+  it('rejects non-object JSON arguments: number', async () => {
+    const out = await runTool('vault_read', '42', { vaultPath: vault, sessionId: 's', apply: true, db });
+    expect(out.ok).toBe(false);
+    expect(out.error).toBe('Arguments must be a JSON object');
+  });
+
   it('executes a read tool and returns its JSON result', async () => {
     const rel = 'Projects/note.md';
     fs.mkdirSync(path.join(vault, 'Projects'), { recursive: true });
@@ -41,6 +59,15 @@ describe('runTool', () => {
     expect(JSON.stringify(out.result)).toContain('hello');
   });
 
+  // Vault-boundary preflight coverage note:
+  // The dispatcher's pre-flight loop (lines ~93-102 of tool-dispatch.ts) rejects any pending_edit
+  // whose resolved path escapes the vault root before any file is written. In practice, every
+  // existing tool calls resolveVaultPath() which already throws on traversal, so an escaping path
+  // can never reach the preflight through a real tool — the preflight is defense-in-depth for
+  // future tools. The out-of-vault branch is additionally covered by applyPendingEdit's own
+  // resolveVaultPath check (see tests/unit/apply-edit.test.ts). The tests below confirm the
+  // happy-path: in-vault edits are applied and written correctly.
+
   it('applies a pending_edit from task_add and writes the diary', async () => {
     const out = await runTool('task_add', JSON.stringify({ description: 'order ECL substrate' }), { vaultPath: vault, sessionId: 's', apply: true, db });
     expect(out.ok).toBe(true);
@@ -48,6 +75,17 @@ describe('runTool', () => {
     const daily = fs.readdirSync(path.join(vault, 'Memory', 'Daily'));
     expect(daily.length).toBe(1);
     expect(fs.readFileSync(path.join(vault, 'Memory', 'Daily', daily[0]), 'utf-8')).toContain('order ECL substrate');
+  });
+
+  it('applies an in-vault vault_write pending_edit and the file exists in vault', async () => {
+    // Confirms the full apply path (dispatcher preflight passes → applyPendingEdit writes).
+    const rel = 'Projects/created-by-dispatch.md';
+    const content = '---\nnote_kind: experiment\n---\n\ncreated via dispatcher';
+    const out = await runTool('vault_write', JSON.stringify({ path: rel, content }), { vaultPath: vault, sessionId: 's', apply: true, db });
+    expect(out.ok).toBe(true);
+    expect(out.applied?.[0].applied).toBe(true);
+    expect(fs.existsSync(path.join(vault, rel))).toBe(true);
+    expect(fs.readFileSync(path.join(vault, rel), 'utf-8')).toContain('created via dispatcher');
   });
 
   it('with apply:false returns the pending edit without writing', async () => {

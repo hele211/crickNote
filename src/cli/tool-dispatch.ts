@@ -48,7 +48,11 @@ export async function runTool(name: string, argsJson: string, opts: RunToolOptio
 
   let args: Record<string, unknown>;
   try {
-    args = argsJson.trim() ? (JSON.parse(argsJson) as Record<string, unknown>) : {};
+    const parsedArgs = argsJson.trim() ? JSON.parse(argsJson) : {};
+    if (typeof parsedArgs !== 'object' || parsedArgs === null || Array.isArray(parsedArgs)) {
+      return { ok: false, error: 'Arguments must be a JSON object' };
+    }
+    args = parsedArgs as Record<string, unknown>;
   } catch (err) {
     return { ok: false, error: `Invalid JSON arguments: ${(err as Error).message}` };
   }
@@ -87,6 +91,9 @@ export async function runTool(name: string, argsJson: string, opts: RunToolOptio
   const vaultRoot = resolveVaultRoot(opts.vaultPath);
 
   // Pre-flight: reject the whole batch if any member escapes the vault, before writing any file.
+  // Defense-in-depth: every current tool pre-resolves paths via resolveVaultPath (which already
+  // throws on traversal), so this check is never triggered by existing tools. It guards against
+  // any future tool that emits an unresolved or caller-supplied path directly into pending_edit.
   for (const e of edits) {
     const abs = path.normalize(e.path);
     if (!path.isAbsolute(abs) || (abs !== vaultRoot && !abs.startsWith(vaultRoot + path.sep))) {
