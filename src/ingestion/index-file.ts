@@ -44,7 +44,7 @@ export function indexFileSync(relativePath: string, vaultRoot: string, db?: Data
 
   const parsed = parseNote(relativePath, content);
   const chunks = chunkText(parsed.body);
-  indexNote({ note: parsed, contentHash, mtime: stat.mtimeMs, chunks, embeddings: [] }, db);
+  indexNote({ note: parsed, contentHash, mtime: stat.mtimeMs, chunks }, db);
   return 'indexed';
 }
 
