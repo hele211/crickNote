@@ -48,6 +48,24 @@ describe('applyPendingEdit', () => {
     expect(fs.existsSync('/etc/evil.md')).toBe(false);
   });
 
+  it('deletes the reservation when the write fails', () => {
+    db.prepare('INSERT INTO prefix_reservations (prefix, project_id, expires_at) VALUES (?, ?, ?)')
+      .run('ZZ', 'P099', Date.now() + 600000);
+    // Create a read-only directory so the atomic tmp-write fails with EACCES.
+    const roDir = path.join(vault, 'ReadOnly');
+    fs.mkdirSync(roDir, { recursive: true });
+    fs.chmodSync(roDir, 0o555); // no write permission
+    const abs = path.join(roDir, '_index.md');
+    const res = applyPendingEdit(
+      { path: abs, newContent: 'body', operation: 'create_project', reservation: { project_id: 'P099', prefix: 'ZZ' } },
+      ctx(),
+    );
+    fs.chmodSync(roDir, 0o755); // restore so afterEach rmSync can clean up
+    expect(res.applied).toBe(false);
+    const row = db.prepare('SELECT project_id FROM prefix_reservations WHERE project_id = ?').get('P099');
+    expect(row).toBeUndefined();
+  });
+
   it('finalizes a prefix reservation on success', () => {
     db.prepare('INSERT INTO prefix_reservations (prefix, project_id, expires_at) VALUES (?, ?, ?)')
       .run('IL', 'P001', Date.now() + 600000);

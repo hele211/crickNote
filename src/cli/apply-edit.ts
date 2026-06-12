@@ -3,6 +3,10 @@ import type Database from 'better-sqlite3';
 import { SafeWriter } from '../editing/safe-writer.js';
 import { appendFolderChangelog } from '../editing/changelog.js';
 import { indexFileSync } from '../ingestion/index-file.js';
+import { resolveVaultPath } from '../utils/paths.js';
+import { logger } from '../utils/logger.js';
+
+const log = logger.child('apply-edit');
 
 export interface PendingEditPayload {
   /** Absolute path emitted by the tool (already vault-resolved). */
@@ -30,12 +34,6 @@ export interface ApplyContext {
   db: Database.Database;
 }
 
-function withinVault(absPath: string, vaultRoot: string): boolean {
-  const normalized = path.normalize(absPath);
-  return path.isAbsolute(normalized) &&
-    (normalized === vaultRoot || normalized.startsWith(vaultRoot + path.sep));
-}
-
 /**
  * Apply one pending_edit: atomic write + audit log (via SafeWriter),
  * then reservation finalize, folder changelog, and incremental index —
@@ -46,7 +44,9 @@ export function applyPendingEdit(edit: PendingEditPayload, ctx: ApplyContext): A
   const operation = edit.operation ?? 'edit';
   const absPath = path.normalize(edit.path);
 
-  if (!withinVault(absPath, vaultRoot)) {
+  try {
+    resolveVaultPath(vaultRoot, absPath);
+  } catch {
     return { path: edit.path, operation, applied: false, error: 'Path escapes vault boundary' };
   }
 
@@ -72,13 +72,13 @@ export function applyPendingEdit(edit: PendingEditPayload, ctx: ApplyContext): A
   const relPath = path.relative(vaultRoot, absPath).replace(/\\/g, '/');
   try {
     appendFolderChangelog({ vaultPath: vaultRoot, targetPath: relPath, operation, description: `${relPath} written` });
-  } catch {
-    // changelog failure must not fail the apply
+  } catch (err) {
+    log.warn('changelog write failed', { relPath, error: (err as Error).message });
   }
   try {
     indexFileSync(relPath, vaultRoot, db);
-  } catch {
-    // index failure must not fail the apply; a later reindex will recover
+  } catch (err) {
+    log.warn('incremental index failed', { relPath, error: (err as Error).message });
   }
 
   return { path: edit.path, operation, applied: true, warnings: edit.warnings };
