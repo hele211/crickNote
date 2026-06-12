@@ -79,46 +79,8 @@ export function normalizeZoteroConfig(raw: Partial<ZoteroConfig> | undefined, va
 
 export interface CrickNoteConfig {
   vaultPath: string;
-  llm: {
-    provider: 'anthropic' | 'openai';
-    apiKey: string;
-    model?: string;
-    /** Custom base URL for API-compatible providers (e.g. Z.AI, DeepSeek, Ollama). */
-    baseUrl?: string;
-  };
-  embeddingModelPath?: string;
-  server: {
-    host: string;
-    port: number;
-  };
   zotero?: ZoteroConfig;
 }
-
-/**
- * Pre-configured third-party providers that are API-compatible with
- * either the Anthropic or OpenAI protocol.
- */
-export const PROVIDER_PRESETS: Record<string, { provider: 'anthropic' | 'openai'; baseUrl: string; defaultModel: string; label: string }> = {
-  'zhipu-claude': {
-    provider: 'anthropic',
-    baseUrl: 'https://open.bigmodel.cn/api/anthropic',
-    defaultModel: 'glm-4.5-flash',
-    label: 'Z.AI / Zhipu (Claude-compatible)',
-  },
-  'zhipu-openai': {
-    provider: 'openai',
-    baseUrl: 'https://open.bigmodel.cn/api/paas/v4/',
-    defaultModel: 'glm-5',
-    label: 'Z.AI / Zhipu (OpenAI-compatible)',
-  },
-};
-
-const DEFAULT_CONFIG: Partial<CrickNoteConfig> = {
-  server: {
-    host: '127.0.0.1',
-    port: 18790,
-  },
-};
 
 let cachedConfig: CrickNoteConfig | null = null;
 
@@ -137,19 +99,12 @@ export function loadConfig(): CrickNoteConfig {
   }
 
   const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-  const config = { ...DEFAULT_CONFIG, ...raw } as CrickNoteConfig;
+  const config = { ...raw } as CrickNoteConfig;
 
   // Runtime validation of critical fields
   const errors: string[] = [];
   if (!config.vaultPath || typeof config.vaultPath !== 'string') {
     errors.push('vaultPath must be a non-empty string');
-  }
-  const validProviders = ['anthropic', 'openai'];
-  if (!config.llm || !validProviders.includes(config.llm.provider)) {
-    errors.push(`llm.provider must be one of: ${validProviders.join(', ')}`);
-  }
-  if (!config.llm || !config.llm.apiKey || typeof config.llm.apiKey !== 'string') {
-    errors.push('llm.apiKey must be a non-empty string');
   }
   if (errors.length > 0) {
     throw new Error(`Invalid config at ${configPath}:\n  - ${errors.join('\n  - ')}`);

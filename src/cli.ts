@@ -16,7 +16,7 @@ program
 
 program
   .command('setup')
-  .description('First-time setup: configure vault, LLM, and install plugin')
+  .description('First-time setup: configure your vault and install agent skills')
   .action(async () => {
     await setup();
   });
