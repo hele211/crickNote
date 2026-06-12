@@ -25,6 +25,8 @@ describe('buildToolRegistry', () => {
     ]) {
       expect(names).toContain(expected);
     }
+    // Guard against a factory silently registering nothing.
+    expect(names.length).toBeGreaterThanOrEqual(30);
   });
 
   it('has no duplicate tool names', () => {

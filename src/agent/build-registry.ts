@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { ToolRegistry } from './tools/registry.js';
+import { ToolRegistry, type ToolHandler } from './tools/registry.js';
 import type { ConflictDetector } from '../editing/conflict-detector.js';
 import { createVaultTools } from './tools/vault.js';
 import { createSearchTools } from './tools/search.js';
@@ -27,8 +27,8 @@ export function buildToolRegistry(
   db?: Database.Database,
 ): ToolRegistry {
   const registry = new ToolRegistry();
-  const add = (handlers: { definition: { name: string } }[]) => {
-    for (const h of handlers) registry.register(h as never);
+  const add = (handlers: ToolHandler[]) => {
+    for (const h of handlers) registry.register(h);
   };
 
   add(createVaultTools(vaultPath, conflictDetector, db));
