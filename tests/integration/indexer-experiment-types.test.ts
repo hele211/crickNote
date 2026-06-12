@@ -32,7 +32,6 @@ describe('indexer — experiment_types counts', () => {
       contentHash,
       mtime: Date.now(),
       chunks: [],
-      embeddings: [],
     }, db);
   }
 

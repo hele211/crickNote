@@ -11,10 +11,8 @@ import { resolveVaultPath } from '../utils/paths.js';
 export type IndexOutcome = 'indexed' | 'skipped' | 'unchanged' | 'gone';
 
 /**
- * Index a single note by its vault-relative path, writing BM25 + metadata only
- * (no embeddings — empty embeddings array means indexNote skips the embedding
- * insert while still populating chunks and BM25). Safe to call in a short-lived
- * CLI process: no model load, no watcher.
+ * Index a single note by its vault-relative path, writing BM25 + metadata only.
+ * Safe to call in a short-lived CLI process: no model load, no watcher.
  */
 export function indexFileSync(relativePath: string, vaultRoot: string, db?: Database.Database): IndexOutcome {
   if (shouldIgnoreIngestionPath(relativePath)) return 'skipped';
@@ -44,7 +42,7 @@ export function indexFileSync(relativePath: string, vaultRoot: string, db?: Data
 
   const parsed = parseNote(relativePath, content);
   const chunks = chunkText(parsed.body);
-  indexNote({ note: parsed, contentHash, mtime: stat.mtimeMs, chunks, embeddings: [] }, db);
+  indexNote({ note: parsed, contentHash, mtime: stat.mtimeMs, chunks }, db);
   return 'indexed';
 }
 

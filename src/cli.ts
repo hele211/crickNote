@@ -3,7 +3,6 @@
 import { Command } from 'commander';
 import crypto from 'node:crypto';
 import { setup } from './cli/setup.js';
-import { start } from './cli/start.js';
 import { reindex } from './cli/reindex.js';
 import { rotateToken } from './server/auth.js';
 import { loadConfig } from './config/config.js';
@@ -21,13 +20,6 @@ program
   .description('First-time setup: configure vault, LLM, and install plugin')
   .action(async () => {
     await setup();
-  });
-
-program
-  .command('start')
-  .description('Start the CrickNote agent service')
-  .action(async () => {
-    await start();
   });
 
 program

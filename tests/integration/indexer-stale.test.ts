@@ -15,7 +15,6 @@ function minNote(filePath: string) {
     contentHash: 'abc',
     mtime: Date.now(),
     chunks: [],
-    embeddings: [],
   };
 }
 
