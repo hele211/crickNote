@@ -6,6 +6,7 @@ import { VaultWatcher, type FileChange } from './watcher.js';
 import { parseNote } from './parser.js';
 import { chunkText } from './chunker.js';
 import { embedTexts, preloadModel } from './embedder.js';
+import { shouldIgnoreIngestionPath } from './ignore.js';
 import {
   indexNote,
   deleteNote,
@@ -16,6 +17,7 @@ import {
   getIndexingStatus,
 } from './indexer.js';
 import { logger } from '../utils/logger.js';
+import { resolveVaultPath } from '../utils/paths.js';
 
 const log = logger.child('ingestion');
 
@@ -183,16 +185,21 @@ export class IngestionWorker extends EventEmitter<WorkerEvents> {
       return;
     }
 
-    const absolutePath = path.join(this.vaultPath, relativePath);
+    let absolutePath: string;
+    try {
+      absolutePath = resolveVaultPath(this.vaultPath, relativePath);
+    } catch {
+      return;
+    }
 
     // Read file
     let content: string;
     let stat: fs.Stats;
     try {
-      content = fs.readFileSync(absolutePath, 'utf-8');
       stat = fs.lstatSync(absolutePath);
       // Never process symlinks – they could escape the vault boundary
       if (stat.isSymbolicLink()) return;
+      content = fs.readFileSync(absolutePath, 'utf-8');
     } catch {
       // File may have been deleted between detection and processing
       return;
@@ -276,13 +283,4 @@ export class IngestionWorker extends EventEmitter<WorkerEvents> {
   }
 }
 
-export function shouldIgnoreIngestionPath(relativePath: string): boolean {
-  const normalized = relativePath.replace(/\\/g, '/');
-  return (
-    /(^|\/)attachments\//.test(normalized) ||
-    /^(Reading\/[^/]+|Projects\/[^/]+)\/[^/]+-mapping(?:-\d{8}T\d{6})?\.md$/.test(normalized) ||
-    normalized.startsWith('Knowledge/_Ops/') ||
-    /^Knowledge\/(Concepts|Entities|Methods)\/_index\.md$/.test(normalized) ||
-    /(^|\/)_changelog\.md$/.test(normalized)
-  );
-}
+export { shouldIgnoreIngestionPath };

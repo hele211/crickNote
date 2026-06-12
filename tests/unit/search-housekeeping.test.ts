@@ -70,7 +70,7 @@ describe('vault_search housekeeping filtering', () => {
   });
 
   it('removes KB housekeeping files from results even if they are already indexed', async () => {
-    const tools = createSearchTools('/tmp/nonexistent-vault', db);
+    const tools = createSearchTools(db);
     const searchTool = tools.find(tool => tool.definition.name === 'vault_search');
     if (!searchTool) throw new Error('vault_search tool missing');
 

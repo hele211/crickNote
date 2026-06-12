@@ -6,6 +6,7 @@ import { generateToken, getTokenPath } from '../server/auth.js';
 import { getDatabase, getDataDir, closeDatabase } from '../storage/database.js';
 import { rebuildKnowledgeIndex } from '../knowledge/index-builder.js';
 import { DEFAULT_TEMPLATE_FILES, renderFolderReadmeSync } from '../templates/template-loader.js';
+import { installAgentAssets } from './install-agent-assets.js';
 
 const VAULT_DIRS = [
   'Projects', 'Protocols',
@@ -171,6 +172,17 @@ export async function setup(): Promise<void> {
   };
   saveConfig(config);
   console.log(`\u2713 Config saved to ${path.join(getDataDir(), 'config.json')}`);
+
+  // Repo root is two levels up from dist/cli/ (or src/cli/ in dev).
+  // dist/cli/setup.js -> dist/cli/../../ = repo root (skills/ and templates/ live there, not under dist/).
+  // src/cli/setup.ts  -> src/cli/../../  = repo root (same relative path works in both modes).
+  const repoRoot = path.resolve(import.meta.dirname, '..', '..');
+  try {
+    installAgentAssets(resolvedVaultPath, repoRoot);
+    console.log('Installed CrickNote skills and agent guides into the vault.');
+  } catch (err) {
+    console.warn(`Could not install agent assets: ${(err as Error).message}`);
+  }
 
   // Generate auth token
   generateToken();

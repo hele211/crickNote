@@ -108,22 +108,8 @@ No vault tools are loaded for this query.
 - Otherwise, answer from your scientific knowledge — be precise, never fabricate results, and say so when uncertain.`);
   }
 
-  // Layer 2: Reading workflow — only when reading tools are active
-  if (hasReadingTools) {
-    const hasKbTools = activeToolNames.has('kb_suggest') || activeToolNames.has('kb_write_mapping') || activeToolNames.has('kb_apply');
-    const kbStep = hasKbTools
-      ? '5. Then continue with kb_suggest, kb_write_mapping, and kb_apply.'
-      : '5. KB integration (kb_suggest, kb_write_mapping, kb_apply) can be run in a separate KB session.';
-    sections.push(`## Reading Workflow
-
-Preferred reading-note order (vault-native bundle):
-1. Call reading_pipeline_status first.
-2. If the reading note does not exist yet, call discover_reading_bundle or ingest_reading_bundle.
-3. If the note is ready, call compile_reading_note.
-4. After the user reviews the draft, call set_reading_note_status with status: complete.
-${kbStep}`);
-  }
-
+  // Layer 2: Zotero workflow — injected first so it takes priority over the
+  // vault-native reading workflow when the user mentions Zotero.
   if (zoteroEnabled) {
     sections.push(`## Zotero Reading Workflow
 
@@ -151,6 +137,26 @@ ${autoSummarize
   : '9. auto_summarize is OFF: after the scaffold Apply, stop. Report the note path and offer to summarize on demand. Only call compile_reading_note if the user explicitly asks.'}`);
   }
 
+  // Layer 2b: Reading workflow — only when reading tools are active.
+  // This is for vault-native bundles. When zoteroEnabled is true AND the user
+  // mentions Zotero, use the Zotero Reading Workflow above instead.
+  if (hasReadingTools) {
+    const hasKbTools = activeToolNames.has('kb_suggest') || activeToolNames.has('kb_write_mapping') || activeToolNames.has('kb_apply');
+    const kbStep = hasKbTools
+      ? '5. Then continue with kb_suggest, kb_write_mapping, and kb_apply.'
+      : '5. KB integration (kb_suggest, kb_write_mapping, kb_apply) can be run in a separate KB session.';
+    const zoteroNote = zoteroEnabled
+      ? '\n\n**If the user mentions Zotero, use the Zotero Reading Workflow above instead of this workflow.**'
+      : '';
+    sections.push(`## Reading Workflow (vault-native bundles only)${zoteroNote}
+
+Preferred reading-note order (vault-native bundle):
+1. Call reading_pipeline_status first.
+2. If the reading note does not exist yet, call discover_reading_bundle or ingest_reading_bundle.
+3. If the note is ready, call compile_reading_note.
+4. After the user reviews the draft, call set_reading_note_status with status: complete.
+${kbStep}`);
+  }
 
   // Layer 3: Agent config (user's core rules)
   if (agentMd) {

@@ -18,6 +18,10 @@ export async function startService(config: CrickNoteConfig): Promise<void> {
 
   // Start ingestion worker in the background (model preload + indexing)
   const ingestion = new IngestionWorker(config.vaultPath);
+  // Must register 'error' listener before start() — Node.js throws on unhandled error events.
+  ingestion.on('error', (err, filePath) => {
+    log.warn('Ingestion warning', { error: err.message, file: filePath });
+  });
   ingestion.start().catch((err) => {
     log.error('Ingestion worker failed to start', { error: (err as Error).message });
   });
