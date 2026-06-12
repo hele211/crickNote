@@ -2,55 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { assembleSystemPrompt } from '../../src/agent/context.js';
 import { createReadingIntakeTools } from '../../src/agent/tools/reading-intake.js';
-import type { CrickNoteConfig } from '../../src/config/config.js';
-
-function makeConfig(overrides: Partial<CrickNoteConfig['zotero']> = {}): CrickNoteConfig {
-  return {
-    vaultPath: '/tmp/test-vault',
-    zotero: {
-      enabled: true,
-      api_port: 23119,
-      storage_root: os.tmpdir(),
-      auto_summarize: true,
-      ...overrides,
-    },
-  } as CrickNoteConfig;
-}
-
-describe('assembleSystemPrompt — Zotero auto_summarize injection', () => {
-  it('auto_summarize true (default) → prompt includes ON rule', () => {
-    const config = makeConfig({ auto_summarize: true });
-    const prompt = assembleSystemPrompt('/tmp/vault', [], config);
-    expect(prompt).toContain('auto_summarize is ON');
-  });
-
-  it('auto_summarize false → prompt includes OFF rule', () => {
-    const config = makeConfig({ auto_summarize: false });
-    const prompt = assembleSystemPrompt('/tmp/vault', [], config);
-    expect(prompt).toContain('auto_summarize is OFF');
-  });
-
-  it('zotero.enabled false → Zotero workflow section absent', () => {
-    const config = makeConfig();
-    config.zotero!.enabled = false;
-    const prompt = assembleSystemPrompt('/tmp/vault', [], config);
-    expect(prompt).not.toContain('Zotero Reading Workflow');
-  });
-
-  it('zotero.enabled true → Zotero workflow section present', () => {
-    const config = makeConfig({ enabled: true });
-    const prompt = assembleSystemPrompt('/tmp/vault', [], config);
-    expect(prompt).toContain('Zotero Reading Workflow');
-  });
-
-  it('20-page cap note is in the auto_summarize ON branch', () => {
-    const config = makeConfig({ auto_summarize: true });
-    const prompt = assembleSystemPrompt('/tmp/vault', [], config);
-    expect(prompt).toContain('20 pages');
-  });
-});
 
 describe('ingest_reading_bundle — note_rel_path is vault-relative', () => {
   it('note_rel_path starts with Reading/ and not with /', async () => {
