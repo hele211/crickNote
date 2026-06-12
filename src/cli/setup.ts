@@ -2,7 +2,6 @@ import { input, password, select } from '@inquirer/prompts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { saveConfig, PROVIDER_PRESETS, type CrickNoteConfig } from '../config/config.js';
-import { generateToken, getTokenPath } from '../server/auth.js';
 import { getDatabase, getDataDir, closeDatabase } from '../storage/database.js';
 import { rebuildKnowledgeIndex } from '../knowledge/index-builder.js';
 import { DEFAULT_TEMPLATE_FILES, renderFolderReadmeSync } from '../templates/template-loader.js';
@@ -168,7 +167,6 @@ export async function setup(): Promise<void> {
       ...(model !== modelDefault ? { model } : { model: modelDefault }),
       ...(baseUrl ? { baseUrl } : {}),
     },
-    server: { host: '127.0.0.1', port: 18790 },
   };
   saveConfig(config);
   console.log(`\u2713 Config saved to ${path.join(getDataDir(), 'config.json')}`);
@@ -178,15 +176,19 @@ export async function setup(): Promise<void> {
   // src/cli/setup.ts  -> src/cli/../../  = repo root (same relative path works in both modes).
   const repoRoot = path.resolve(import.meta.dirname, '..', '..');
   try {
-    installAgentAssets(resolvedVaultPath, repoRoot);
-    console.log('Installed CrickNote skills and agent guides into the vault.');
+    const assets = installAgentAssets(resolvedVaultPath, repoRoot);
+    console.log('Installed CrickNote skills into the vault (.claude/skills, .agents/skills).');
+    for (const doc of [...assets.guidesWritten, ...assets.guidesRefreshed]) {
+      console.log(`✓ Agent guide ${doc} ready at the vault root.`);
+    }
+    for (const sidecar of assets.sidecarsWritten) {
+      const original = sidecar.replace('CrickNote-', '');
+      console.log(`⚠  You already have a ${original}; left it untouched and wrote CrickNote's guidance to ${sidecar}.`);
+      console.log(`   Add "@${sidecar}" to your ${original} (or merge it) to enable the CrickNote agent guide.`);
+    }
   } catch (err) {
     console.warn(`Could not install agent assets: ${(err as Error).message}`);
   }
-
-  // Generate auth token
-  generateToken();
-  console.log(`\u2713 Auth token generated (${getTokenPath()})`);
 
   // Initialize database
   const dbPath = path.join(getDataDir(), 'db.sqlite');
@@ -214,30 +216,6 @@ export async function setup(): Promise<void> {
   ensureVaultScaffold(resolvedVaultPath);
   console.log('\u2713 Vault directories verified');
 
-  // Install Obsidian plugin
-  const pluginDir = path.join(resolvedVaultPath, '.obsidian', 'plugins', 'cricknote');
-  fs.mkdirSync(pluginDir, { recursive: true });
-
-  // dist/cli/setup.js → dist/ → project root → obsidian-plugin/
-  const pluginSourceDir = path.join(import.meta.dirname, '..', '..', 'obsidian-plugin');
-  const mainJs = path.join(pluginSourceDir, 'main.js');
-  const manifest = path.join(pluginSourceDir, 'manifest.json');
-  const styles = path.join(pluginSourceDir, 'styles.css');
-
-  if (!fs.existsSync(mainJs)) {
-    console.warn('\u26a0  Plugin bundle not found. Run "npm run build:plugin" first, then re-run setup.');
-    console.warn(`  Expected: ${mainJs}`);
-  } else {
-    fs.copyFileSync(mainJs, path.join(pluginDir, 'main.js'));
-    if (fs.existsSync(manifest)) {
-      fs.copyFileSync(manifest, path.join(pluginDir, 'manifest.json'));
-    }
-    if (fs.existsSync(styles)) {
-      fs.copyFileSync(styles, path.join(pluginDir, 'styles.css'));
-    }
-    console.log(`\u2713 Obsidian plugin installed to ${pluginDir}`);
-  }
-
-  console.log('\nSetup complete! Start the agent: cricknote start');
-  console.log('Then enable CrickNote in Obsidian → Settings → Community Plugins.\n');
+  console.log('\nSetup complete! Index your vault: cricknote reindex');
+  console.log('Then drive CrickNote from your AI agent via: cricknote tool <name>\n');
 }

@@ -2,7 +2,6 @@ import type Database from 'better-sqlite3';
 import { getDatabase } from '../storage/database.js';
 import type { ParsedNote } from './parser.js';
 import type { TextChunk } from './chunker.js';
-import { embeddingToBuffer } from './embedder.js';
 
 export interface IndexNoteInput {
   /** Parsed note metadata */
@@ -13,8 +12,6 @@ export interface IndexNoteInput {
   mtime: number;
   /** Chunked text segments */
   chunks: TextChunk[];
-  /** Embedding vectors, one per chunk (same order as chunks) */
-  embeddings: Float32Array[];
 }
 
 interface ExistingNoteTypeRow {
@@ -45,12 +42,12 @@ function decrementExperimentTypeCount(database: Database.Database, experimentTyp
 }
 
 /**
- * Upsert a note and its chunks/embeddings into the database.
+ * Upsert a note and its chunks into the database (BM25 + metadata only).
  * Uses a transaction for atomicity.
  */
 export function indexNote(input: IndexNoteInput, db?: Database.Database): void {
   const database = db ?? getDatabase();
-  const { note, contentHash, mtime, chunks, embeddings } = input;
+  const { note, contentHash, mtime, chunks } = input;
   const now = Date.now();
 
   database.transaction(() => {
@@ -132,15 +129,10 @@ export function indexNote(input: IndexNoteInput, db?: Database.Database): void {
     // Delete old chunks (cascades to chunk_embeddings)
     database.prepare('DELETE FROM note_chunks WHERE path = ?').run(note.filePath);
 
-    // 3. Insert new chunks, embeddings, and BM25 entries
+    // 3. Insert new chunks and BM25 entries
     const insertChunk = database.prepare(`
       INSERT INTO note_chunks (path, chunk_index, start_offset, end_offset, content)
       VALUES (?, ?, ?, ?, ?)
-    `);
-
-    const insertEmbedding = database.prepare(`
-      INSERT INTO chunk_embeddings (chunk_id, embedding)
-      VALUES (?, ?)
     `);
 
     const insertBm25 = database.prepare(`
@@ -150,7 +142,6 @@ export function indexNote(input: IndexNoteInput, db?: Database.Database): void {
 
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
-      const embedding = embeddings[i];
 
       const result = insertChunk.run(
         note.filePath,
@@ -161,11 +152,6 @@ export function indexNote(input: IndexNoteInput, db?: Database.Database): void {
       );
 
       const chunkId = result.lastInsertRowid as number;
-
-      // Insert embedding
-      if (embedding) {
-        insertEmbedding.run(chunkId, embeddingToBuffer(embedding));
-      }
 
       // Insert BM25 full-text index entry
       insertBm25.run(String(chunkId), chunk.content);

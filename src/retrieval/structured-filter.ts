@@ -106,26 +106,6 @@ export function buildNoteQuery(filters: StructuredFilterInput): FilterResult {
 }
 
 /**
- * Build a query that returns chunk IDs for notes matching the filters.
- * Used to feed candidate chunks into the semantic ranker.
- */
-export function buildChunkCandidateQuery(filters: StructuredFilterInput): FilterResult {
-  const { sql: whereClause, params } = buildFilter(filters);
-
-  const sql = [
-    'SELECT nc.id AS chunk_id, nc.path, nc.chunk_index, nc.content',
-    'FROM note_chunks nc',
-    'JOIN note_metadata nm ON nc.path = nm.path',
-    whereClause,
-    'ORDER BY nm.date DESC',
-  ]
-    .filter(line => line.length > 0)
-    .join('\n');
-
-  return { sql, params };
-}
-
-/**
  * Convenience: convert a ParsedQuery from the query parser into a StructuredFilterInput.
  */
 export function parsedQueryToFilterInput(parsed: import('./query-parser.js').ParsedQuery): StructuredFilterInput {

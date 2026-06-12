@@ -86,11 +86,6 @@ export interface CrickNoteConfig {
     /** Custom base URL for API-compatible providers (e.g. Z.AI, DeepSeek, Ollama). */
     baseUrl?: string;
   };
-  embeddingModelPath?: string;
-  server: {
-    host: string;
-    port: number;
-  };
   zotero?: ZoteroConfig;
 }
 
@@ -113,13 +108,6 @@ export const PROVIDER_PRESETS: Record<string, { provider: 'anthropic' | 'openai'
   },
 };
 
-const DEFAULT_CONFIG: Partial<CrickNoteConfig> = {
-  server: {
-    host: '127.0.0.1',
-    port: 18790,
-  },
-};
-
 let cachedConfig: CrickNoteConfig | null = null;
 
 export function getConfigPath(): string {
@@ -137,7 +125,7 @@ export function loadConfig(): CrickNoteConfig {
   }
 
   const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-  const config = { ...DEFAULT_CONFIG, ...raw } as CrickNoteConfig;
+  const config = { ...raw } as CrickNoteConfig;
 
   // Runtime validation of critical fields
   const errors: string[] = [];

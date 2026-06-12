@@ -16,7 +16,7 @@ describe('indexer — KB fields', () => {
         kbStatus: 'pending', knowledgeKind: 'concept', needsReview: false,
         reviewFlaggedAt: undefined, aliases: ['test alias'], rqSource: undefined, rqTarget: undefined,
       },
-      contentHash: 'abc', mtime: Date.now(), chunks: [], embeddings: [],
+      contentHash: 'abc', mtime: Date.now(), chunks: [],
     }, db);
     const row = db.prepare('SELECT kb_status, knowledge_kind, needs_review, review_flagged_at, aliases, rq_source, rq_target FROM note_metadata WHERE path = ?')
       .get('Knowledge/Concepts/test.md') as Record<string, unknown>;

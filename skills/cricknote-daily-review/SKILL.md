@@ -10,7 +10,9 @@ Run `cricknote reindex` to absorb manual Obsidian edits.
 
 ## Gather state
 - `cricknote tool get_today_diary '{}'` and `cricknote tool get_week_plan '{}'`.
-- `cricknote tool task_list '{"status":"pending","days":90}'` — open tasks.
+- `cricknote tool task_agenda '{}'` — pending tasks bucketed into overdue / due
+  today / due in the next 7 days / no deadline. This is the primary task view;
+  use `task_list` only when you need the full unfiltered history.
 - `cricknote tool vault_list '{"folder":"Projects","status":"in-progress"}'` —
   experiments still open.
 - `cricknote tool reading_pipeline_status '{}'` for stuck reading bundles.
@@ -18,7 +20,11 @@ Run `cricknote reindex` to absorb manual Obsidian edits.
 
 ## Present
 Summarize: open experiments, stuck reading notes, pending KB targets, due tasks.
-Lead with what is overdue or blocking.
+Lead with the agenda's `overdue` and `today` buckets — those are what is blocking.
+
+To leave the user a persistent agenda they can open in Obsidian, call
+`cricknote tool task_agenda '{"write":true}'`; it returns a pending edit that
+writes `Memory/Agenda.md` (a "Today's Agenda" dashboard). Apply it as usual.
 
 ## Reminder reconciliation
 If the user uses Apple Reminders (skill: cricknote-reminders), ask whether any
