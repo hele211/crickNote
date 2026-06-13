@@ -42,6 +42,8 @@ export const CREATE_SECTION_HEADINGS = [
   'Extensions',
 ] as const;
 
+export const FIGURE_MAP_HEADING = 'Figure Map' as const;
+
 const DEFAULT_READING_TAG = 'reading';
 
 export function isReadingSourceType(value: unknown): value is ReadingSourceType {
@@ -127,6 +129,10 @@ export function hasMeaningfulReadingBody(body: string): boolean {
     .replace(/^# .+$/gm, '')
     .replace(/<!--[\s\S]*?-->/gm, '');
   return stripped.split(/^## .+$/gm).some(section => section.trim().length > 0);
+}
+
+export function hasFigureMapHeading(body: string): boolean {
+  return new RegExp(`^## ${FIGURE_MAP_HEADING}\\s*$`, 'm').test(body);
 }
 
 export function syncReadingBodyTitle(body: string, title: string): string {

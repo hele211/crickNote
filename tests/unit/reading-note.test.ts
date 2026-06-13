@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCreateReadingBody,
   buildReadingFrontmatter,
+  hasFigureMapHeading,
   hasMeaningfulReadingBody,
   normalizeReadingSources,
   slugifyReadingTitle,
@@ -106,5 +107,23 @@ describe('hasMeaningfulReadingBody — custom template sections', () => {
   it('ignores HTML comments when evaluating content', () => {
     const body = `\n# Some Paper\n\n## Claims\n<!-- placeholder -->\n## Reasoning\n## Evidence\n## Assumptions\n## Takeaways\n## Extensions\n`;
     expect(hasMeaningfulReadingBody(body)).toBe(false);
+  });
+});
+
+describe('hasFigureMapHeading', () => {
+  it('returns true when ## Figure Map heading is present', () => {
+    expect(hasFigureMapHeading('## Figure Map\n\n| Fig | What | Significance |\n')).toBe(true);
+  });
+
+  it('returns false when heading is absent', () => {
+    expect(hasFigureMapHeading('## Claims\n## Reasoning\n## Evidence\n')).toBe(false);
+  });
+
+  it('does not match a heading that only starts with the words', () => {
+    expect(hasFigureMapHeading('## Figure Mapping Strategy\n')).toBe(false);
+  });
+
+  it('matches with trailing whitespace on the heading line', () => {
+    expect(hasFigureMapHeading('## Figure Map   \n')).toBe(true);
   });
 });
