@@ -140,11 +140,22 @@ export function hasFigureMapHeading(body: string): boolean {
 
 Update the "Analyze the paper" step to include Figure Map drafting instructions (see §5).
 
-### `tests/unit/reading-note.test.ts`
+### `src/templates/template-loader.ts`
 
-- Update the `buildCreateReadingBody` scaffold test (line 33) — output now includes `## Figure Map` before `## Claims`
-- Update the `hasMeaningfulReadingBody` scaffold test (line 80) — the empty scaffold still returns `false` (no table rows, just the heading)
-- Add `hasFigureMapHeading` tests: returns `true` when heading is present, `false` when absent
+`buildCreateReadingBody` only feeds the **fallback** (builtin) render path. After `cricknote setup` writes the default templates to `Agent/templates/`, `loadTemplate` reads those on-disk files verbatim and never calls `buildCreateReadingBody`. So the static `DEFAULT_TEMPLATE_FILES` strings for `reading-paper.md` and `reading-thread.md` must **also** gain `## Figure Map` (before `## Claims`), and the templates `README.md` string documents it as an optional reading-aid section.
+
+`## Figure Map` is deliberately **not** added to `TEMPLATE_CONTRACTS[...].requiredHeadings`, and `CURRENT_CONTRACT_VERSION` is **not** bumped:
+- Adding it to `requiredHeadings` would make `validateTemplate` hard-error on any existing on-disk template that predates this change.
+- The version constant is shared across all template kinds; bumping it would emit spurious "may be missing required sections" warnings for unrelated templates (experiment, project-index, etc.).
+
+**Known limitation:** existing installs that already ran `cricknote setup` keep their old on-disk `reading-paper.md` / `reading-thread.md` (no Figure Map) until they delete or regenerate them. New installs get it automatically. A forced template migration is out of scope for this change.
+
+### `tests/unit/reading-note.test.ts` and `tests/unit/template-loader.test.ts`
+
+- Update the `buildCreateReadingBody` scaffold test — output now includes `## Figure Map` before `## Claims`
+- Keep the `hasMeaningfulReadingBody` scaffold test green — the empty scaffold still returns `false` (no table rows, just the heading)
+- Add `hasFigureMapHeading` tests: returns `true` when heading is present, `false` when absent (incl. rejecting `## Figure Mapping Strategy`)
+- Add `DEFAULT_TEMPLATE_FILES` tests: both reading templates contain `## Figure Map` before `## Claims`
 
 ---
 
@@ -154,7 +165,7 @@ Update the "Analyze the paper" step to include Figure Map drafting instructions 
 - `inferReadingPipelineStep` — no change
 - `reading-intake.ts` tool implementations — no change
 - KB tools, mapping artifacts, DB schema, frontmatter fields — no change
-- `template-loader.ts` — calls `buildCreateReadingBody` unchanged; will automatically pick up the Figure Map heading
+- `TEMPLATE_CONTRACTS[...].requiredHeadings` and `CURRENT_CONTRACT_VERSION` — unchanged (Figure Map is optional, see §7)
 
 ---
 
