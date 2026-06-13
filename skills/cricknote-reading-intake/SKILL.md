@@ -21,8 +21,21 @@ One paper at a time. All writes go through `cricknote tool`.
 ## Analyze the paper
 1. `cricknote tool compile_reading_note '{"path":"Reading/Papers/<slug>.md"}'`
    — returns source text.
-2. Draft the CREATE sections (Claims, Reasoning, Evidence, Assumptions,
-   Takeaways, Extensions). Show the draft to the user.
+2. Draft the **Figure Map** AND the CREATE sections. Show both to the user.
+
+   **Figure Map rules** (goes at the top, before `## Claims`):
+   - One row per figure, table, or supplementary panel referenced in the compiled text
+   - **Figure**: exact label as it appears in the paper (Fig 1, Fig 2A, Table 2, Suppl. S1, etc.)
+   - **What it shows**: one factual sentence — what experiment was done and what data it produced
+   - **Significance**: one sentence on which conclusion of THIS paper this figure proves or challenges.
+     Draw only from the paper's own abstract, results, and discussion — no cross-paper comparisons
+     unless the paper explicitly states them. Write `?` if the paper does not explain the figure's role.
+   - Mark any cell `?` where the caption text was too unclear to fill accurately
+   - Order: main figures by label number (Fig 1, Fig 2...), then supplementary panels (Suppl. S1...)
+   - Where panel labels are separate experiments (Fig 2A vs Fig 2B), use one row per panel
+   - If no figures are found (review, theory, or methods paper): leave `## Figure Map` with a single line:
+     `<!-- No data figures found in compiled sources -->`
+
 3. Write it: `cricknote tool vault_write '{"path":"Reading/Papers/<slug>.md","content":"<full note>"}'`.
 
 ## Check status
