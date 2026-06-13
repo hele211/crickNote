@@ -31,15 +31,18 @@ describe('reading-note helpers', () => {
       .toThrow('relative to the attachment folder');
   });
 
-  it('buildCreateReadingBody returns the CREATE scaffold without legacy sections', () => {
+  it('buildCreateReadingBody returns the CREATE scaffold with Figure Map before Claims', () => {
     const body = buildCreateReadingBody({ title: 'IL-42 mediated suppression' });
     expect(body).toContain('# IL-42 mediated suppression');
+    expect(body).toContain('## Figure Map');
     expect(body).toContain('## Claims');
     expect(body).toContain('## Reasoning');
     expect(body).toContain('## Evidence');
     expect(body).toContain('## Assumptions');
     expect(body).toContain('## Takeaways');
     expect(body).toContain('## Extensions');
+    // Figure Map must appear before Claims
+    expect(body.indexOf('## Figure Map')).toBeLessThan(body.indexOf('## Claims'));
     expect(body).not.toContain('## Summary');
     expect(body).not.toContain('## Key Findings');
     expect(body).not.toContain('## Notes');
@@ -125,5 +128,9 @@ describe('hasFigureMapHeading', () => {
 
   it('matches with trailing whitespace on the heading line', () => {
     expect(hasFigureMapHeading('## Figure Map   \n')).toBe(true);
+  });
+
+  it('returns true for the scaffold produced by buildCreateReadingBody', () => {
+    expect(hasFigureMapHeading(buildCreateReadingBody({ title: 'Test Paper' }))).toBe(true);
   });
 });

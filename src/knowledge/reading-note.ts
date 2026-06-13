@@ -114,8 +114,9 @@ export function normalizeReadingSources(sources: ReadingSourceInput[]): ReadingS
 }
 
 export function buildCreateReadingBody(meta: Pick<ReadingNoteMeta, 'title'>): string {
+  const figureMapSection = `## ${FIGURE_MAP_HEADING}\n`;
   const sections = CREATE_SECTION_HEADINGS.map((heading) => `## ${heading}\n`).join('\n');
-  return `\n# ${meta.title}\n\n${sections}`;
+  return `\n# ${meta.title}\n\n${figureMapSection}\n${sections}`;
 }
 
 export function hasCreateHeadings(body: string): boolean {
