@@ -365,6 +365,20 @@ describe('DEFAULT_TEMPLATE_FILES', () => {
     }
   });
 
+  it('reading-paper.md default template has Figure Map before Claims', async () => {
+    const { DEFAULT_TEMPLATE_FILES } = await import('../../src/templates/template-loader.js');
+    const content = DEFAULT_TEMPLATE_FILES['reading-paper.md'];
+    expect(content).toContain('## Figure Map');
+    expect(content.indexOf('## Figure Map')).toBeLessThan(content.indexOf('## Claims'));
+  });
+
+  it('reading-thread.md default template has Figure Map before Claims', async () => {
+    const { DEFAULT_TEMPLATE_FILES } = await import('../../src/templates/template-loader.js');
+    const content = DEFAULT_TEMPLATE_FILES['reading-thread.md'];
+    expect(content).toContain('## Figure Map');
+    expect(content.indexOf('## Figure Map')).toBeLessThan(content.indexOf('## Claims'));
+  });
+
   it('project-index.md default template has all AUTO-GENERATED markers', async () => {
     const { DEFAULT_TEMPLATE_FILES } = await import('../../src/templates/template-loader.js');
     const content = DEFAULT_TEMPLATE_FILES['project-index.md'];

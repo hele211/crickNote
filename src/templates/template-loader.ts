@@ -471,6 +471,7 @@ lab_relevance:
 
 # {{title}}
 
+## Figure Map
 ## Claims
 ## Reasoning
 ## Evidence
@@ -493,6 +494,7 @@ thread_topic:
 
 # {{title}}
 
+## Figure Map
 ## Claims
 ## Reasoning
 ## Evidence
@@ -557,6 +559,8 @@ These six headings must stay - they drive the KB pipeline:
 ## Takeaways
 ## Extensions
 \`\`\`
+
+The default template also includes a \`## Figure Map\` section at the top as a reading aid (Figure | What it shows | Significance). It is optional - you may keep or remove it; it does not affect the KB pipeline.
 
 ## Placeholders
 
