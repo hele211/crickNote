@@ -1,7 +1,7 @@
 # CrickNote Spec: Reading-Intake Friction Fixes
 
 **Date:** 2026-06-13
-**Status:** Draft
+**Status:** Phases 1, 2b, 3 implemented on branch `feat/reading-intake-friction-fixes`; Phase 2a (pagination) and Phase 4 (zotero_intake) deferred after a value re-assessment (see §4).
 **Scope:** Remove six friction points in the reading-intake pipeline surfaced by real-usage feedback (analysing a 20-page paper from Zotero): a too-low source-text cap, a documented Zotero path that produces an un-compilable note, logs contaminating stdout JSON, awkward `zotero_prepare_bundle` ergonomics, no section-level write, and figure-locating during Figure Map drafting. Adds a thin `zotero_intake` orchestrator and a body-only write tool.
 **Depends on:** Spec 2 — Knowledge Base Workflow (CREATE/compile), Zotero Integration (2026-04-18), Figure Map (2026-06-13)
 **Does NOT touch:** DB schema, KB pipeline (`kb_suggest`/`kb_apply`/mapping artifacts), serial numbering, the CREATE acronym framework, frontmatter field set
@@ -54,9 +54,9 @@ Four phases, ordered by risk. Each is independently shippable and TDD-tested (vi
 
 ### Phase 2 — `compile` pagination + page markers (#1b, #6)
 
-**2a · Pagination.** `compile_reading_note` and `loadSources` gain optional `offset` (token offset into the compiled source stream, default 0) and `max_tokens` (per-call budget override, default = session cap). The payload gains a top-level `truncated: boolean`, `next_offset: number | null` (null when exhausted), and `tokens_remaining: number`, so overflow is unmistakable and pageable. Pagination operates over the concatenated source text in existing priority order (`notes → pdf → notebooklm → web → other`).
+**2a · Pagination (DEFERRED — see §4).** `compile_reading_note` and `loadSources` gain optional `offset` (token offset into the compiled source stream, default 0) and `max_tokens` (per-call budget override, default = session cap). The payload gains a top-level `truncated: boolean`, `next_offset: number | null` (null when exhausted), and `tokens_remaining: number`, so overflow is unmistakable and pageable. Pagination operates over the concatenated source text in existing priority order (`notes → pdf → notebooklm → web → other`).
 
-**2b · Page markers.** Switch `extractPdf` to per-page extraction (`pdf-parse` `pagerender` / page callback) and join with `\n\n--- page N ---\n\n` separators. **No content removed.** Helps the LLM cite "Fig 3 is on page 7" while drafting the Figure Map.
+**2b · Page markers (SHIPPED).** Switch `extractPdf` to per-page extraction (`pdf-parse` `pagerender` / page callback) and join with `\n\n--- page N ---\n\n` separators. **No content removed.** Helps the LLM cite "Fig 3 is on page 7" while drafting the Figure Map.
 
 ### Phase 3 — Body-only write (#5)
 
@@ -65,7 +65,7 @@ New `vault_write_body { path, body }` tool in `vault.ts`:
 - Errors if the file does not exist (use `vault_write` to create) or has no frontmatter block (use `vault_write`).
 - The agent drafts the full body (Figure Map + CREATE sections) and saves once — no frontmatter reproduction.
 
-### Phase 4 — `zotero_intake` thin wrapper (#4a, orchestration)
+### Phase 4 — `zotero_intake` thin wrapper (#4a, orchestration) — DEFERRED (see §4)
 
 New `zotero_intake { citekey? , doi?, zotero_key?, slug?, related_projects?, …selection-resume fields }` in `zotero-tools.ts`:
 - Runs **fetch → prepare_bundle → ingest** internally by composing the existing handlers' `execute()` and parsing the JSON between steps (to detect `error` / `needs_*`). `fetch` and `prepare_bundle` are in-module; `ingest` is reached via a dynamic import of `createReadingIntakeTools(vaultPath)` with `conflictDetector` omitted — safe because a fresh note skips the conflict-snapshot path. (No 3-tool refactor required.)
@@ -79,6 +79,8 @@ New `zotero_intake { citekey? , doi?, zotero_key?, slug?, related_projects?, …
 
 ## 4. Deferred (explicitly out of scope)
 
+- **Phase 2a — `compile` pagination (`offset`/`max_tokens`)** — deferred after raising the session cap to 50k: a normal paper (~29k tokens) now returns whole in one call, so pagination only matters for >50k monsters (rare). Revisit if such papers appear. The `truncated` flag + warning still signal overflow.
+- **Phase 4 — `zotero_intake` orchestrator** — deferred: with the seams (#2/#3/#4) fixed, the manual fetch → prepare_bundle → ingest chain is already painless. The one-call wrapper is convenience, not friction-removal, and is the largest/riskiest build (cross-module composition + http-mocked tests). The `vault_pdf_dir` path-coupling guard travels with it.
 - **#6 figure noise-stripping** — dropping garbled panel lines while keeping legends. Deferred to a separate, carefully-validated pass (must not eat α/β/γ, equations, or data tables). Raising the caps removed its urgency.
 - **Section-addressed `vault_replace_section`** — superseded by `vault_write_body` for the reading-note use case; revisit only if surgical single-section edits are needed elsewhere.
 - **Forced template migration** for installs that predate page markers — same limitation noted in the Figure Map spec.
