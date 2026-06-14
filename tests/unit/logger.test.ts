@@ -18,12 +18,12 @@ describe('Logger', () => {
     stderrSpy.mockRestore();
   });
 
-  it('outputs JSON lines in json format', () => {
+  it('outputs JSON lines in json format to stderr', () => {
     const log = new Logger({ format: 'json', level: 'info' });
     log.info('test message', { key: 'value' });
 
-    expect(stdoutSpy).toHaveBeenCalledOnce();
-    const output = stdoutSpy.mock.calls[0][0] as string;
+    expect(stderrSpy).toHaveBeenCalledOnce();
+    const output = stderrSpy.mock.calls[0][0] as string;
     const parsed = JSON.parse(output.trim());
 
     expect(parsed.level).toBe('info');
@@ -32,12 +32,12 @@ describe('Logger', () => {
     expect(parsed.ts).toBeDefined();
   });
 
-  it('outputs human-readable lines in pretty format', () => {
+  it('outputs human-readable lines in pretty format to stderr', () => {
     const log = new Logger({ format: 'pretty', level: 'info' });
     log.info('server started', { port: 8080 });
 
-    expect(stdoutSpy).toHaveBeenCalledOnce();
-    const output = stdoutSpy.mock.calls[0][0] as string;
+    expect(stderrSpy).toHaveBeenCalledOnce();
+    const output = stderrSpy.mock.calls[0][0] as string;
     expect(output).toContain('INFO');
     expect(output).toContain('server started');
     expect(output).toContain('port=8080');
@@ -49,9 +49,19 @@ describe('Logger', () => {
     log.info('also hidden');
     log.warn('should appear');
 
-    expect(stdoutSpy).toHaveBeenCalledOnce();
-    const output = stdoutSpy.mock.calls[0][0] as string;
+    expect(stderrSpy).toHaveBeenCalledOnce();
+    const output = stderrSpy.mock.calls[0][0] as string;
     expect(output).toContain('should appear');
+  });
+
+  it('never writes to stdout — stdout is the data channel', () => {
+    const log = new Logger({ format: 'json', level: 'debug' });
+    log.debug('d');
+    log.info('i');
+    log.warn('w');
+    log.error('e');
+
+    expect(stdoutSpy).not.toHaveBeenCalled();
   });
 
   it('writes error level to stderr', () => {
@@ -73,7 +83,7 @@ describe('Logger', () => {
     const child = parent.child('websocket');
     child.info('client connected');
 
-    const output = stdoutSpy.mock.calls[0][0] as string;
+    const output = stderrSpy.mock.calls[0][0] as string;
     const parsed = JSON.parse(output.trim());
     expect(parsed.component).toBe('websocket');
     expect(parsed.msg).toBe('client connected');
@@ -85,8 +95,8 @@ describe('Logger', () => {
     child.info('should be filtered');
     child.warn('should appear');
 
-    expect(stdoutSpy).toHaveBeenCalledOnce();
-    const output = stdoutSpy.mock.calls[0][0] as string;
+    expect(stderrSpy).toHaveBeenCalledOnce();
+    const output = stderrSpy.mock.calls[0][0] as string;
     expect(output).toContain('should appear');
   });
 
@@ -110,21 +120,20 @@ describe('Logger', () => {
     const log = new Logger({ format: 'json', level: 'info' });
     log.info('plain message');
 
-    const output = stdoutSpy.mock.calls[0][0] as string;
+    const output = stderrSpy.mock.calls[0][0] as string;
     const parsed = JSON.parse(output.trim());
     expect(parsed.msg).toBe('plain message');
     expect(Object.keys(parsed)).toEqual(['ts', 'level', 'msg']);
   });
 
-  it('debug level includes all messages', () => {
+  it('writes every level to stderr (debug, info, warn, error)', () => {
     const log = new Logger({ format: 'json', level: 'debug' });
     log.debug('d');
     log.info('i');
     log.warn('w');
     log.error('e');
 
-    // debug + info + warn go to stdout, error goes to stderr
-    expect(stdoutSpy).toHaveBeenCalledTimes(3);
-    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy).toHaveBeenCalledTimes(4);
+    expect(stdoutSpy).not.toHaveBeenCalled();
   });
 });
