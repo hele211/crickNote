@@ -43,12 +43,40 @@ function truncateToTokens(text: string, maxTokens: number): { text: string; trun
   return { text: text.slice(0, maxChars), truncated: true };
 }
 
+/** Join per-page PDF text with `--- page N ---` boundary markers (1-indexed). */
+export function joinPdfPages(pages: string[]): string {
+  return pages.map((text, i) => `--- page ${i + 1} ---\n${text}`).join('\n\n');
+}
+
 async function extractPdf(absPath: string): Promise<string> {
-  // Dynamic import so servers without pdf-parse installed still start
+  // Dynamic import so environments without pdf-parse installed still start
   const pdfParse = (await import('pdf-parse')).default;
   const buffer = fs.readFileSync(absPath);
-  const data = await pdfParse(buffer, { max: 80 });
-  return data.text;
+  const pages: string[] = [];
+  // Custom per-page render (mirrors pdf-parse's default item-join) so we can
+  // insert page boundary markers — these help locate figures when drafting the
+  // Figure Map. No content is removed.
+  await pdfParse(buffer, {
+    max: 80,
+    pagerender: async (pageData: {
+      getTextContent: (opts: object) => Promise<{ items: Array<{ str: string; transform: number[] }> }>;
+    }) => {
+      const textContent = await pageData.getTextContent({ normalizeWhitespace: false, disableCombineTextItems: false });
+      let lastY: number | undefined;
+      let text = '';
+      for (const item of textContent.items) {
+        if (lastY === item.transform[5] || lastY === undefined) {
+          text += item.str;
+        } else {
+          text += '\n' + item.str;
+        }
+        lastY = item.transform[5];
+      }
+      pages.push(text);
+      return text;
+    },
+  });
+  return joinPdfPages(pages);
 }
 
 const TYPE_PRIORITY: Record<ReadingSourceType, number> = {

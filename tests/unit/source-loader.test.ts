@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { loadSources } from '../../src/knowledge/source-loader.js';
+import { loadSources, joinPdfPages } from '../../src/knowledge/source-loader.js';
 
 describe('loadSources', () => {
   let vaultPath: string;
@@ -147,5 +147,15 @@ describe('loadSources', () => {
     expect(result.sources).toHaveLength(1);
     expect(result.sources[0].path).toBe('notes.md');
     expect(result.warnings[0]).toContain('relative to the attachment folder');
+  });
+});
+
+describe('joinPdfPages', () => {
+  it('joins pages with page-number markers', () => {
+    expect(joinPdfPages(['alpha', 'beta'])).toBe('--- page 1 ---\nalpha\n\n--- page 2 ---\nbeta');
+  });
+
+  it('returns an empty string when there are no pages', () => {
+    expect(joinPdfPages([])).toBe('');
   });
 });

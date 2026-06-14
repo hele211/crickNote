@@ -22,7 +22,8 @@ One paper at a time. All writes go through `cricknote tool`.
 
 ## Analyze the paper
 1. `cricknote tool compile_reading_note '{"path":"Reading/Papers/<slug>.md"}'`
-   — returns source text.
+   — returns source text, with `--- page N ---` markers between PDF pages
+   (use them to note which page each figure is on).
 2. Draft the **Figure Map** AND the CREATE sections. Show both to the user.
 
    **Figure Map rules** (goes at the top, before `## Claims`):
