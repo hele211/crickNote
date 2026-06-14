@@ -14,8 +14,12 @@ describe('loadSources', () => {
       'IL-42 suppresses CD8 by 40%.'
     );
     fs.writeFileSync(
-      path.join(vaultPath, 'Reading', 'attachments', 'smith-2026-il42', 'large.md'),
-      'x'.repeat(42000) // > 10 000 tokens at ~4 chars/token
+      path.join(vaultPath, 'Reading', 'attachments', 'smith-2026-il42', 'paper.md'),
+      'x'.repeat(116000) // ~29 000 tokens at ~4 chars/token — a full paper, under the 50k cap
+    );
+    fs.writeFileSync(
+      path.join(vaultPath, 'Reading', 'attachments', 'smith-2026-il42', 'huge.md'),
+      'x'.repeat(220000) // ~55 000 tokens — exceeds the 50k cap
     );
   });
   afterEach(() => { fs.rmSync(vaultPath, { recursive: true, force: true }); });
@@ -31,9 +35,20 @@ describe('loadSources', () => {
     expect(result.warnings).toHaveLength(0);
   });
 
-  it('truncates a source that exceeds 10 000 tokens', async () => {
+  it('returns a full ~29k-token paper without truncation', async () => {
     const result = await loadSources(
-      [{ type: 'notes', path: 'large.md' }],
+      [{ type: 'notes', path: 'paper.md' }],
+      'smith-2026-il42',
+      vaultPath
+    );
+    expect(result.sources[0].truncated).toBe(false);
+    expect(result.sources[0].content.length).toBe(116000);
+    expect(result.warnings).toHaveLength(0);
+  });
+
+  it('truncates a single source that exceeds the 50 000 token cap', async () => {
+    const result = await loadSources(
+      [{ type: 'notes', path: 'huge.md' }],
       'smith-2026-il42',
       vaultPath
     );
@@ -60,11 +75,11 @@ describe('loadSources', () => {
     expect(result.warnings.some(w => w.includes('Cannot read'))).toBe(true);
   });
 
-  it('respects the 30 000 token session cap', async () => {
+  it('respects the 50 000 token session cap across multiple sources', async () => {
     for (let i = 1; i <= 4; i++) {
       fs.writeFileSync(
         path.join(vaultPath, 'Reading', 'attachments', 'smith-2026-il42', `part${i}.md`),
-        'y'.repeat(32000)
+        'y'.repeat(60000) // ~15 000 tokens each → 60 000 total, over the 50k cap
       );
     }
     const result = await loadSources(
@@ -72,7 +87,8 @@ describe('loadSources', () => {
       'smith-2026-il42',
       vaultPath
     );
-    expect(result.totalTokens).toBeLessThanOrEqual(30000);
+    expect(result.totalTokens).toBeGreaterThan(30000); // proves the cap was raised above the old 30k
+    expect(result.totalTokens).toBeLessThanOrEqual(50000);
     expect(result.warnings.some(w => w.includes('session cap'))).toBe(true);
   });
 

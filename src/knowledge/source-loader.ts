@@ -11,8 +11,12 @@ import { logger } from '../utils/logger.js';
 
 const log = logger.child('source-loader');
 
-const PER_SOURCE_TOKEN_CAP = 10_000;
-const SESSION_TOKEN_CAP = 30_000;
+// The session cap is the only governor: a single source may draw the entire
+// budget (no artificial per-source ceiling below it). Raised from 10k/30k after
+// a 29k-token paper was being cut off mid-Results. Pagination (offset/maxTokens)
+// handles papers that exceed even this.
+const SESSION_TOKEN_CAP = 50_000;
+const PER_SOURCE_TOKEN_CAP = SESSION_TOKEN_CAP;
 const CHARS_PER_TOKEN = 4;
 
 const UNSUPPORTED_EXTS = new Set(['.xlsx', '.csv', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp']);
@@ -43,7 +47,7 @@ async function extractPdf(absPath: string): Promise<string> {
   // Dynamic import so servers without pdf-parse installed still start
   const pdfParse = (await import('pdf-parse')).default;
   const buffer = fs.readFileSync(absPath);
-  const data = await pdfParse(buffer, { max: 20 });
+  const data = await pdfParse(buffer, { max: 80 });
   return data.text;
 }
 
