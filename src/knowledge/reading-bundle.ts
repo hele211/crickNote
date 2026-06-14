@@ -24,7 +24,14 @@ export interface BundleDiscoveryResult {
 }
 
 const TEXT_SOURCE_EXTENSIONS = new Set(['.md', '.txt']);
-const IGNORED_BUNDLE_FILES = new Set(['.ds_store']);
+
+/**
+ * Dotfiles are never reading sources: this covers OS cruft (.DS_Store) and CrickNote's
+ * own bundle markers (.zotero-bundle), so discovery doesn't warn about files it created.
+ */
+function isIgnoredBundleFile(fileName: string): boolean {
+  return fileName.startsWith('.');
+}
 
 function classifyBundleFile(fileName: string): { type: ReadingSourceType; readable: boolean } {
   const lower = fileName.toLowerCase();
@@ -77,7 +84,7 @@ export function discoverBundle(
   const discoveredFiles: DiscoveredBundleFile[] = [];
 
   for (const entry of fs.readdirSync(bundlePath, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-    if (IGNORED_BUNDLE_FILES.has(entry.name.toLowerCase())) {
+    if (isIgnoredBundleFile(entry.name)) {
       continue;
     }
 

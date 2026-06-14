@@ -99,6 +99,13 @@ export function createKbTools(
           attachmentsDir
         );
 
+        const warnings = result.transportRisk
+          ? [
+              ...result.warnings,
+              `Loaded source content is large (~${result.totalTokens} tokens); the full response may be clipped in transport even though no source was truncated. If drafted sections look incomplete, split the source into smaller files and re-run.`,
+            ]
+          : result.warnings;
+
         return JSON.stringify({
           note: { path: args.path, frontmatter: fm, body: parsed.content },
           status: readingStatus,
@@ -107,8 +114,9 @@ export function createKbTools(
           sources_missing: false,
           next_step: inferReadingPipelineStep(fm, parsed.content),
           sources: result.sources,
-          warnings: result.warnings,
+          warnings,
           totalTokens: result.totalTokens,
+          transport_truncation_risk: result.transportRisk,
           instruction: `Draft the CREATE sections (Claims, Reasoning, Evidence, Assumptions, Takeaways, Extensions) based on the source content above. Then call vault_write with the complete reading note including filled-in sections. Preserve all existing frontmatter fields. Do NOT mark status: complete — the user will do that after reviewing.`,
         });
       },

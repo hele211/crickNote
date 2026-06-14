@@ -22,6 +22,8 @@ export interface AppliedEdit {
   path: string;
   operation: string;
   applied: boolean;
+  /** Byte length of the content written, so callers get a confirmation size without the full body echoed back. */
+  bytesWritten?: number;
   error?: string;
   warnings?: string[];
 }
@@ -85,5 +87,5 @@ export function applyPendingEdit(edit: PendingEditPayload, ctx: ApplyContext): A
     log.warn('incremental index failed', { relPath, error: (err as Error).message });
   }
 
-  return { path: edit.path, operation, applied: true, warnings: edit.warnings };
+  return { path: edit.path, operation, applied: true, bytesWritten: Buffer.byteLength(edit.newContent, 'utf8'), warnings: edit.warnings };
 }

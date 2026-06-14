@@ -46,6 +46,28 @@ describe('loadSources', () => {
     expect(result.warnings).toHaveLength(0);
   });
 
+  it('flags transport risk for a large but untruncated paper', async () => {
+    // paper.md is ~29k tokens / 116 000 bytes: under the 50k internal cap (so
+    // truncated:false) but large enough that the serialized response can be
+    // clipped in transport. The flag makes that risk explicit next to truncated:false.
+    const result = await loadSources(
+      [{ type: 'notes', path: 'paper.md' }],
+      'smith-2026-il42',
+      vaultPath
+    );
+    expect(result.sources[0].truncated).toBe(false);
+    expect(result.transportRisk).toBe(true);
+  });
+
+  it('does not flag transport risk for a small source', async () => {
+    const result = await loadSources(
+      [{ type: 'notes', path: 'notes.md' }],
+      'smith-2026-il42',
+      vaultPath
+    );
+    expect(result.transportRisk).toBe(false);
+  });
+
   it('truncates a single source that exceeds the 50 000 token cap', async () => {
     const result = await loadSources(
       [{ type: 'notes', path: 'huge.md' }],

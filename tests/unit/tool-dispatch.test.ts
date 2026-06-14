@@ -88,6 +88,27 @@ describe('runTool', () => {
     expect(fs.readFileSync(path.join(vault, rel), 'utf-8')).toContain('created via dispatcher');
   });
 
+  it('omits the bulky newContent from result after applying a write, exposing bytesWritten instead', async () => {
+    const rel = 'Projects/lean-result.md';
+    const body = 'UNIQUEBODYMARKER '.repeat(300); // ~5 KB body that must not be echoed back
+    const content = `---\nnote_kind: experiment\n---\n\n${body}`;
+    const out = await runTool('vault_write', JSON.stringify({ path: rel, content }), { vaultPath: vault, sessionId: 's', apply: true, db });
+    expect(out.ok).toBe(true);
+    expect(out.applied?.[0].applied).toBe(true);
+    // The full note body is already on disk + summarized in `applied`; it must not be echoed in `result`.
+    expect((out.result as Record<string, unknown>).newContent).toBeUndefined();
+    expect(JSON.stringify(out.result)).not.toContain('UNIQUEBODYMARKER');
+    expect(out.applied?.[0].bytesWritten).toBe(Buffer.byteLength(content, 'utf8'));
+  });
+
+  it('still returns the full pending edit (with newContent) when apply:false', async () => {
+    const rel = 'Projects/preview.md';
+    const content = '---\nnote_kind: experiment\n---\n\npreview body';
+    const out = await runTool('vault_write', JSON.stringify({ path: rel, content }), { vaultPath: vault, sessionId: 's', apply: false, db });
+    expect(out.ok).toBe(true);
+    expect((out.result as Record<string, unknown>).newContent).toContain('preview body');
+  });
+
   it('with apply:false returns the pending edit without writing', async () => {
     const out = await runTool('task_add', JSON.stringify({ description: 'do not write me' }), { vaultPath: vault, sessionId: 's', apply: false, db });
     expect(out.ok).toBe(true);

@@ -19,6 +19,13 @@ const SESSION_TOKEN_CAP = 50_000;
 const PER_SOURCE_TOKEN_CAP = SESSION_TOKEN_CAP;
 const CHARS_PER_TOKEN = 4;
 
+// Content can fit under the 50k internal cap (truncated:false) yet still be large
+// enough that the serialized tool response is clipped by the agent-bridge stdout
+// transport — silently dropping Results/Discussion. A ~29.5k-token (~118 KB) paper
+// was observed to clip, so flag at 96 KB (~24k tokens) to leave headroom. Heuristic,
+// not a hard limit: it sets transportRisk so callers see the risk beside truncated:false.
+const TRANSPORT_SAFE_BYTES = 96_000;
+
 const UNSUPPORTED_EXTS = new Set(['.xlsx', '.csv', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp']);
 
 export interface LoadedSource {
@@ -31,6 +38,8 @@ export interface SourceLoadResult {
   sources: LoadedSource[];
   warnings: string[];
   totalTokens: number;
+  /** True when loaded content is large enough that the serialized response may be clipped in transport. */
+  transportRisk: boolean;
 }
 
 function estimateTokens(text: string): number {
@@ -183,5 +192,8 @@ export async function loadSources(
     }
   }
 
-  return { sources: loaded, warnings, totalTokens };
+  const loadedBytes = loaded.reduce((sum, s) => sum + Buffer.byteLength(s.content, 'utf8'), 0);
+  const transportRisk = loadedBytes > TRANSPORT_SAFE_BYTES;
+
+  return { sources: loaded, warnings, totalTokens, transportRisk };
 }
