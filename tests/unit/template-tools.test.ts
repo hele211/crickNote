@@ -69,6 +69,45 @@ describe('template tools', () => {
     expect(parsed.content).toContain('## Extensions');
   });
 
+  it('create_reading_note auto-discovers bundle files when sources are omitted', async () => {
+    const slug = 'auto-discover-paper';
+    const bundleDir = path.join(vaultPath, 'Reading', 'attachments', slug);
+    fs.mkdirSync(bundleDir, { recursive: true });
+    fs.writeFileSync(path.join(bundleDir, 'paper.pdf'), '%PDF-1.4 test');
+
+    const createReadingTool = createTemplateTools(vaultPath, detector)
+      .find(tool => tool.definition.name === 'create_reading_note');
+    const result = JSON.parse(await createReadingTool!.execute({
+      title: 'Auto Discover Paper',
+      authors: ['Alice Smith'],
+      year: 2026,
+      journal: 'Cell',
+      slug,
+      // no `sources` — should be auto-discovered from the existing bundle
+    }));
+
+    const parsed = matter(result.newContent);
+    expect(parsed.data.sources).toEqual([{ type: 'pdf', path: 'paper.pdf' }]);
+  });
+
+  it('create_reading_note still creates a sourceless placeholder when no bundle exists', async () => {
+    const createReadingTool = createTemplateTools(vaultPath, detector)
+      .find(tool => tool.definition.name === 'create_reading_note');
+    const result = JSON.parse(await createReadingTool!.execute({
+      title: 'Future Thread Capture',
+      authors: ['Alice Smith'],
+      year: 2026,
+      journal: 'Cell',
+      slug: 'future-thread-capture',
+      // no `sources` and no bundle folder — must not error
+    }));
+
+    expect(result.type).toBe('pending_edit');
+    const parsed = matter(result.newContent);
+    expect(parsed.data.sources ?? []).toEqual([]);
+    expect(parsed.content).toContain('## Claims');
+  });
+
   it('create_reading_note preserves meaningful body content on update', async () => {
     const existingPath = path.join(fs.realpathSync(vaultPath), 'Reading', 'Papers', 'drafted-paper.md');
     fs.writeFileSync(

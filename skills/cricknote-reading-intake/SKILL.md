@@ -11,12 +11,14 @@ One paper at a time. All writes go through `cricknote tool`.
 1. `cricknote tool zotero_fetch_item '{"citekey":"<key>"}'` (or `{"doi":"..."}`).
 2. `cricknote tool zotero_prepare_bundle '{...}'` to copy the PDF into
    `Reading/attachments/<slug>/`.
-3. `cricknote tool create_reading_note '{"slug":"<slug>","title":"<t>","authors":["..."],"year":2026,"journal":"<j>","doi":"<doi>"}'`.
+3. `cricknote tool ingest_reading_bundle '{"slug":"<slug>","title":"<t>","authors":["..."],"year":2026,"journal":"<j>","doi":"<doi>"}'`
+   — discovers the copied PDF and registers it as a source, so the note compiles.
 
 ## From local files (no Zotero)
 1. Put files under `Reading/attachments/<slug>/`.
 2. `cricknote tool discover_reading_bundle '{"slug":"<slug>"}'`.
-3. `cricknote tool create_reading_note '{...}'`.
+3. `cricknote tool ingest_reading_bundle '{...}'` — registers the discovered files
+   as sources. (Use `create_reading_note` only for a note with no files yet.)
 
 ## Analyze the paper
 1. `cricknote tool compile_reading_note '{"path":"Reading/Papers/<slug>.md"}'`

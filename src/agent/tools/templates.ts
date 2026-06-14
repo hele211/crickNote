@@ -14,6 +14,7 @@ import {
   type ReadingSourceInput,
 } from '../../knowledge/reading-note.js';
 import { resolveVaultPath } from '../../utils/paths.js';
+import { discoverBundle } from '../../knowledge/reading-bundle.js';
 import { renderNoteTemplate, type RenderResult } from '../../templates/template-loader.js';
 
 export function createTemplateTools(vaultPath: string, conflictDetector?: ConflictDetector): ToolHandler[] {
@@ -56,6 +57,16 @@ export function createTemplateTools(vaultPath: string, conflictDetector?: Confli
             normalizedSources = normalizeReadingSources(args.sources as ReadingSourceInput[]);
           } catch (err) {
             return JSON.stringify({ error: (err as Error).message });
+          }
+        } else {
+          // Defensive: if files are already in the bundle dir for this slug, register
+          // them so the note isn't created sourceless (which would make
+          // compile_reading_note report sources_missing). The no-bundle placeholder
+          // capability is preserved — discovery is skipped when the folder is absent
+          // or empty. (Prefer ingest_reading_bundle; this just closes the footgun.)
+          const discovery = discoverBundle(vaultPath, slug);
+          if (discovery.folderExists && discovery.recommendedSources.length > 0) {
+            normalizedSources = discovery.recommendedSources;
           }
         }
         let notePath: string;
