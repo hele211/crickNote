@@ -587,6 +587,13 @@ describe('zotero_prepare_bundle', () => {
     expect(result.error).toMatch(/invalid slug/i);
   });
 
+  it('reports a missing slug distinctly from a malformed one', async () => {
+    const tool = await getPrepareTool(vault);
+    const result = JSON.parse(await tool.execute({}));
+    expect(result.error).toMatch(/slug is required/i);
+    expect(result.error).not.toMatch(/invalid slug format/i);
+  });
+
   it('creates dir, links PDF, writes marker, returns source_type pdf', async () => {
     const pdfSrc = path.join(os.tmpdir(), `test-${Date.now()}.pdf`);
     fs.writeFileSync(pdfSrc, Buffer.from('%PDF-test-content'));

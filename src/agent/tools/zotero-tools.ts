@@ -545,6 +545,17 @@ function zoteroFetchFallback(args: Record<string, unknown>, exportPath: string):
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
 
+/** Distinguish a missing slug from a malformed one so the error is actionable. */
+function validateSlugArg(value: unknown): { slug: string } | { error: string } {
+  if (typeof value !== 'string' || value.trim() === '') {
+    return { error: 'slug is required.' };
+  }
+  if (!SLUG_RE.test(value)) {
+    return { error: `Invalid slug format: "${value}" (expected lowercase kebab-case, e.g. "smith-2026-il42").` };
+  }
+  return { slug: value };
+}
+
 // ─── zotero_prepare_bundle ────────────────────────────────────────────────────
 
 function zoteroPrepareBundleTool(vaultPath: string, cfg: () => CrickNoteConfig): ToolHandler {
@@ -567,8 +578,9 @@ function zoteroPrepareBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
       const z = getZoteroConfig(config);
       if ('error' in z) return JSON.stringify(z);
 
-      const slug = args.slug;
-      if (typeof slug !== 'string' || !SLUG_RE.test(slug)) return JSON.stringify({ error: 'Invalid slug format.' });
+      const slugCheck = validateSlugArg(args.slug);
+      if ('error' in slugCheck) return JSON.stringify(slugCheck);
+      const slug = slugCheck.slug;
 
       const rawBundleDir = path.join(vaultPath, (z as ZoteroConfig).vault_pdf_dir, slug);
       if (fs.existsSync(rawBundleDir) && fs.lstatSync(rawBundleDir).isSymbolicLink()) {
@@ -752,8 +764,9 @@ function zoteroCleanupBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
       const z = getZoteroConfig(config);
       if ('error' in z) return JSON.stringify(z);
 
-      const slug = args.slug;
-      if (typeof slug !== 'string' || !SLUG_RE.test(slug)) return JSON.stringify({ error: 'Invalid slug format.' });
+      const slugCheck = validateSlugArg(args.slug);
+      if ('error' in slugCheck) return JSON.stringify(slugCheck);
+      const slug = slugCheck.slug;
 
       const rawBundleDir = path.join(vaultPath, (z as ZoteroConfig).vault_pdf_dir, slug);
       if (fs.existsSync(rawBundleDir) && fs.lstatSync(rawBundleDir).isSymbolicLink()) {
