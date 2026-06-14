@@ -39,7 +39,9 @@ One paper at a time. All writes go through `cricknote tool`.
    - If no figures are found (review, theory, or methods paper): leave `## Figure Map` with a single line:
      `<!-- No data figures found in compiled sources -->`
 
-3. Write it: `cricknote tool vault_write '{"path":"Reading/Papers/<slug>.md","content":"<full note>"}'`.
+3. Write it: `cricknote tool vault_write_body '{"path":"Reading/Papers/<slug>.md","body":"<note body>"}'`
+   — preserves the frontmatter (authors, sources, etc.); you supply only the body
+   (Figure Map + CREATE sections). Use `vault_write` only when creating a file from scratch.
 
 ## Check status
 `cricknote tool reading_pipeline_status '{"path":"Reading/Papers/<slug>.md"}'`

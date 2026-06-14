@@ -171,5 +171,48 @@ export function createVaultTools(
         });
       },
     },
+    {
+      definition: {
+        name: 'vault_write_body',
+        description: "Replace the body of an existing note while preserving its frontmatter exactly. Use to fill in or update a reading note's sections (Figure Map, Claims, Reasoning, …) without reproducing the frontmatter. Triggers safe edit flow (diff preview, user confirmation).",
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Relative path to the existing note' },
+            body: { type: 'string', description: 'New markdown body — everything after the frontmatter block' },
+          },
+          required: ['path', 'body'],
+        },
+      },
+      execute: async (args) => {
+        let notePath: string;
+        try {
+          notePath = resolveVaultPath(vaultPath, args.path as string);
+        } catch {
+          return JSON.stringify({ error: `Invalid path: "${args.path}"` });
+        }
+        if (!fs.existsSync(notePath)) {
+          return JSON.stringify({ error: `File not found: ${args.path}` });
+        }
+        const existing = fs.readFileSync(notePath, 'utf-8');
+        // Match the leading frontmatter block verbatim — no re-serialization, so
+        // folded YAML, key order, and long author lists are preserved exactly.
+        const fmMatch = existing.match(/^(---\r?\n[\s\S]*?\r?\n---)[ \t]*\r?\n?/);
+        if (!fmMatch) {
+          return JSON.stringify({ error: `No frontmatter block in ${args.path}. Use vault_write to set frontmatter and body together.` });
+        }
+        // Record snapshot before modification so conflict detection is active.
+        conflictDetector?.recordFileRead(notePath, existing);
+        const frontmatter = fmMatch[1];
+        const body = (args.body as string).replace(/^\n+/, '');
+        const newContent = `${frontmatter}\n\n${body}`;
+        return JSON.stringify({
+          type: 'pending_edit',
+          path: notePath,
+          newContent,
+          operation: 'update',
+        });
+      },
+    },
   ];
 }
