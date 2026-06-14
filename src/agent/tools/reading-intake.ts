@@ -171,7 +171,8 @@ function determinePipelineStep(
 
 export function createReadingIntakeTools(
   vaultPath: string,
-  conflictDetector?: ConflictDetector
+  conflictDetector?: ConflictDetector,
+  attachmentsDir = 'Reading/attachments'
 ): ToolHandler[] {
   return [
     {
@@ -194,7 +195,7 @@ export function createReadingIntakeTools(
           return JSON.stringify({ error: (err as Error).message });
         }
 
-        const discovery = discoverBundle(vaultPath, slug);
+        const discovery = discoverBundle(vaultPath, slug, attachmentsDir);
         return JSON.stringify({
           slug: discovery.slug,
           folder_exists: discovery.folderExists,
@@ -248,10 +249,10 @@ export function createReadingIntakeTools(
           return JSON.stringify({ error: (err as Error).message });
         }
 
-        const discovery = discoverBundle(vaultPath, slug);
+        const discovery = discoverBundle(vaultPath, slug, attachmentsDir);
 
         if (!discovery.folderExists) {
-          return JSON.stringify({ error: `Reading bundle not found: Reading/attachments/${slug}` });
+          return JSON.stringify({ error: `Reading bundle not found: ${path.join(attachmentsDir, slug)}` });
         }
 
         let excludedPaths: Set<string>;
@@ -275,13 +276,13 @@ export function createReadingIntakeTools(
         selectedSources = selectedSources.filter((source) => !excludedPaths.has(source.path));
 
         if (selectedSources.length === 0) {
-          return JSON.stringify({ error: `No readable sources selected for Reading/attachments/${slug}` });
+          return JSON.stringify({ error: `No readable sources selected for ${path.join(attachmentsDir, slug)}` });
         }
 
         for (const source of selectedSources) {
           let sourcePath: string;
           try {
-            sourcePath = resolveVaultPath(vaultPath, path.join('Reading', 'attachments', slug, source.path));
+            sourcePath = resolveVaultPath(vaultPath, path.join(attachmentsDir, slug, source.path));
           } catch {
             return JSON.stringify({ error: `Selected source resolves outside the vault: "${source.path}"` });
           }
@@ -434,7 +435,7 @@ export function createReadingIntakeTools(
           }
         }
 
-        const discovery = discoverBundle(vaultPath, slug);
+        const discovery = discoverBundle(vaultPath, slug, attachmentsDir);
 
         if (!noteRef || !fs.existsSync(noteRef.absPath)) {
           return JSON.stringify({

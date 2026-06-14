@@ -37,6 +37,7 @@ function isValidSlug(s: string): boolean { return SLUG_RE.test(s); }
 export function createKbTools(
   vaultPath: string,
   injectedDb?: Database.Database,
+  attachmentsDir = 'Reading/attachments',
 ): ToolHandler[] {
   void log;
   void injectedDb;
@@ -94,7 +95,8 @@ export function createKbTools(
         const result = await loadSources(
           sources as Array<{ type: string; path: string }>,
           sourceSlug,
-          vaultPath
+          vaultPath,
+          attachmentsDir
         );
 
         return JSON.stringify({

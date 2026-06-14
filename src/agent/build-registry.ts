@@ -10,6 +10,22 @@ import { createContextTools } from './tools/context.js';
 import { createSerialTools } from './tools/serial-tools.js';
 import { createKbTools } from './tools/kb-tools.js';
 import { createZoteroTools } from './tools/zotero-tools.js';
+import { loadConfig } from '../config/config.js';
+
+/**
+ * Resolve the vault-relative attachments directory for the reading-intake
+ * pipeline. Mirrors where zotero_prepare_bundle writes PDFs
+ * (config.zotero.vault_pdf_dir) so discover/ingest/compile read from the same
+ * place a Zotero bundle was written to. Defaults to 'Reading/attachments' and
+ * never throws — a missing or unreadable config falls back to the default.
+ */
+function resolveAttachmentsDir(): string {
+  try {
+    return loadConfig().zotero?.vault_pdf_dir ?? 'Reading/attachments';
+  } catch {
+    return 'Reading/attachments';
+  }
+}
 
 /**
  * Build the complete CrickNote tool registry. Shared by the Obsidian runtime
@@ -31,14 +47,16 @@ export function buildToolRegistry(
     for (const h of handlers) registry.register(h);
   };
 
+  const attachmentsDir = resolveAttachmentsDir();
+
   add(createVaultTools(vaultPath, conflictDetector, db));
   add(createSearchTools(db));
   add(createTaskTools(vaultPath, conflictDetector));
-  add(createTemplateTools(vaultPath, conflictDetector));
-  add(createReadingIntakeTools(vaultPath, conflictDetector));
+  add(createTemplateTools(vaultPath, conflictDetector, attachmentsDir));
+  add(createReadingIntakeTools(vaultPath, conflictDetector, attachmentsDir));
   add(createContextTools(vaultPath));
   add(createSerialTools(vaultPath, db));
-  add(createKbTools(vaultPath));
+  add(createKbTools(vaultPath, undefined, attachmentsDir));
   add(createZoteroTools(vaultPath));
 
   return registry;

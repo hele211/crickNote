@@ -90,7 +90,8 @@ const TYPE_PRIORITY: Record<ReadingSourceType, number> = {
 export async function loadSources(
   sources: Array<{ type: string; path: string }>,
   sourceSlug: string,
-  vaultPath: string
+  vaultPath: string,
+  attachmentsDir = 'Reading/attachments'
 ): Promise<SourceLoadResult> {
   const loaded: LoadedSource[] = [];
   const warnings: string[] = [];
@@ -137,7 +138,7 @@ export async function loadSources(
 
     let absPath: string;
     try {
-      absPath = resolveVaultPath(vaultPath, path.join('Reading', 'attachments', sourceSlug, src.path));
+      absPath = resolveVaultPath(vaultPath, path.join(attachmentsDir, sourceSlug, src.path));
     } catch {
       warnings.push(`Skipping "${src.path}" — path resolves outside vault.`);
       continue;

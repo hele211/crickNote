@@ -616,18 +616,19 @@ function zoteroPrepareBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
         }
       }
 
+      const bundleRel = path.join((z as ZoteroConfig).vault_pdf_dir, slug);
       const dirExists = fs.existsSync(bundleDir);
       const hasMarker = dirExists && fs.existsSync(markerPath);
 
       if (dirExists && !hasMarker) {
-        return JSON.stringify({ error: `Pre-existing manual bundle at Reading/attachments/${slug}/ — remove or rename it before using Zotero ingestion.` });
+        return JSON.stringify({ error: `Pre-existing manual bundle at ${bundleRel}/ — remove or rename it before using Zotero ingestion.` });
       }
 
       let existingMarkerFiles: Record<string, string> = {};
       if (hasMarker) {
         const existingMarker = readMarker(markerPath);
         if (!existingMarker || existingMarker.created_by !== 'zotero_prepare_bundle') {
-          return JSON.stringify({ error: `Marker at Reading/attachments/${slug}/.zotero-bundle was not created by zotero_prepare_bundle. Refusing to operate.` });
+          return JSON.stringify({ error: `Marker at ${bundleRel}/.zotero-bundle was not created by zotero_prepare_bundle. Refusing to operate.` });
         }
         existingMarkerFiles = existingMarker.files;
       }

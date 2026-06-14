@@ -17,7 +17,7 @@ import { resolveVaultPath } from '../../utils/paths.js';
 import { discoverBundle } from '../../knowledge/reading-bundle.js';
 import { renderNoteTemplate, type RenderResult } from '../../templates/template-loader.js';
 
-export function createTemplateTools(vaultPath: string, conflictDetector?: ConflictDetector): ToolHandler[] {
+export function createTemplateTools(vaultPath: string, conflictDetector?: ConflictDetector, attachmentsDir = 'Reading/attachments'): ToolHandler[] {
   return [
     {
       definition: {
@@ -64,7 +64,7 @@ export function createTemplateTools(vaultPath: string, conflictDetector?: Confli
           // compile_reading_note report sources_missing). The no-bundle placeholder
           // capability is preserved — discovery is skipped when the folder is absent
           // or empty. (Prefer ingest_reading_bundle; this just closes the footgun.)
-          const discovery = discoverBundle(vaultPath, slug);
+          const discovery = discoverBundle(vaultPath, slug, attachmentsDir);
           if (discovery.folderExists && discovery.recommendedSources.length > 0) {
             normalizedSources = discovery.recommendedSources;
           }

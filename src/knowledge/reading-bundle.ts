@@ -48,12 +48,19 @@ function classifyBundleFile(fileName: string): { type: ReadingSourceType; readab
 }
 
 /**
- * Inspect Reading/attachments/<slug>/ and recommend readable source files.
- * Shared by discover_reading_bundle, ingest_reading_bundle, and the defensive
- * source auto-discovery in create_reading_note.
+ * Inspect <attachmentsDir>/<slug>/ (default Reading/attachments/) and recommend
+ * readable source files. Shared by discover_reading_bundle,
+ * ingest_reading_bundle, and the defensive source auto-discovery in
+ * create_reading_note. `attachmentsDir` mirrors config.zotero.vault_pdf_dir so a
+ * Zotero-prepared bundle is discovered at the same path it was written to.
  */
-export function discoverBundle(vaultPath: string, slug: string): BundleDiscoveryResult {
-  const bundlePath = resolveVaultPath(vaultPath, path.join('Reading', 'attachments', slug));
+export function discoverBundle(
+  vaultPath: string,
+  slug: string,
+  attachmentsDir = 'Reading/attachments'
+): BundleDiscoveryResult {
+  const bundleRel = path.join(attachmentsDir, slug);
+  const bundlePath = resolveVaultPath(vaultPath, bundleRel);
   const warnings: string[] = [];
 
   if (!fs.existsSync(bundlePath) || !fs.statSync(bundlePath).isDirectory()) {
@@ -63,7 +70,7 @@ export function discoverBundle(vaultPath: string, slug: string): BundleDiscovery
       bundlePath,
       discoveredFiles: [],
       recommendedSources: [],
-      warnings: [`Reading bundle not found: Reading/attachments/${slug}`],
+      warnings: [`Reading bundle not found: ${bundleRel}`],
     };
   }
 
@@ -100,7 +107,7 @@ export function discoverBundle(vaultPath: string, slug: string): BundleDiscovery
 
   const pdfCount = discoveredFiles.filter((file) => file.type === 'pdf' && file.readable).length;
   if (pdfCount > 1) {
-    warnings.push(`Multiple PDF files found in Reading/attachments/${slug}; review the recommended sources before ingesting.`);
+    warnings.push(`Multiple PDF files found in ${bundleRel}; review the recommended sources before ingesting.`);
   }
 
   if (recommendedSources.length === 0) {

@@ -267,3 +267,65 @@ describe('reading pipeline — full state-transition sequence', () => {
     expect(result.error).toMatch(/slug.*path|path.*slug/i);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Path-coupling: the documented Zotero path must work with a non-default
+// vault_pdf_dir. Bundle files live under a custom attachments dir; ingest must
+// discover + validate them there, and compile must load them from there.
+// ---------------------------------------------------------------------------
+
+describe('reading pipeline — non-default attachments dir (vault_pdf_dir)', () => {
+  let vaultPath: string;
+  let detector: ConflictDetector;
+  const customDir = 'Library/PDFs';
+  const slug = 'jones-2025-il7-custom';
+
+  beforeEach(() => {
+    vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), 'cricknote-custom-dir-'));
+    fs.mkdirSync(path.join(vaultPath, customDir, slug), { recursive: true });
+    fs.mkdirSync(path.join(vaultPath, 'Reading', 'Papers'), { recursive: true });
+    fs.writeFileSync(
+      path.join(vaultPath, customDir, slug, 'notes.md'),
+      '# Notes\n\nKey finding: IL-7 sustains memory T cells.'
+    );
+    detector = new ConflictDetector();
+  });
+
+  afterEach(() => {
+    fs.rmSync(vaultPath, { recursive: true, force: true });
+  });
+
+  it('ingest discovers + compile loads sources from the custom dir', async () => {
+    // 1. Ingest with sources omitted → forces discovery + inline validation
+    //    against the custom attachments dir.
+    const intakeTools = createReadingIntakeTools(vaultPath, detector, customDir);
+    const ingest = getToolByName(intakeTools, 'ingest_reading_bundle');
+    const ingestResult = JSON.parse(await ingest.execute({
+      slug,
+      title: 'IL-7 sustains memory T cells',
+      authors: ['Bob Jones'],
+      year: 2025,
+      journal: 'Immunity',
+    }));
+
+    expect(ingestResult.type).toBe('pending_edit');
+    expect(ingestResult.operation).toBe('create');
+    const parsed = matter(ingestResult.newContent);
+    expect(parsed.data.sources).toEqual([{ type: 'notes', path: 'notes.md' }]);
+
+    // 2. Simulate the runtime writing the pending_edit to disk.
+    fs.writeFileSync(ingestResult.path, ingestResult.newContent, 'utf-8');
+
+    // 3. Compile must load the source from the custom dir, not Reading/attachments.
+    const kbTools = createKbTools(vaultPath, undefined, customDir);
+    const compile = getToolByName(kbTools, 'compile_reading_note');
+    const compileResult = JSON.parse(await compile.execute({
+      path: `Reading/Papers/${slug}.md`,
+    }));
+
+    expect(compileResult.sources_missing).toBe(false);
+    expect(compileResult.sources).toHaveLength(1);
+    expect(compileResult.sources[0].content).toContain('IL-7 sustains memory T cells');
+    expect(compileResult.warnings.some((w: string) => w.includes('not found'))).toBe(false);
+  });
+});

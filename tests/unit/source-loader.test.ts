@@ -148,6 +148,26 @@ describe('loadSources', () => {
     expect(result.sources[0].path).toBe('notes.md');
     expect(result.warnings[0]).toContain('relative to the attachment folder');
   });
+
+  it('loads sources from a non-default attachments dir (vault_pdf_dir)', async () => {
+    const customDir = 'Library/PDFs';
+    fs.mkdirSync(path.join(vaultPath, customDir, 'jones-2025'), { recursive: true });
+    fs.writeFileSync(
+      path.join(vaultPath, customDir, 'jones-2025', 'notes.md'),
+      'Custom-dir source content.'
+    );
+
+    const result = await loadSources(
+      [{ type: 'notes', path: 'notes.md' }],
+      'jones-2025',
+      vaultPath,
+      customDir
+    );
+
+    expect(result.sources).toHaveLength(1);
+    expect(result.sources[0].content).toContain('Custom-dir source content');
+    expect(result.warnings).toHaveLength(0);
+  });
 });
 
 describe('joinPdfPages', () => {
