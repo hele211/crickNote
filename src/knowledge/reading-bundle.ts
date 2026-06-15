@@ -26,11 +26,13 @@ export interface BundleDiscoveryResult {
 const TEXT_SOURCE_EXTENSIONS = new Set(['.md', '.txt']);
 
 /**
- * Dotfiles are never reading sources: this covers OS cruft (.DS_Store) and CrickNote's
- * own bundle markers (.zotero-bundle), so discovery doesn't warn about files it created.
+ * Files CrickNote creates itself are never reading sources: dotfiles (OS cruft like
+ * .DS_Store, the .zotero-bundle marker) and the .extracted.md PDF-extraction cache
+ * written next to each PDF. Skipping them keeps discovery from re-ingesting derived
+ * artifacts as duplicate sources or warning about files it wrote.
  */
 function isIgnoredBundleFile(fileName: string): boolean {
-  return fileName.startsWith('.');
+  return fileName.startsWith('.') || fileName.toLowerCase().endsWith('.extracted.md');
 }
 
 function classifyBundleFile(fileName: string): { type: ReadingSourceType; readable: boolean } {

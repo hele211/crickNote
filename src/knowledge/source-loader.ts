@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import {
   isReadingSourceType,
   normalizeReadingSourcePath,
@@ -82,10 +83,9 @@ export function joinPdfPages(pages: string[], firstPage = 1): string {
   return pages.map((text, i) => `--- page ${i + firstPage} ---\n${text}`).join('\n\n');
 }
 
-export async function extractPdfPages(absPath: string): Promise<string[]> {
+async function parsePdfToPages(buffer: Buffer): Promise<string[]> {
   // Dynamic import so environments without pdf-parse installed still start
   const pdfParse = (await import('pdf-parse')).default;
-  const buffer = fs.readFileSync(absPath);
   const pages: string[] = [];
   // Custom per-page render (mirrors pdf-parse's default item-join) so we can
   // insert page boundary markers — these help locate figures when drafting the
@@ -110,6 +110,72 @@ export async function extractPdfPages(absPath: string): Promise<string[]> {
       return text;
     },
   });
+  return pages;
+}
+
+/** Path of the cached extraction artifact written next to a PDF (paper.pdf -> paper.extracted.md). */
+function extractionArtifactPath(pdfAbsPath: string): string {
+  const dir = path.dirname(pdfAbsPath);
+  const base = path.basename(pdfAbsPath, path.extname(pdfAbsPath));
+  return path.join(dir, `${base}.extracted.md`);
+}
+
+/**
+ * Serialize extracted pages to a human-readable, page-marked artifact stamped with
+ * the source PDF's hash and page count, so it can be reused (and validated) later.
+ */
+export function serializeExtraction(pages: string[], sourceName: string, sha256: string): string {
+  const body = pages.map((text, i) => `--- page ${i + 1} ---\n${text}`).join('\n');
+  return `---\ncricknote_extract: true\nsource: ${sourceName}\nsource_sha256: ${sha256}\npage_count: ${pages.length}\n---\n${body}\n`;
+}
+
+/**
+ * Reconstruct pages from an extraction artifact. Returns null — forcing a fresh
+ * extraction — when the header is missing, the hash is stale, or the page count
+ * does not reconcile with the markers (guards against a corrupted/edited artifact).
+ */
+export function parseExtraction(text: string, expectedSha256: string): string[] | null {
+  const match = text.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  if (!match) return null;
+  const [, header, body] = match;
+  const sha = header.match(/^source_sha256:\s*(\S+)/m)?.[1];
+  const count = Number(header.match(/^page_count:\s*(\d+)/m)?.[1]);
+  if (sha !== expectedSha256 || !Number.isInteger(count)) return null;
+  const pages = body.split(/^--- page \d+ ---\n/m).slice(1).map((p) => p.replace(/\n$/, ''));
+  return pages.length === count ? pages : null;
+}
+
+/**
+ * Extract a PDF's per-page text, caching the result in a `<name>.extracted.md`
+ * artifact next to the PDF keyed by the PDF's content hash. Repeat reads — including
+ * the separate CLI process spawned for each page range — reuse the artifact instead
+ * of re-parsing. discoverBundle ignores the artifact so it is never read as a source.
+ */
+export async function extractPdfPages(absPath: string): Promise<string[]> {
+  const buffer = fs.readFileSync(absPath);
+  const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
+  const artifactPath = extractionArtifactPath(absPath);
+
+  if (fs.existsSync(artifactPath)) {
+    try {
+      const cached = parseExtraction(fs.readFileSync(artifactPath, 'utf-8'), sha256);
+      if (cached) return cached;
+    } catch {
+      /* unreadable artifact — fall through and re-extract */
+    }
+  }
+
+  const pages = await parsePdfToPages(buffer);
+  // Only cache an extraction that produced text on at least one page. A degenerate
+  // result (no text anywhere) is almost always a transient parse failure; caching it
+  // would mask later successful reads of the same unchanged PDF.
+  if (pages.some((p) => p.trim().length > 0)) {
+    try {
+      fs.writeFileSync(artifactPath, serializeExtraction(pages, path.basename(absPath), sha256), 'utf-8');
+    } catch (err) {
+      log.warn('extraction cache write failed', { path: artifactPath, error: (err as Error).message });
+    }
+  }
   return pages;
 }
 

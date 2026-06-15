@@ -2,7 +2,14 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { inspectSources, loadSources } from '../../src/knowledge/source-loader.js';
+import { createHash } from 'node:crypto';
+import {
+  inspectSources,
+  loadSources,
+  extractPdfPages,
+  serializeExtraction,
+  parseExtraction,
+} from '../../src/knowledge/source-loader.js';
 
 function pdfEscape(s: string): string {
   return s.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
@@ -56,9 +63,14 @@ function buildPdf(pageTexts: string[]): Buffer {
  * retry at the test level rather than contort production code.
  */
 async function untilParsed<T>(run: () => Promise<T>, ok: (r: T) => boolean): Promise<T> {
-  let result = await run();
-  for (let i = 0; i < 8 && !ok(result); i++) result = await run();
-  return result;
+  let result: T | undefined;
+  for (let i = 0; i < 9; i++) {
+    try {
+      result = await run();
+      if (ok(result)) return result;
+    } catch { /* pdf.js warm-up failure; retry */ }
+  }
+  return result as T;
 }
 
 describe('PDF extraction path', () => {
@@ -117,5 +129,63 @@ describe('PDF extraction path', () => {
     expect(loaded.content).toContain('--- page 3 ---');
     expect(loaded.content).not.toContain('--- page 1 ---');
     expect(loaded.nextPage).toBeUndefined();
+  });
+});
+
+describe('extraction artifact round-trip', () => {
+  it('round-trips pages through serialize/parse with a matching hash', () => {
+    const pages = ['Page one text.', 'Line A\nLine B', 'last page'];
+    const text = serializeExtraction(pages, 'paper.pdf', 'abc123');
+    expect(parseExtraction(text, 'abc123')).toEqual(pages);
+  });
+
+  it('returns null for a stale (hash-mismatched) artifact', () => {
+    const text = serializeExtraction(['only page'], 'paper.pdf', 'abc123');
+    expect(parseExtraction(text, 'different-hash')).toBeNull();
+  });
+
+  it('returns null when the page count does not reconcile', () => {
+    const corrupted = serializeExtraction(['a', 'b'], 'paper.pdf', 'h').replace('page_count: 2', 'page_count: 5');
+    expect(parseExtraction(corrupted, 'h')).toBeNull();
+  });
+});
+
+describe('PDF extraction cache', () => {
+  let vaultPath: string;
+  const slug = 'trim21-2026';
+  const pdf = () => path.join(vaultPath, 'Reading', 'attachments', slug, 'paper.pdf');
+  const artifact = () => path.join(vaultPath, 'Reading', 'attachments', slug, 'paper.extracted.md');
+
+  beforeEach(() => {
+    vaultPath = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf-cache-'));
+    fs.mkdirSync(path.dirname(pdf()), { recursive: true });
+    fs.writeFileSync(pdf(), buildPdf(['Fig. 1. alpha.', 'beta.', 'gamma.']));
+  });
+  afterEach(() => { fs.rmSync(vaultPath, { recursive: true, force: true }); });
+
+  it('writes a hash-stamped artifact alongside the PDF on first extraction', async () => {
+    const pages = await untilParsed(() => extractPdfPages(pdf()), (p) => p.length === 3);
+    expect(pages).toHaveLength(3);
+    expect(fs.existsSync(artifact())).toBe(true);
+    const text = fs.readFileSync(artifact(), 'utf-8');
+    expect(text).toContain('page_count: 3');
+    expect(text).toContain('--- page 1 ---');
+  });
+
+  it('reuses the cached artifact instead of re-parsing the PDF', async () => {
+    // Prime the cache, then overwrite the artifact with a sentinel + the correct hash.
+    await untilParsed(() => extractPdfPages(pdf()), (p) => p.length === 3);
+    const sha = createHash('sha256').update(fs.readFileSync(pdf())).digest('hex');
+    fs.writeFileSync(artifact(), serializeExtraction(['SENTINEL'], 'paper.pdf', sha));
+    // A cache hit returns the sentinel; a re-parse would return the 3 real pages.
+    expect(await extractPdfPages(pdf())).toEqual(['SENTINEL']);
+  });
+
+  it('re-extracts and rewrites the artifact when its hash is stale', async () => {
+    fs.writeFileSync(artifact(), serializeExtraction(['STALE'], 'paper.pdf', 'wrong-hash'));
+    const pages = await untilParsed(() => extractPdfPages(pdf()), (p) => p.length === 3);
+    expect(pages).not.toEqual(['STALE']);
+    expect(pages).toHaveLength(3);
+    expect(fs.readFileSync(artifact(), 'utf-8')).toContain('page_count: 3');
   });
 });
