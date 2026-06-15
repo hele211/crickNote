@@ -13,18 +13,17 @@ const log = logger.child('source-loader');
 
 // The session cap is the only governor: a single source may draw the entire
 // budget (no artificial per-source ceiling below it). Raised from 10k/30k after
-// a 29k-token paper was being cut off mid-Results. Pagination (offset/maxTokens)
-// handles papers that exceed even this.
+// a 29k-token paper was being cut off mid-Results. Explicit PDF page ranges and
+// maxTokens keep individual tool responses below the transport ceiling.
 const SESSION_TOKEN_CAP = 50_000;
 const PER_SOURCE_TOKEN_CAP = SESSION_TOKEN_CAP;
 const CHARS_PER_TOKEN = 4;
 
-// Content can fit under the 50k internal cap (truncated:false) yet still be large
-// enough that the serialized tool response is clipped by the agent-bridge stdout
-// transport — silently dropping Results/Discussion. A ~29.5k-token (~118 KB) paper
-// was observed to clip, so flag at 96 KB (~24k tokens) to leave headroom. Heuristic,
-// not a hard limit: it sets transportRisk so callers see the risk beside truncated:false.
-const TRANSPORT_SAFE_BYTES = 96_000;
+// The CLI/agent bridge can clip serialized JSON near 64 KB. PDF control characters
+// expand to six-byte escape sequences, so raw text bytes are not a safe proxy for
+// response size. Keep source JSON below 40 KB to leave room for metadata/envelopes.
+const TRANSPORT_SAFE_SERIALIZED_BYTES = 40_000;
+const RECOMMENDED_RANGE_SERIALIZED_BYTES = 32_000;
 
 const UNSUPPORTED_EXTS = new Set(['.xlsx', '.csv', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp']);
 
@@ -32,6 +31,10 @@ export interface LoadedSource {
   path: string;
   content: string;
   truncated: boolean;
+  pageCount?: number;
+  pageStart?: number;
+  pageEnd?: number;
+  nextPage?: number;
 }
 
 export interface SourceLoadResult {
@@ -42,7 +45,29 @@ export interface SourceLoadResult {
   transportRisk: boolean;
 }
 
-function estimateTokens(text: string): number {
+export interface SourceLoadOptions {
+  sourcePath?: string;
+  pageStart?: number;
+  pageEnd?: number;
+  maxTokens?: number;
+}
+
+export interface SourceInspection {
+  path: string;
+  type: ReadingSourceType;
+  bytes: number;
+  estimatedTokens: number;
+  pageCount?: number;
+  nonEmptyPages?: number;
+  controlCharacterRatio?: number;
+  figureCaptions?: Array<{ label: string; page: number }>;
+  tableCaptions?: Array<{ label: string; page: number }>;
+  supplementaryReferences?: string[];
+  recommendedPageRanges?: Array<{ pageStart: number; pageEnd: number; estimatedTokens: number }>;
+  warnings: string[];
+}
+
+export function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 }
 
@@ -53,11 +78,11 @@ function truncateToTokens(text: string, maxTokens: number): { text: string; trun
 }
 
 /** Join per-page PDF text with `--- page N ---` boundary markers (1-indexed). */
-export function joinPdfPages(pages: string[]): string {
-  return pages.map((text, i) => `--- page ${i + 1} ---\n${text}`).join('\n\n');
+export function joinPdfPages(pages: string[], firstPage = 1): string {
+  return pages.map((text, i) => `--- page ${i + firstPage} ---\n${text}`).join('\n\n');
 }
 
-async function extractPdf(absPath: string): Promise<string> {
+export async function extractPdfPages(absPath: string): Promise<string[]> {
   // Dynamic import so environments without pdf-parse installed still start
   const pdfParse = (await import('pdf-parse')).default;
   const buffer = fs.readFileSync(absPath);
@@ -85,7 +110,152 @@ async function extractPdf(absPath: string): Promise<string> {
       return text;
     },
   });
-  return joinPdfPages(pages);
+  return pages;
+}
+
+function normalizeCaptionLabel(raw: string): string {
+  return raw
+    .replace(/\s+/g, ' ')
+    .replace(/^fig(?:ure)?s?\.?\s*/i, 'Fig. ')
+    .replace(/^tables?\.?\s*/i, 'Table ')
+    .replace(/^movies?\.?\s*/i, 'Movie ')
+    .trim();
+}
+
+function uniqueLabels(labels: string[]): string[] {
+  return [...new Set(labels.map(normalizeCaptionLabel))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
+
+export function findCaptionLabels(pageText: string, kind: 'figure' | 'table'): string[] {
+  // Accept "Fig.", "Fig", and "Figure", and treat ".", "|" (Nature style), or ":"
+  // as the caption delimiter after the number. The line-start anchor + trailing
+  // delimiter keep in-text citations ("see Fig. 1 and ...") from matching.
+  const pattern = kind === 'figure'
+    ? /(?:^|\n)\s*(Fig(?:ure)?\.?\s*S?\d+)\s*[.|:]/gi
+    : /(?:^|\n)\s*(Table\s*S?\d+)\s*[.|:]/gi;
+  return [...pageText.matchAll(pattern)].map((match) => normalizeCaptionLabel(match[1]));
+}
+
+export function findSupplementaryReferences(text: string): string[] {
+  const matches = text.match(/\b(?:fig(?:ure)?s?\.?\s*S\d+[A-Z]?|tables?\s*S\d+[A-Z]?|movies?\s*S\d+[A-Z]?)\b/gi) ?? [];
+  return uniqueLabels(matches);
+}
+
+export function buildRecommendedPageRanges(pages: string[]): Array<{ pageStart: number; pageEnd: number; estimatedTokens: number }> {
+  const ranges: Array<{ pageStart: number; pageEnd: number; estimatedTokens: number }> = [];
+  let pageStart = 1;
+  let tokenCount = 0;
+  let serializedBytes = 0;
+
+  pages.forEach((page, index) => {
+    const pageTokens = estimateTokens(page);
+    const pageSerializedBytes = Buffer.byteLength(JSON.stringify(`--- page ${index + 1} ---\n${page}`), 'utf8');
+    if (tokenCount > 0 && serializedBytes + pageSerializedBytes > RECOMMENDED_RANGE_SERIALIZED_BYTES) {
+      ranges.push({ pageStart, pageEnd: index, estimatedTokens: tokenCount });
+      pageStart = index + 1;
+      tokenCount = 0;
+      serializedBytes = 0;
+    }
+    tokenCount += pageTokens;
+    serializedBytes += pageSerializedBytes;
+  });
+
+  if (pages.length > 0) {
+    ranges.push({ pageStart, pageEnd: pages.length, estimatedTokens: tokenCount });
+  }
+  return ranges;
+}
+
+export async function inspectSources(
+  sources: Array<{ type: string; path: string }>,
+  sourceSlug: string,
+  vaultPath: string,
+  attachmentsDir = 'Reading/attachments'
+): Promise<{ sources: SourceInspection[]; warnings: string[] }> {
+  const inspections: SourceInspection[] = [];
+  const warnings: string[] = [];
+
+  for (const src of sources) {
+    if (!isReadingSourceType(src.type)) {
+      warnings.push(`Skipping "${src.path}" - source type "${src.type}" is not supported.`);
+      continue;
+    }
+
+    let normalizedPath: string;
+    try {
+      normalizedPath = normalizeReadingSourcePath(src.path);
+    } catch (err) {
+      warnings.push(`Skipping "${src.path}" - ${(err as Error).message}`);
+      continue;
+    }
+
+    let absPath: string;
+    try {
+      absPath = resolveVaultPath(vaultPath, path.join(attachmentsDir, sourceSlug, normalizedPath));
+    } catch {
+      warnings.push(`Skipping "${src.path}" - path resolves outside vault.`);
+      continue;
+    }
+    if (!fs.existsSync(absPath)) {
+      warnings.push(`Source file not found: "${normalizedPath}".`);
+      continue;
+    }
+
+    const sourceWarnings: string[] = [];
+    const bytes = fs.statSync(absPath).size;
+    const ext = path.extname(normalizedPath).toLowerCase();
+    try {
+      if (ext === '.pdf') {
+        const pages = await extractPdfPages(absPath);
+        const joined = pages.join('\n');
+        const controlCharacters = (joined.match(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g) ?? []).length;
+        const controlCharacterRatio = joined.length > 0 ? controlCharacters / joined.length : 0;
+        const figureCaptions = pages.flatMap((page, index) =>
+          findCaptionLabels(page, 'figure').map((label) => ({ label, page: index + 1 }))
+        );
+        const tableCaptions = pages.flatMap((page, index) =>
+          findCaptionLabels(page, 'table').map((label) => ({ label, page: index + 1 }))
+        );
+        const supplementaryReferences = findSupplementaryReferences(joined);
+        const hasSupplementaryCaptions = [...figureCaptions, ...tableCaptions].some((caption) => /\bS\d+/i.test(caption.label));
+
+        if (controlCharacterRatio > 0.002) {
+          sourceWarnings.push(`PDF text extraction contains many control characters (${(controlCharacterRatio * 100).toFixed(2)}%); visually verify plots and labels.`);
+        }
+        if (supplementaryReferences.length > 0 && !hasSupplementaryCaptions) {
+          sourceWarnings.push('The paper references supplementary figures/tables, but no supplementary captions were found in this PDF. Attach the supplement before mapping those items.');
+        }
+
+        inspections.push({
+          path: normalizedPath,
+          type: src.type,
+          bytes,
+          estimatedTokens: estimateTokens(joinPdfPages(pages)),
+          pageCount: pages.length,
+          nonEmptyPages: pages.filter((page) => page.trim().length > 0).length,
+          controlCharacterRatio,
+          figureCaptions,
+          tableCaptions,
+          supplementaryReferences,
+          recommendedPageRanges: buildRecommendedPageRanges(pages),
+          warnings: sourceWarnings,
+        });
+      } else {
+        const text = fs.readFileSync(absPath, 'utf-8');
+        inspections.push({
+          path: normalizedPath,
+          type: src.type,
+          bytes,
+          estimatedTokens: estimateTokens(text),
+          warnings: sourceWarnings,
+        });
+      }
+    } catch (err) {
+      warnings.push(`Failed to inspect "${normalizedPath}": ${(err as Error).message}.`);
+    }
+  }
+
+  return { sources: inspections, warnings };
 }
 
 const TYPE_PRIORITY: Record<ReadingSourceType, number> = {
@@ -100,7 +270,8 @@ export async function loadSources(
   sources: Array<{ type: string; path: string }>,
   sourceSlug: string,
   vaultPath: string,
-  attachmentsDir = 'Reading/attachments'
+  attachmentsDir = 'Reading/attachments',
+  options: SourceLoadOptions = {}
 ): Promise<SourceLoadResult> {
   const loaded: LoadedSource[] = [];
   const warnings: string[] = [];
@@ -124,7 +295,14 @@ export async function loadSources(
     }
   }
 
-  const sortedSources = [...validSources].sort(
+  const selectedSources = options.sourcePath
+    ? validSources.filter((source) => source.path === options.sourcePath)
+    : validSources;
+  if (options.sourcePath && selectedSources.length === 0) {
+    warnings.push(`Source "${options.sourcePath}" is not listed in the reading note frontmatter.`);
+  }
+
+  const sortedSources = [...selectedSources].sort(
     (a, b) => (TYPE_PRIORITY[a.type] ?? 99) - (TYPE_PRIORITY[b.type] ?? 99)
   );
 
@@ -160,14 +338,34 @@ export async function loadSources(
 
     try {
       let rawText: string;
+      let pageMetadata: Pick<LoadedSource, 'pageCount' | 'pageStart' | 'pageEnd' | 'nextPage'> = {};
       if (ext === '.pdf') {
-        rawText = await extractPdf(absPath);
+        const pages = await extractPdfPages(absPath);
+        const pageStart = options.pageStart ?? 1;
+        const pageEnd = options.pageEnd ?? pages.length;
+        if (pageStart < 1 || pageEnd < pageStart || pageStart > pages.length) {
+          warnings.push(`Skipping "${src.path}" - invalid page range ${pageStart}-${pageEnd} for a ${pages.length}-page PDF.`);
+          continue;
+        }
+        const boundedPageEnd = Math.min(pageEnd, pages.length);
+        rawText = joinPdfPages(pages.slice(pageStart - 1, boundedPageEnd), pageStart);
+        pageMetadata = {
+          pageCount: pages.length,
+          pageStart,
+          pageEnd: boundedPageEnd,
+          nextPage: boundedPageEnd < pages.length ? boundedPageEnd + 1 : undefined,
+        };
       } else {
+        if (options.pageStart !== undefined || options.pageEnd !== undefined) {
+          warnings.push(`Skipping "${src.path}" - page ranges can only be used with PDF sources.`);
+          continue;
+        }
         rawText = fs.readFileSync(absPath, 'utf-8');
       }
 
       const remaining = SESSION_TOKEN_CAP - totalTokens;
-      const perSourceCap = Math.min(PER_SOURCE_TOKEN_CAP, remaining);
+      const requestedCap = options.maxTokens ?? PER_SOURCE_TOKEN_CAP;
+      const perSourceCap = Math.min(PER_SOURCE_TOKEN_CAP, remaining, requestedCap);
       const { text, truncated } = truncateToTokens(rawText, perSourceCap);
       const sessionCapHit = remaining < PER_SOURCE_TOKEN_CAP && truncated;
 
@@ -185,15 +383,18 @@ export async function loadSources(
 
       const tokens = estimateTokens(text);
       totalTokens += tokens;
-      loaded.push({ path: src.path, content: text, truncated });
+      loaded.push({ path: src.path, content: text, truncated, ...pageMetadata });
       log.info('loaded source', { path: src.path, tokens, truncated });
     } catch (err) {
       warnings.push(`Failed to read "${src.path}": ${(err as Error).message}.`);
     }
   }
 
-  const loadedBytes = loaded.reduce((sum, s) => sum + Buffer.byteLength(s.content, 'utf8'), 0);
-  const transportRisk = loadedBytes > TRANSPORT_SAFE_BYTES;
+  const serializedSourceBytes = loaded.reduce(
+    (sum, source) => sum + Buffer.byteLength(JSON.stringify(source.content), 'utf8'),
+    0
+  );
+  const transportRisk = serializedSourceBytes > TRANSPORT_SAFE_SERIALIZED_BYTES;
 
   return { sources: loaded, warnings, totalTokens, transportRisk };
 }

@@ -33,28 +33,38 @@ runtimes: your equivalent isolated-context mechanism). The subagent starts cold,
 its prompt must be **self-contained**: include the note path, the steps below, and
 the Figure Map rules verbatim. Instruct the subagent to:
 
-1. `cricknote tool compile_reading_note '{"path":"Reading/Papers/<slug>.md"}'`
-   — returns source text, with `--- page N ---` markers between PDF pages (use them
-   to note which page each figure is on). If the result has
-   `transport_truncation_risk: true`, treat the compiled text as possibly clipped
-   and say so in the summary.
-2. Draft the **Figure Map** AND the CREATE sections (Claims, Reasoning, Evidence,
+1. `cricknote tool inspect_reading_note_sources '{"path":"Reading/Papers/<slug>.md"}'`
+   - returns source size, PDF page count, extracted caption locations, extraction
+   quality warnings, supplementary-source coverage, and safe page ranges without
+   returning the paper text. Treat missing supplements and extraction warnings as
+   explicit limitations; do not infer unseen supplementary panels.
+2. Compile each recommended PDF range separately:
+   `cricknote tool compile_reading_note '{"path":"Reading/Papers/<slug>.md","source_path":"paper.pdf","page_start":1,"page_end":8,"max_tokens":8000}'`
+   - repeat for every recommended range. Page markers retain the PDF's original
+   page numbers. For non-PDF sources, compile one `source_path` at a time with
+   `max_tokens` at or below 8000. If any response still has
+   `transport_truncation_risk: true` or `truncated: true`, use a smaller range.
+3. Draft the **Figure Map** AND the CREATE sections (Claims, Reasoning, Evidence,
    Assumptions, Takeaways, Extensions), following the Figure Map rules below.
-3. Write it: `cricknote tool vault_write_body '{"path":"Reading/Papers/<slug>.md","body":"<note body>"}'`
+4. Write it: `cricknote tool vault_write_body '{"path":"Reading/Papers/<slug>.md","body":"<note body>"}'`
    — preserves the frontmatter (authors, sources, etc.); supply only the body
    (Figure Map + CREATE sections). Use `vault_write` only when creating a file from scratch.
-4. Return ONLY: the note path, the drafted body, and a 2–3 line summary (figure
+5. Return ONLY: the note path, the drafted body, and a 2–3 line summary (figure
    count, claim count, any `?` cells or warnings). Do NOT return the compiled paper
    text — that is the whole point of the isolation.
 
 **Figure Map rules** (goes at the top, before `## Claims`):
-- One row per figure, table, or supplementary panel referenced in the compiled text
+- One row per figure, table, or supplementary panel whose caption or experimental
+  description is present in an attached source. A citation to an unavailable
+  supplement is a warning, not enough evidence to create a row.
 - **Figure**: exact label as it appears in the paper (Fig 1, Fig 2A, Table 2, Suppl. S1, etc.)
 - **What it shows**: one factual sentence — what experiment was done and what data it produced
 - **Significance**: one sentence on which conclusion of THIS paper this figure proves or challenges.
   Draw only from the paper's own abstract, results, and discussion — no cross-paper comparisons
   unless the paper explicitly states them. Write `?` if the paper does not explain the figure's role.
 - Mark any cell `?` where the caption text was too unclear to fill accurately
+- Never reconstruct a missing supplementary caption from scattered main-text
+  references. Record the missing supplement in the summary instead.
 - Order: main figures by label number (Fig 1, Fig 2...), then supplementary panels (Suppl. S1...)
 - Where panel labels are separate experiments (Fig 2A vs Fig 2B), use one row per panel
 - If no figures are found (review, theory, or methods paper): leave `## Figure Map` with a single line:
@@ -65,7 +75,7 @@ for review. The note stays `draft` until the user confirms — minor edits go th
 `vault_write_body` on the (small) note; only "re-read the paper" warrants
 re-dispatching the subagent. The raw paper never enters this (parent) context.
 
-If your runtime has no subagent mechanism, run steps 1–3 inline instead — you lose
+If your runtime has no subagent mechanism, run steps 1–4 inline instead — you lose
 the context isolation but the written note is identical.
 
 ## Check status

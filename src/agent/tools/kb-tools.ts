@@ -5,7 +5,7 @@ import matter from 'gray-matter';
 import type Database from 'better-sqlite3';
 import type { ToolHandler } from './registry.js';
 import { resolveVaultPath } from '../../utils/paths.js';
-import { loadSources } from '../../knowledge/source-loader.js';
+import { inspectSources, loadSources } from '../../knowledge/source-loader.js';
 import {
   hasCreateHeadings,
   inferReadingPipelineStep,
@@ -46,7 +46,7 @@ export function createKbTools(
       definition: {
         name: 'compile_reading_note',
         description:
-          'Load all source files attached to a reading note and return their content so you can draft the CREATE sections (Claims, Reasoning, Evidence, Assumptions, Takeaways, Extensions). After calling this tool, draft the filled-in reading note body and call vault_write to propose it.',
+          'Load attached reading sources, optionally one PDF page range at a time, so you can draft the Figure Map and CREATE sections. Use inspect_reading_note_sources first for large PDFs, then write the result with vault_write_body.',
         parameters: {
           type: 'object',
           properties: {
@@ -54,11 +54,48 @@ export function createKbTools(
               type: 'string',
               description: 'Relative vault path to the reading note (e.g. "Reading/Papers/smith-2026-il42-signalling.md")',
             },
+            source_path: {
+              type: 'string',
+              description: 'Optional source path from the note frontmatter. Use this to compile one attachment at a time.',
+            },
+            page_start: {
+              type: 'number',
+              description: 'Optional first PDF page to load (1-indexed, inclusive).',
+            },
+            page_end: {
+              type: 'number',
+              description: 'Optional last PDF page to load (1-indexed, inclusive).',
+            },
+            max_tokens: {
+              type: 'number',
+              description: 'Optional response cap for loaded source text. Use 8000 or less unless source inspection recommends otherwise.',
+            },
+            include_note_body: {
+              type: 'boolean',
+              description: 'Include the existing reading-note body in the response. Defaults to false to reduce transport size.',
+            },
           },
           required: ['path'],
         },
       },
       execute: async (args) => {
+        const pageStart = args.page_start as number | undefined;
+        const pageEnd = args.page_end as number | undefined;
+        const maxTokens = args.max_tokens as number | undefined;
+        const includeNoteBody = args.include_note_body === true;
+        if (pageStart !== undefined && (!Number.isInteger(pageStart) || pageStart < 1)) {
+          return JSON.stringify({ error: 'page_start must be a positive integer.' });
+        }
+        if (pageEnd !== undefined && (!Number.isInteger(pageEnd) || pageEnd < 1)) {
+          return JSON.stringify({ error: 'page_end must be a positive integer.' });
+        }
+        if (pageStart !== undefined && pageEnd !== undefined && pageEnd < pageStart) {
+          return JSON.stringify({ error: 'page_end must be greater than or equal to page_start.' });
+        }
+        if (maxTokens !== undefined && (!Number.isInteger(maxTokens) || maxTokens < 1000 || maxTokens > 20000)) {
+          return JSON.stringify({ error: 'max_tokens must be an integer between 1000 and 20000.' });
+        }
+
         let notePath: string;
         try {
           notePath = resolveVaultPath(vaultPath, args.path as string);
@@ -96,18 +133,29 @@ export function createKbTools(
           sources as Array<{ type: string; path: string }>,
           sourceSlug,
           vaultPath,
-          attachmentsDir
+          attachmentsDir,
+          {
+            sourcePath: typeof args.source_path === 'string' ? args.source_path : undefined,
+            pageStart,
+            pageEnd,
+            maxTokens,
+          }
         );
 
         const warnings = result.transportRisk
           ? [
               ...result.warnings,
-              `Loaded source content is large (~${result.totalTokens} tokens); the full response may be clipped in transport even though no source was truncated. If drafted sections look incomplete, split the source into smaller files and re-run.`,
+              `Loaded source content is large after JSON serialization; the full response may be clipped in transport even though no source was truncated. Run inspect_reading_note_sources, then re-run compile_reading_note with its recommended page ranges and max_tokens at or below 8000.`,
             ]
           : result.warnings;
 
         return JSON.stringify({
-          note: { path: args.path, frontmatter: fm, body: parsed.content },
+          note: {
+            path: args.path,
+            frontmatter: fm,
+            ...(includeNoteBody ? { body: parsed.content } : {}),
+          },
+          note_body_omitted: !includeNoteBody,
           status: readingStatus,
           kb_status: kbStatus,
           has_create_headings: hasCreateSections,
@@ -117,7 +165,70 @@ export function createKbTools(
           warnings,
           totalTokens: result.totalTokens,
           transport_truncation_risk: result.transportRisk,
-          instruction: `Draft the CREATE sections (Claims, Reasoning, Evidence, Assumptions, Takeaways, Extensions) based on the source content above. Then call vault_write with the complete reading note including filled-in sections. Preserve all existing frontmatter fields. Do NOT mark status: complete — the user will do that after reviewing.`,
+          selection: {
+            source_path: typeof args.source_path === 'string' ? args.source_path : undefined,
+            page_start: pageStart,
+            page_end: pageEnd,
+            max_tokens: maxTokens,
+          },
+          instruction: `Draft the CREATE sections (Claims, Reasoning, Evidence, Assumptions, Takeaways, Extensions) and Figure Map based on the source content above. Then call vault_write_body with only the completed note body. Do NOT mark status: complete - the user will do that after reviewing.`,
+        });
+      },
+    },
+    {
+      definition: {
+        name: 'inspect_reading_note_sources',
+        description:
+          'Inspect a reading note\'s attached sources without returning the full paper. Reports PDF page counts, estimated tokens, caption locations, extraction-quality warnings, missing supplementary coverage, and safe page ranges for compile_reading_note.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: {
+              type: 'string',
+              description: 'Relative vault path to the reading note.',
+            },
+          },
+          required: ['path'],
+        },
+      },
+      execute: async (args) => {
+        let notePath: string;
+        try {
+          notePath = resolveVaultPath(vaultPath, args.path as string);
+        } catch {
+          return JSON.stringify({ error: `Invalid path: "${args.path}"` });
+        }
+        if (!fs.existsSync(notePath)) {
+          return JSON.stringify({ error: `File not found: ${args.path}` });
+        }
+
+        const parsed = matter(fs.readFileSync(notePath, 'utf-8'));
+        const sources = parsed.data.sources;
+        if (!Array.isArray(sources) || sources.length === 0) {
+          return JSON.stringify({
+            path: args.path,
+            sources: [],
+            warnings: ['No sources listed in frontmatter.'],
+            next_step: 'needs_sources',
+          });
+        }
+
+        const sourceSlug = path.basename(notePath, '.md');
+        const inspection = await inspectSources(
+          sources as Array<{ type: string; path: string }>,
+          sourceSlug,
+          vaultPath,
+          attachmentsDir
+        );
+        const sourceWarnings = inspection.sources.flatMap((source) =>
+          source.warnings.map((warning) => `${source.path}: ${warning}`)
+        );
+
+        return JSON.stringify({
+          path: args.path,
+          sources: inspection.sources,
+          warnings: [...inspection.warnings, ...sourceWarnings],
+          instruction: 'Compile each recommended PDF page range separately with compile_reading_note. Do not create Figure Map rows for supplementary items unless their captions or source files are present.',
         });
       },
     },
