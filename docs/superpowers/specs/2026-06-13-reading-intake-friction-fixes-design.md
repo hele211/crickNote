@@ -1,7 +1,7 @@
 # CrickNote Spec: Reading-Intake Friction Fixes
 
 **Date:** 2026-06-13
-**Status:** Phases 1, 2b, 3 implemented on branch `feat/reading-intake-friction-fixes`; Phase 2a (pagination) and Phase 4 (zotero_intake) deferred after a value re-assessment (see §4).
+**Status:** Phases 1, 2b, 3 shipped on branch `feat/reading-intake-friction-fixes`. Pagination (Phase 2a) was subsequently **built — redesigned as per-PDF-page ranges** — together with a source inspector, serialized-byte transport sizing, subagent-isolated analysis, and a hash-stamped PDF-text cache (rounds 2–3, see **§9**). Phase 4 (`zotero_intake`) remains deferred.
 **Scope:** Remove six friction points in the reading-intake pipeline surfaced by real-usage feedback (analysing a 20-page paper from Zotero): a too-low source-text cap, a documented Zotero path that produces an un-compilable note, logs contaminating stdout JSON, awkward `zotero_prepare_bundle` ergonomics, no section-level write, and figure-locating during Figure Map drafting. Adds a thin `zotero_intake` orchestrator and a body-only write tool.
 **Depends on:** Spec 2 — Knowledge Base Workflow (CREATE/compile), Zotero Integration (2026-04-18), Figure Map (2026-06-13)
 **Does NOT touch:** DB schema, KB pipeline (`kb_suggest`/`kb_apply`/mapping artifacts), serial numbering, the CREATE acronym framework, frontmatter field set
@@ -26,7 +26,7 @@ Feedback from an end-to-end intake of a single paper identified six friction poi
 ## 2. Decisions (resolved during brainstorming)
 
 1. **Orchestration:** *Fix the seams + add a thin wrapper.* The discrete tools (`fetch`/`prepare_bundle`/`ingest`/`compile`) are well-factored and individually useful (abstract-only mode, multi-file bundles, re-ingest). Fix every seam so the manual chain is painless, then add a thin `zotero_intake` that calls the same three internally for the common one-call case. Discrete tools stay public. (Rejected: thick orchestrator that hides the steps and concentrates partial-failure recovery in one tool.)
-2. **Truncation (#1):** *Raise caps so a normal paper returns whole in one call; add `offset`/`max_tokens` as the escape hatch* for the rare overflow. (Rejected: pagination-first — too many round-trips for the 95% case.)
+2. **Truncation (#1):** *Raise caps so a normal paper returns whole in one call; add `offset`/`max_tokens` as the escape hatch* for the rare overflow. (Rejected: pagination-first — too many round-trips for the 95% case.) **[Revised in round 2 — see §9. Real usage showed the limiting factor is the serialized transport size, not the token cap: a 29k-token paper reported `truncated:false` yet was clipped. Pagination was therefore built after all, as per-PDF-page ranges.]**
 3. **Figure input (#6):** *Page markers now, noise-stripping deferred.* Raising the caps removed the token-budget rationale for risky heuristic stripping of scientific text (α/β/γ, equations, data tables). Page boundaries give most of the locating benefit at zero content-loss risk.
 4. **Body-only write (#5):** *`vault_write_body` (whole body, frontmatter preserved)*, not surgical per-section replace — the agent drafts all 7 sections (Figure Map + 6 CREATE) at once, so one call / one confirmation beats N confirmations.
 5. **`create_reading_note` (#2):** *Repoint the skill to `ingest_reading_bundle` AND make `create_reading_note` defensive* (auto-discover bundle files when `sources` omitted and a bundle exists). Keeps `create`'s legitimate "note before any files" capability while closing the footgun.
@@ -54,7 +54,7 @@ Four phases, ordered by risk. Each is independently shippable and TDD-tested (vi
 
 ### Phase 2 — `compile` pagination + page markers (#1b, #6)
 
-**2a · Pagination (DEFERRED — see §4).** `compile_reading_note` and `loadSources` gain optional `offset` (token offset into the compiled source stream, default 0) and `max_tokens` (per-call budget override, default = session cap). The payload gains a top-level `truncated: boolean`, `next_offset: number | null` (null when exhausted), and `tokens_remaining: number`, so overflow is unmistakable and pageable. Pagination operates over the concatenated source text in existing priority order (`notes → pdf → notebooklm → web → other`).
+**2a · Pagination (SHIPPED in round 3 — redesigned as per-PDF-page ranges; see §9. The token-offset design below was superseded.)** `compile_reading_note` and `loadSources` gain optional `offset` (token offset into the compiled source stream, default 0) and `max_tokens` (per-call budget override, default = session cap). The payload gains a top-level `truncated: boolean`, `next_offset: number | null` (null when exhausted), and `tokens_remaining: number`, so overflow is unmistakable and pageable. Pagination operates over the concatenated source text in existing priority order (`notes → pdf → notebooklm → web → other`).
 
 **2b · Page markers (SHIPPED).** Switch `extractPdf` to per-page extraction (`pdf-parse` `pagerender` / page callback) and join with `\n\n--- page N ---\n\n` separators. **No content removed.** Helps the LLM cite "Fig 3 is on page 7" while drafting the Figure Map.
 
@@ -79,7 +79,7 @@ New `zotero_intake { citekey? , doi?, zotero_key?, slug?, related_projects?, …
 
 ## 4. Deferred (explicitly out of scope)
 
-- **Phase 2a — `compile` pagination (`offset`/`max_tokens`)** — deferred after raising the session cap to 50k: a normal paper (~29k tokens) now returns whole in one call, so pagination only matters for >50k monsters (rare). Revisit if such papers appear. The `truncated` flag + warning still signal overflow.
+- **Phase 2a — `compile` pagination** — **SHIPPED in round 3 (redesigned).** Initially deferred on the assumption that a 50k cap made a ~29k-token paper return whole; real usage showed the true limit is transport size, not the token cap (a 29k-token paper reported `truncated:false` yet was clipped downstream). Built as **per-PDF-page ranges** (`page_start`/`page_end`) rather than token offsets, since figures/citations are page-anchored. See **§9**.
 - **Phase 4 — `zotero_intake` orchestrator** — deferred: with the seams (#2/#3/#4) fixed, the manual fetch → prepare_bundle → ingest chain is already painless. The one-call wrapper is convenience, not friction-removal, and is the largest/riskiest build (cross-module composition + http-mocked tests). The `vault_pdf_dir` path-coupling guard travels with it.
 - **#6 figure noise-stripping** — dropping garbled panel lines while keeping legends. Deferred to a separate, carefully-validated pass (must not eat α/β/γ, equations, or data tables). Raising the caps removed its urgency.
 - **Section-addressed `vault_replace_section`** — superseded by `vault_write_body` for the reading-note use case; revisit only if surgical single-section edits are needed elsewhere.
@@ -102,6 +102,8 @@ A pre-implementation pass confirmed feasibility and surfaced these notes — fol
 ---
 
 ## 6. What Changes
+
+> **As-built note:** the Phase 2a rows below describe the original token-offset design. Pagination shipped as **per-PDF-page ranges** plus an inspector and a PDF-text cache; see **§9** for the authoritative as-built change list. The Phase 1/2b/3 rows are accurate as shipped.
 
 ### `src/knowledge/source-loader.ts` (Phase 1a, 2a, 2b)
 - Replace the fixed 10k per-source *ceiling* so a single source can use the remaining session budget; raise `SESSION_TOKEN_CAP` to `50_000`.
@@ -161,3 +163,35 @@ A pre-implementation pass confirmed feasibility and surfaced these notes — fol
 **Why keep `create_reading_note` at all?** `ingest_reading_bundle` requires an existing bundle; `create` uniquely supports notes with no files yet (Threads, deferred captures). Making it defensive closes the footgun without losing that capability.
 
 **Why logs to stderr (all levels), not just gated?** A CLI whose contract is "stdout = JSON result" must keep stdout pristine. Mixing any log line breaks `json.load`. stderr is the correct sink for all diagnostics; the optional log file already captures everything for later inspection.
+
+---
+
+## 9. Revision — rounds 2–3 (shipped 2026-06-14/15, same branch)
+
+Re-running the full-paper analysis through the agent bridge **reversed Decision #2 and §4's pagination deferral.** Evidence: a ~29,575-token paper reported `truncated: false` (it fit the 50,000-token cap) yet arrived clipped. The limiting factor is the **serialized response size over the CLI/agent transport (~64 KB), not the internal token cap.** Silent truncation behind a green `truncated:false` is a correctness risk, so pagination became a reliability fix (not an optimisation) — and was built in a better shape than §2a proposed.
+
+### Round 2 — transport-risk signal + context isolation (`864f654`, `fb22853`)
+
+- **Lean applied-write result.** `runTool` strips the bulky `newContent` from an applied write's echoed result and returns `bytesWritten` instead (apply path only; the preview/`apply:false` path still returns the full pending edit for diffing). Applying a large `vault_write_body` no longer re-sends the whole note. ([tool-dispatch.ts](../../../src/cli/tool-dispatch.ts), [apply-edit.ts](../../../src/cli/apply-edit.ts))
+- **Dotfile-safe discovery.** `discoverBundle` ignores dotfiles, so CrickNote's own `.zotero-bundle` marker stops tripping an "unsupported file" warning on a file it wrote. ([reading-bundle.ts](../../../src/knowledge/reading-bundle.ts))
+- **Transport-risk signal (interim).** `loadSources` reports `transportRisk` and `compile_reading_note` surfaces `transport_truncation_risk`, making clip risk explicit next to `truncated:false`. (Threshold refined in round 3 to serialized bytes — see below.)
+- **Subagent-isolated analysis.** The reading-intake skill runs compile → draft → write inside a subagent so the large source text lives in the subagent's context and never persists into the parent (KB mapping reads the drafted note, not the raw paper, so it's dead weight afterward). Returns body + summary only; inline fallback when no subagent mechanism exists. ([SKILL.md](../../../skills/cricknote-reading-intake/SKILL.md))
+
+### Round 3 — pagination + inspector + cache (`c3964a4`, `46a3415`)
+
+- **Per-PDF-page pagination (supersedes §2a's token-offset design).** `compile_reading_note` gains `source_path` / `page_start` / `page_end` / `max_tokens`; page markers preserve the PDF's **original** page numbers; the payload carries `next_page` and a `selection` echo. Page ranges beat a token offset over the concatenated stream because figures and citations are page-anchored. The existing note body is omitted by default (`include_note_body` opt-in). ([source-loader.ts](../../../src/knowledge/source-loader.ts), [kb-tools.ts](../../../src/agent/tools/kb-tools.ts))
+- **Serialized-byte transport sizing.** Transport risk and recommended ranges are measured from `JSON.stringify` bytes, not raw text length — control characters in corrupted PDF extractions expand ~6× when JSON-escaped, so a "small" source can still overflow. Constants: `TRANSPORT_SAFE_SERIALIZED_BYTES = 40_000`, `RECOMMENDED_RANGE_SERIALIZED_BYTES = 32_000`, under the observed ~64 KB bridge ceiling (a heuristic — re-tune if the transport changes).
+- **`inspect_reading_note_sources` (new tool).** Reports page count, caption locations, a control-char extraction-quality warning, a missing-supplement warning, and byte-safe recommended page ranges — **without returning the paper text.** The skill drives inspect → per-range compile inside the subagent.
+- **Caption detection broadened to Nature/Cell styles** (`Figure N |`, `Fig N:`, spelled-out `Figure`), used *conservatively*: a guardrail so the Figure Map never invents rows for cited-but-unattached supplements, **not** authoritative caption extraction. Figure Map rules updated to record a missing supplement as a warning instead of reconstructing it from scattered main-text mentions. (Relates to the Figure Map spec, 2026-06-13.)
+- **PDF extraction cache.** `extractPdfPages` persists per-page text to a hash-stamped, human-readable `<name>.extracted.md` next to the PDF and reuses it keyed by the PDF's sha256 — so `inspect` and each page-range call (separate CLI processes) skip re-parsing. A degenerate (no-text) parse is **not** cached (a transient failure must not poison later reads); `discoverBundle` ignores `*.extracted.md` so the artifact is never re-ingested as a source; a hash or page-count mismatch forces re-extraction. The artifact doubles as a readable, hand-correctable, searchable record of what the analysis read. ([source-loader.ts](../../../src/knowledge/source-loader.ts))
+
+### Test note
+
+`tests/unit/pdf-extraction.test.ts` builds an in-memory multi-page PDF (xref entries must use **CRLF** — pdf.js rejects the space+LF form as "bad XRef entry") and retries extraction, because pdf-parse's vendored pdf.js flakes on the first parse(s) in a vitest worker before settling. A real CLI run does a single parse per fresh process and is unaffected.
+
+### Still deferred (updates §4)
+
+- **Phase 4 — `zotero_intake` wrapper** — unchanged: with the seams fixed the manual chain is painless; the wrapper is convenience, and the `vault_pdf_dir` path-coupling guard travels with it.
+- **Supplement auto-import** — we now *warn* when a paper cites supplements that aren't attached; auto-copying them is deferred (supplements are large and image-heavy — they would blow the budget and extract poorly; discover/surface, don't auto-load).
+- **KB-mapping subagent isolation** — smaller follow-up; `kb_suggest` already reads the small drafted note, not the raw paper.
+- **#6 figure noise-stripping** and **forced template migration** — unchanged from §4.
