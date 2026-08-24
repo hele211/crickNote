@@ -39,6 +39,13 @@ cricknote reindex                    # refresh the search index after manual edi
 
 Writes go through `cricknote tool`, which allocates serial IDs, renders templates, writes atomically, records an audit log and changelog, and updates the search index.
 
+### Optional: automatic voice memo checks (macOS)
+
+`scripts/voice-memo-watch/` sets up a scheduled, unattended check (default
+every 2 hours) that hands new voice-memo transcripts to Claude Code so
+`cricknote-voice-memo` logs them without you opening the agent yourself. See
+`scripts/voice-memo-watch/README.md` for setup.
+
 ## Run Checks
 
 ```bash
