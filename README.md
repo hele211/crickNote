@@ -27,6 +27,7 @@ Open Claude Code or Codex **in your vault directory** and talk to it normally:
 > "Start a western blot experiment in project P001 and log that I began the lysis step."
 > "Import this Zotero paper and draft a reading note."
 > "What experiments did I leave unfinished?"
+> "Here's my voice memo from the last couple hours — log it and pull out any action items."
 
 The agent discovers and calls CrickNote's tools via the CLI:
 

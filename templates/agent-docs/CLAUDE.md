@@ -49,3 +49,4 @@ See the skills in `.claude/skills/cricknote-*`. Summary:
 - Map a source into the knowledge base → `cricknote-kb-update`
 - Daily/weekly review → `cricknote-daily-review`
 - Push tasks to Apple Reminders → `cricknote-reminders`
+- Log a voice memo → `cricknote-voice-memo`

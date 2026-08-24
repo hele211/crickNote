@@ -5,6 +5,11 @@ description: Use when the user wants a review of open lab work — unfinished ex
 
 # Daily / weekly review in CrickNote
 
+## Voice memo intake
+If the user has a voice memo to log first, run that through
+cricknote-voice-memo before the review below — the review reads today's
+diary, so logging first means it's reflected in the summary.
+
 ## Refresh first
 Run `cricknote reindex` to absorb manual Obsidian edits.
 
