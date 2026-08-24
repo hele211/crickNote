@@ -26,6 +26,7 @@ Run `cricknote reindex` to absorb manual Obsidian edits.
 
 Projects `Projects/P###-<slug>/`, experiments `<PREFIX>###`, series `<PREFIX>S###`,
 protocols `PR###`, reading `Reading/Papers|Threads/`, knowledge
-`Knowledge/Concepts|Entities|Methods/`, diary `Memory/Daily/<date>.md`.
+`Knowledge/Concepts|Entities|Methods/`, diary `Memory/Daily/<date>.md`,
+voice memos `Memory/VoiceMemos/<date>.md`.
 
 Skills live in `.agents/skills/cricknote-*`.

@@ -7,14 +7,15 @@ description: Use when the user wants a review of open lab work — unfinished ex
 
 ## Voice memo intake
 If the user has a voice memo to log first, run that through
-cricknote-voice-memo before the review below — the review reads today's
-diary, so logging first means it's reflected in the summary.
+cricknote-voice-memo before the review below, so it's reflected below.
 
 ## Refresh first
 Run `cricknote reindex` to absorb manual Obsidian edits.
 
 ## Gather state
 - `cricknote tool get_today_diary '{}'` and `cricknote tool get_week_plan '{}'`.
+- `cricknote tool vault_read '{"path":"Memory/VoiceMemos/<today>.md"}'` —
+  today's logged voice memos, if any (file-not-found just means none yet).
 - `cricknote tool task_list '{"status":"pending","days":90}'` — open tasks.
 - `cricknote tool vault_list '{"folder":"Projects","status":"in-progress"}'` —
   experiments still open.

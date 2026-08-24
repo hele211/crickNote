@@ -34,6 +34,7 @@ Run `cricknote reindex` once to pick up any edits you made by hand in Obsidian.
 - `Reading/Papers/`, `Reading/Threads/` — reading notes; `Reading/attachments/<slug>/` — PDFs/sources.
 - `Knowledge/Concepts|Entities|Methods/` — knowledge base notes.
 - `Memory/Daily/<date>.md`, `Memory/Weekly/<week>.md` — diary and planning.
+- `Memory/VoiceMemos/<date>.md` — logged voice memos, one file per day.
 
 ## Serial IDs
 
