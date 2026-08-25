@@ -27,9 +27,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Confirm this is really BSD userland, not GNU
+        # `|| true` guards find/touch's own exit status directly, before any
+        # piping — gating it on `head -1` instead (e.g. `cmd | head -1 ||
+        # true`) would always look like success, since head is what exits 0.
+        # An "illegal option" line below is expected and correct: it means
+        # this really is BSD find/touch, not GNU.
         run: |
-          find --version 2>&1 | head -1 || echo "no --version output — that's expected, BSD find doesn't support it"
-          touch --version 2>&1 | head -1 || echo "no --version output — that's expected, BSD touch doesn't support it"
+          { find --version || true; } 2>&1 | head -1
+          { touch --version || true; } 2>&1 | head -1
           bash --version | head -1
 
       - name: Shell syntax check

@@ -71,7 +71,20 @@ STUB
   LOG="$CRICKNOTE_DATA_DIR/voice-memo-watch.log"
 }
 
-run_watch() { timeout 30 bash "$WATCH_SH"; }
+# Runs watch.sh with a 30s watchdog. Not `timeout 30 ...` — macOS ships
+# neither `timeout` nor `gtimeout` by default, only Linux has GNU coreutils'
+# timeout out of the box, so this needed to work without it either way.
+run_watch() {
+  bash "$WATCH_SH" &
+  local pid=$!
+  ( sleep 30; kill -9 "$pid" 2>/dev/null ) &
+  local watchdog=$!
+  wait "$pid"
+  local code=$?
+  kill "$watchdog" 2>/dev/null
+  wait "$watchdog" 2>/dev/null
+  return "$code"
+}
 
 echo "== Scenario 1: first run establishes a baseline, processes nothing =="
 new_sandbox
