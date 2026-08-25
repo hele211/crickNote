@@ -34,10 +34,31 @@ LOG_FILE="$DATA_DIR/voice-memo-watch.log"
 WHISPER_MODEL="${WHISPER_MODEL:-base}"
 SCRATCH_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cricknote-voice-memo.XXXXXX")"
 PROCESSED_DIR="$DROP_FOLDER/processed"
+SETTLE_MINUTES="${CRICKNOTE_VOICE_MEMO_SETTLE_MINUTES:-5}"
 
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$LOG_FILE"; }
 cleanup() { rm -rf "$SCRATCH_DIR"; }
 trap cleanup EXIT
+
+# Advance the state marker to (now - SETTLE_MINUTES), never to "now" itself.
+# Reason: a Recordings-folder file within the last SETTLE_MINUTES is excluded
+# by -mmin below (still mid-sync) but is NOT removed like a drop-folder file
+# would be — it's just left where it is for next time. If the marker jumped
+# to "now", that file's (already-in-the-past) mtime would fall behind it and
+# -newer would exclude it forever, silently losing it, even though it was
+# never actually processed. Keeping the marker SETTLE_MINUTES behind "now"
+# guarantees anything still within the settle window stays eligible.
+# date's relative-time flag differs between BSD (macOS) and GNU (Linux) date,
+# so detect which one this is rather than assuming.
+advance_state() {
+  local target
+  if date -v-1M >/dev/null 2>&1; then
+    target="$(date -v-${SETTLE_MINUTES}M +%Y%m%d%H%M.%S)"
+  else
+    target="$(date -d "-${SETTLE_MINUTES} minutes" +%Y%m%d%H%M.%S)"
+  fi
+  touch -t "$target" "$STATE_FILE"
+}
 
 mkdir -p "$DATA_DIR" "$DROP_FOLDER" "$PROCESSED_DIR"
 
@@ -85,7 +106,7 @@ if [ -z "$VAULT_PATH" ] || [ ! -d "$VAULT_PATH" ]; then
 fi
 
 if [ ! -f "$STATE_FILE" ]; then
-  touch "$STATE_FILE"
+  advance_state
   log "first run — baseline set, nothing to process yet"
   exit 0
 fi
@@ -96,13 +117,14 @@ fi
 # this script has no business touching another app's data store. DROP_FOLDER
 # is ours, so processed files get archived out of the way there.
 #
-# -mmin +5 skips anything touched in the last 5 minutes, in case a recording
-# is still mid-sync from iCloud when this happens to run.
+# -mmin +$SETTLE_MINUTES skips anything touched too recently, in case a
+# recording is still mid-sync from iCloud when this happens to run (see
+# advance_state above for how such a file stays eligible for a later run).
 AUDIO_FILES=()
 if [ -d "$RECORDINGS_DIR" ]; then
   while IFS= read -r -d '' f; do
     AUDIO_FILES+=("$f")
-  done < <(find "$RECORDINGS_DIR" -maxdepth 1 -type f \( -iname '*.m4a' -o -iname '*.caf' \) -newer "$STATE_FILE" -mmin +5 -print0 2>/dev/null)
+  done < <(find "$RECORDINGS_DIR" -maxdepth 1 -type f \( -iname '*.m4a' -o -iname '*.caf' \) -newer "$STATE_FILE" -mmin "+$SETTLE_MINUTES" -print0 2>/dev/null)
 else
   log "NOTE: RECORDINGS_DIR not found at '$RECORDINGS_DIR' — skipping it this run, using DROP_FOLDER only. Run discover.sh to find the real path."
 fi
@@ -119,7 +141,7 @@ done < <(find "$DROP_FOLDER" -maxdepth 1 -type f \( -iname '*.txt' -o -iname '*.
 TOTAL=$(( ${#AUDIO_FILES[@]} + ${#DROP_AUDIO[@]} + ${#DROP_TEXT[@]} ))
 if [ "$TOTAL" -eq 0 ]; then
   log "no new voice memos"
-  touch "$STATE_FILE"
+  advance_state
   exit 0
 fi
 log "found $TOTAL new voice memo file(s): synced=${#AUDIO_FILES[@]} drop-audio=${#DROP_AUDIO[@]} drop-text=${#DROP_TEXT[@]}"
@@ -148,7 +170,7 @@ if ( cd "$VAULT_PATH" && claude -p "$PROMPT" < /dev/null >> "$LOG_FILE" 2>&1 ); 
   log "logged successfully"
   for f in "${DROP_AUDIO[@]}" "${DROP_TEXT[@]}"; do mv "$f" "$PROCESSED_DIR/"; done
   if [ "$FAILED" -eq 0 ]; then
-    touch "$STATE_FILE"
+    advance_state
   else
     log "NOTE: not advancing state file — at least one file failed to transcribe and will be retried next run"
   fi

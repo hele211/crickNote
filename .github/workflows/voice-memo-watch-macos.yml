@@ -1,0 +1,45 @@
+name: voice-memo-watch (macOS)
+
+# scripts/voice-memo-watch/ is written for macOS (BSD find/touch/date, the
+# default /bin/bash) but developed and reviewed on Linux, where those tools
+# behave differently or aren't available at all. This runs its self-test on
+# a real macOS runner so a wrong flag is caught here instead of on someone's
+# actual Mac. It stubs whisper/ffmpeg/claude — no real transcription, vault,
+# or Claude Code login involved, so this only proves the mechanics (file
+# detection, state tracking, error handling), not the real integration.
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/voice-memo-watch/**'
+      - '.github/workflows/voice-memo-watch-macos.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/voice-memo-watch/**'
+      - '.github/workflows/voice-memo-watch-macos.yml'
+  workflow_dispatch: {}
+
+jobs:
+  self-test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Confirm this is really BSD userland, not GNU
+        run: |
+          find --version 2>&1 | head -1 || echo "no --version output — that's expected, BSD find doesn't support it"
+          touch --version 2>&1 | head -1 || echo "no --version output — that's expected, BSD touch doesn't support it"
+          bash --version | head -1
+
+      - name: Shell syntax check
+        run: |
+          bash -n scripts/voice-memo-watch/watch.sh
+          bash -n scripts/voice-memo-watch/discover.sh
+          bash -n scripts/voice-memo-watch/self-test.sh
+
+      - name: Validate launchd plist
+        run: plutil -lint scripts/voice-memo-watch/com.cricknote.voicememowatch.plist
+
+      - name: Run self-test.sh
+        run: bash scripts/voice-memo-watch/self-test.sh

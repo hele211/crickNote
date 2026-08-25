@@ -17,6 +17,13 @@ vault, neither of which this repo has access to.
 - `discover.sh` — read-only. Confirms where Voice Memos actually stores
   recordings on your Mac (the path is a well-known but undocumented
   default — this checks it rather than assuming it).
+- `self-test.sh` — exercises `watch.sh` against stubbed `whisper`/`ffmpeg`/
+  `claude` (no real transcription, vault, or Claude Code login needed).
+  Covers file detection, archiving, and error handling; runs automatically
+  on a macOS CI runner on every change to this folder
+  (`.github/workflows/voice-memo-watch-macos.yml`), and you can run it
+  yourself too: `bash self-test.sh` (takes about a minute — one scenario
+  deliberately waits for a settle window to pass).
 - `com.cricknote.voicememowatch.plist` — a `launchd` agent that runs
   `watch.sh` every 2 hours.
 
