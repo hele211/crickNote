@@ -118,7 +118,9 @@ const HTML_TAG_NAMES =
   + 'pre|progress|rp|rt|ruby|samp|script|section|select|slot|small|source|span|strike|strong|style|sub|summary|sup|svg|table|tbody|td|'
   + 'template|textarea|tfoot|th|thead|time|title|tr|track|tt|ul|var|video|wbr';
 // At most one optional space before "/>": a "\\s*" after the attribute run would overlap it and backtrack quadratically.
-const HTML_TAG = new RegExp(`<\\/?(?:${HTML_TAG_NAMES}|a|b|i|p|q|s|u)(?:\\s+[a-z-]+=[^<>]*)?\\s?\\/?>`, 'i');
+// An attribute value is quoted or has no whitespace, so it cannot overlap the whitespace before "/>" (which would backtrack quadratically).
+const HTML_ATTRIBUTE = '\\s+[a-z-]+=(?:"[^"<>]*"|\'[^\'<>]*\'|[^\\s<>]*)';
+const HTML_TAG = new RegExp(`<\\/?(?:${HTML_TAG_NAMES}|a|b|i|p|q|s|u)(?:${HTML_ATTRIBUTE})*\\s*\\/?>`, 'i');
 
 function scan(body: string): { lines: ScannedLine[]; unclosedFenceLine: number | null } {
   const raw = body.replace(/\r\n?/g, '\n').split('\n');
@@ -235,12 +237,13 @@ function splitSentences(text: string): string[] {
     .filter((s) => countWords(s) >= 3);
 }
 
-function parentheticalTokens(text: string): string[] {
-  const tokens: string[] = [];
-  for (const m of text.matchAll(/\(([^()]*)\)/g)) {
-    for (const t of m[1].split(/[;,]/)) tokens.push(t.trim());
-  }
-  return tokens;
+/** The part of a line that can hold note references: no inline code, no link targets, no Source filename. */
+function visibleForRefs(text: string): string {
+  return text
+    .replace(/`[^`]*`/g, '') // inline code is the escape for scientific symbols
+    .replace(/\]\((?:[^()]|\([^()]*\))*\)/g, ']') // link targets such as complement(C3).csv
+    .replace(/\*\*Source:\*\*.*$/i, '') // the declared Source filename
+    .replace(/^\s*>?\s*Source:.*$/i, '');
 }
 
 function claimRefNumbers(token: string): number[] | null {
@@ -510,9 +513,8 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
     if (!hasLocator(item.text)) {
       add('claim-no-locator', 'warn', item.line, `Claim C${id} has no locator.`, 'Add a locator such as (Fig 2A–E), (Table 1), (Suppl. S3), (PDF p. 7) or (§Methods).');
     }
-    // Evidence IDs are read from any parenthesis that holds a locator or only IDs: "(Fig 2B, E2)" or "(E2)".
-    // A symbol that looks like an ID (the E3 ligase) is written in backticks, which are skipped here.
-    for (const group of item.text.replace(/`[^`]*`/g, '').matchAll(/\(([^()]*)\)/g)) {
+    // Which evidence IDs do claims cite? (Used to find orphan evidence; undefined IDs are reported by the scan below.)
+    for (const group of visibleForRefs(item.text).matchAll(/\(([^()]*)\)/g)) {
       if (!hasLocator(group[1]) && !isIdList(group[1])) continue;
       for (const token of group[1].split(/[;,]/).map((s) => s.trim())) {
         const em = /^E(\d+)$/.exec(token);
@@ -542,12 +544,7 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
     }
   }
   const cited = new Set<number>();
-  for (const ref of evidenceRefs) {
-    cited.add(ref.id);
-    if (!evidenceIds.has(ref.id)) {
-      add('undefined-evidence-ref', 'warn', ref.line, `A claim cites E${ref.id}, which is not defined in Evidence.`, `Define "- **E${ref.id}** …" in ## Evidence or remove the reference. If E${ref.id} is a scientific symbol (the E${ref.id} ligase), write it in backticks.`);
-    }
-  }
+  for (const ref of evidenceRefs) cited.add(ref.id);
   for (const [id, line] of evidenceIds) {
     if (!cited.has(id)) {
       add('orphan-evidence-id', 'info', line, `E${id} is defined but no claim cites it.`, 'Cite it from a claim or drop the ID.');
@@ -559,12 +556,27 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
   // complement component 3 or the E3 ligase, is written in backticks or spelled out; inline code is skipped here.
   const refScope = lines.filter((l) => l.kind === 'prose' || (l.kind === 'fence-body' && l.lang === 'mermaid' && !/^\s*%%/.test(l.text)));
   for (const l of refScope) {
-    const seen = new Set<number>();
-    for (const token of parentheticalTokens(l.text.replace(/`[^`]*`/g, ''))) {
-      for (const num of claimRefNumbers(token) ?? []) {
-        if (!claimIds.has(num) && !seen.has(num)) {
-          seen.add(num);
-          add('undefined-claim-ref', 'warn', l.n, `Reference to C${num}, which is not defined in Claims.`, `Cite an existing claim ID or add the claim. If C${num} is a scientific symbol (complement C${num}), write it in backticks or spell it out.`);
+    const seenClaims = new Set<number>();
+    const seenEvidence = new Set<number>();
+    for (const group of visibleForRefs(l.text).matchAll(/\(([^()]*)\)/g)) {
+      const tokens = group[1].split(/[;,]/).map((s) => s.trim());
+      for (const token of tokens) {
+        for (const num of claimRefNumbers(token) ?? []) {
+          if (!claimIds.has(num) && !seenClaims.has(num)) {
+            seenClaims.add(num);
+            add('undefined-claim-ref', 'warn', l.n, `Reference to C${num}, which is not defined in Claims.`, `Cite an existing claim ID or add the claim. If C${num} is a scientific symbol (complement C${num}), write it in backticks or spell it out.`);
+          }
+        }
+      }
+      // Evidence IDs: a parenthesis that holds a locator or only IDs, "(Fig 2B, E2)" or "(E2)".
+      if (hasLocator(group[1]) || isIdList(group[1])) {
+        for (const token of tokens) {
+          const em = /^E(\d+)$/.exec(token);
+          const num = em ? Number(em[1]) : null;
+          if (num !== null && !evidenceIds.has(num) && !seenEvidence.has(num)) {
+            seenEvidence.add(num);
+            add('undefined-evidence-ref', 'warn', l.n, `Reference to E${num}, which is not defined in Evidence.`, `Define "- **E${num}** …" in ## Evidence or remove the reference. If E${num} is a scientific symbol (the E${num} ligase), write it in backticks.`);
+          }
         }
       }
     }

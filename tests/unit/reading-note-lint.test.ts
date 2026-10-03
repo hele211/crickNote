@@ -783,3 +783,50 @@ describe('lintReadingNote — review round 4 regressions', () => {
     expect(golden.body).not.toMatch(/observed: granzyme B and IFN-gamma fall/);
   });
 });
+
+describe('lintReadingNote — review round 5 regressions', () => {
+  const where = (extra: string): string => mutate(golden.body, 'In this assay, IL-42 lowered', `${extra} In this assay, IL-42 lowered`);
+  const timeIt = (body: string): number => {
+    const started = performance.now();
+    lintReadingNote(body, { sources: golden.sources });
+    return performance.now() - started;
+  };
+
+  it('does not read parentheses in link targets or in the Source filename as references', () => {
+    const link = where('See [raw data](../attachments/complement(C9).csv) for the table.');
+    expect(codes(lintReadingNote(link, { sources: golden.sources }).findings)).not.toContain('undefined-claim-ref');
+    const source = mutate(golden.body, '**Source:** paper.md', '**Source:** paper(C9).pdf');
+    const result = lintReadingNote(source, { sources: ['paper(C9).pdf'] });
+    expect(codes(result.findings)).not.toContain('undefined-claim-ref');
+    expect(codes(result.findings)).not.toContain('source-not-registered');
+    // a real reference right next to a link is still checked
+    const both = where('See [raw data](../a(C9).csv) and the inference (C99).');
+    expect(codes(lintReadingNote(both, { sources: golden.sources }).findings, 'warn')).toContain('undefined-claim-ref');
+  });
+
+  it('still flags ordinary tags written with extra whitespace, without slowing down', () => {
+    for (const html of ['Line one<br  />line two', '<hr\t\t/>', '<input    >', '<img src=x alt="a b" />', "<div class='a b' >text</div>"]) {
+      expect(codes(lintReadingNote(where(html)).findings, 'warn'), html).toContain('html-tag');
+    }
+    const payloads = [
+      `<div x=${' '.repeat(51200)}X`,
+      `<div x="${' '.repeat(51200)}`,
+      `<div ${'a=1 '.repeat(20000)}`,
+      `<br${' '.repeat(51200)}`,
+    ];
+    for (const [i, payload] of payloads.entries()) expect(timeIt(where(payload)), `payload ${i}`).toBeLessThan(200);
+  });
+
+  it('reads evidence references wherever they appear, not only inside claims', () => {
+    const refs = '(Fig 1A, E9)';
+    const reasoning = mutate(golden.body, '1. **Early activation:**', `1. Tracer entered tissue ${refs}. **Early activation:**`);
+    expect(codes(lintReadingNote(reasoning, { sources: golden.sources }).findings, 'warn')).toContain('undefined-evidence-ref');
+    expect(codes(lintReadingNote(where(`Tracer entered tissue ${refs}.`), { sources: golden.sources }).findings, 'warn')).toContain('undefined-evidence-ref');
+    const table = mutate(golden.body, '<!-- No data figures found in compiled sources -->', `| Figure | What it shows | Significance |\n|---|---|---|\n| Fig 1 | Tracer ${refs}. | Shows entry. |`);
+    expect(codes(lintReadingNote(table, { sources: golden.sources }).findings, 'warn')).toContain('undefined-evidence-ref');
+    // escaped symbols and defined IDs stay quiet
+    expect(codes(lintReadingNote(where('The E3 ligase (`E3`) was recruited.'), { sources: golden.sources }).findings)).not.toContain('undefined-evidence-ref');
+    const defined = lintReadingNote(figure.body, { sources: figure.sources });
+    expect(codes(defined.findings)).not.toContain('undefined-evidence-ref');
+  });
+});
