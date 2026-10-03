@@ -830,3 +830,82 @@ describe('lintReadingNote — review round 5 regressions', () => {
     expect(codes(defined.findings)).not.toContain('undefined-evidence-ref');
   });
 });
+
+describe('lintReadingNote — review round 6 regressions', () => {
+  const where = (extra: string): string => mutate(golden.body, 'In this assay, IL-42 lowered', `${extra} In this assay, IL-42 lowered`);
+  const timeIt = (body: string): number => {
+    const started = performance.now();
+    lintReadingNote(body, { sources: golden.sources });
+    return performance.now() - started;
+  };
+  const withClaim = (claim: string): string => {
+    const start = golden.body.indexOf('## Claims\n') + '## Claims\n'.length;
+    return golden.body.slice(0, start) + `\n${claim}\n` + golden.body.slice(golden.body.indexOf('\n- **C2**'));
+  };
+
+  it('HTML attribute matching is not exponential: quoted and unquoted values cannot match the same text', () => {
+    for (const unit of [' x="y"', " x='y'", ' x=y', ' x="y" z=\'w\'']) {
+      for (const n of [24, 400, 20000]) {
+        expect(timeIt(where('<div' + unit.repeat(n))), `${unit} x${n}`).toBeLessThan(250);
+      }
+    }
+    for (const html of ['<div class="a" id=\'b\' hidden=x>text</div>', '<img src=x alt="a b" />', '<a href=\'u\'>t</a>']) {
+      expect(codes(lintReadingNote(where(html)).findings, 'warn'), html).toContain('html-tag');
+    }
+  });
+
+  it('seeded fuzz over tag-like and link-like fragments stays fast (a regex-performance net)', () => {
+    const blocks = [' x="y"', " x='y'", ' x=y', ' x', ' /', '/', '"', "'", '<', '>', ' ', '\t', '=', ' x="', ' a=1',
+      '](', ')', '(', '[[', ']]', '|', '[a', '[[a|', '](x', '(C1', 'E9)', ' (Fig 1A, ', '`', '**Source:** ', ' -- ', ' --> ', ' .-> ', ' x--x '];
+    let seed = 987654;
+    const rand = (n: number): number => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed % n;
+    };
+    let slowest = 0;
+    for (let i = 0; i < 160; i++) {
+      const head = ['<div', '<br', '<a', '[t]', '[[x', '- **C1** [measured] text', '> **Source:**', 'A'][rand(8)];
+      // Half of the cases repeat ONE fragment many times (some thousands of times): the shape that makes ambiguous or
+      // restarting regexes explode, polynomially or exponentially.
+      const line = rand(2) === 0
+        ? head + blocks[rand(blocks.length)].repeat(rand(4) === 0 ? 4000 + rand(16000) : 8 + rand(300))
+        : head + Array.from({ length: 30 + rand(60) }, () => blocks[rand(blocks.length)]).join('').repeat(1 + rand(40));
+      const inMermaid = golden.body + `\n\`\`\`mermaid\nflowchart TB\n${line.replace(/\n/g, ' ')}\n\`\`\`\n`;
+      for (const body of [where(line.replace(/\n/g, ' ')), inMermaid]) {
+        const ms = timeIt(body);
+        slowest = Math.max(slowest, ms);
+        expect(ms, `fuzz case ${i}: ${line.slice(0, 80)}`).toBeLessThan(400);
+      }
+    }
+    expect(slowest).toBeLessThan(400);
+  });
+
+  it('checks references across a whole wrapped claim item, not line by line', () => {
+    const wrapped = withClaim('- **C1** [measured] Tracer entered tissue. (Fig 1A,\n  E9)');
+    expect(codes(lintReadingNote(wrapped, { sources: golden.sources }).findings, 'warn')).toContain('undefined-evidence-ref');
+    const wrappedClaim = withClaim('- **C1** [measured] Tracer entered tissue (C\n  99). (Fig 1A)');
+    expect(codes(lintReadingNote(wrappedClaim, { sources: golden.sources }).findings)).not.toContain('claim-no-locator');
+    const paragraph = where('The result supports the inference (Fig 1A,\nE9) in this assay.');
+    expect(codes(lintReadingNote(paragraph, { sources: golden.sources }).findings, 'warn')).toContain('undefined-evidence-ref');
+    // a defined ID across a wrap is fine
+    const defined = mutate(figure.body, '(Fig 2B, E2)', '(Fig 2B,\n  E2)');
+    expect(codes(lintReadingNote(defined, { sources: figure.sources }).findings)).not.toContain('undefined-evidence-ref');
+  });
+
+  it('does not read references inside Obsidian link targets or nested-parenthesis link destinations', () => {
+    for (const link of [
+      '[[Reading/Complement (C9)|complement note]]',
+      '[[Reading/Complement (C9)]]',
+      '[raw data](../attachments/complement(run(C9)).csv)',
+      '[x](a(b(c(C9))).csv)',
+    ]) {
+      expect(codes(lintReadingNote(where(`See ${link} for the table.`), { sources: golden.sources }).findings), link).not.toContain('undefined-claim-ref');
+    }
+    // the visible label is still checked
+    expect(codes(lintReadingNote(where('See [the inference (C99)](x.csv) here.'), { sources: golden.sources }).findings, 'warn')).toContain('undefined-claim-ref');
+    expect(codes(lintReadingNote(where('See [[Reading/x|the inference (C99)]] here.'), { sources: golden.sources }).findings, 'warn')).toContain('undefined-claim-ref');
+    // unbalanced openers stay linear
+    expect(timeIt(where('](' .repeat(20000)))).toBeLessThan(250);
+    expect(timeIt(where('[[a|' .repeat(20000)))).toBeLessThan(250);
+  });
+});

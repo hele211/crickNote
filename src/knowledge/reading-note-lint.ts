@@ -118,8 +118,9 @@ const HTML_TAG_NAMES =
   + 'pre|progress|rp|rt|ruby|samp|script|section|select|slot|small|source|span|strike|strong|style|sub|summary|sup|svg|table|tbody|td|'
   + 'template|textarea|tfoot|th|thead|time|title|tr|track|tt|ul|var|video|wbr';
 // At most one optional space before "/>": a "\\s*" after the attribute run would overlap it and backtrack quadratically.
-// An attribute value is quoted or has no whitespace, so it cannot overlap the whitespace before "/>" (which would backtrack quadratically).
-const HTML_ATTRIBUTE = '\\s+[a-z-]+=(?:"[^"<>]*"|\'[^\'<>]*\'|[^\\s<>]*)';
+// An attribute value is quoted, or has no whitespace and no quote characters at all. The alternatives are disjoint (a quoted
+// value cannot also match as an unquoted one) and cannot overlap the whitespace before "/>", or matching backtracks exponentially.
+const HTML_ATTRIBUTE = '\\s+[a-z-]+=(?:"[^"<>]*"|\'[^\'<>]*\'|[^\\s"\'<>]*)';
 const HTML_TAG = new RegExp(`<\\/?(?:${HTML_TAG_NAMES}|a|b|i|p|q|s|u)(?:${HTML_ATTRIBUTE})*\\s*\\/?>`, 'i');
 
 function scan(body: string): { lines: ScannedLine[]; unclosedFenceLine: number | null } {
@@ -214,13 +215,58 @@ function stripLocatorGroups(text: string): string {
   return text.replace(/\(([^()]*)\)/g, (match, inner: string) => (hasLocator(inner) || isIdList(inner) ? '' : match));
 }
 
+/** "[[target|alias]]" becomes the alias and "[[target]]" the target. A single forward scan: unterminated openers stay linear. */
+function replaceWikilinks(text: string): string {
+  let out = '';
+  let pos = 0;
+  for (;;) {
+    const open = text.indexOf('[[', pos);
+    if (open < 0) break;
+    const close = text.indexOf(']]', open + 2);
+    if (close < 0) break;
+    const inner = text.slice(open + 2, close);
+    const bar = inner.indexOf('|');
+    out += text.slice(pos, open) + (bar >= 0 ? inner.slice(bar + 1) : inner);
+    pos = close + 2;
+  }
+  return out + text.slice(pos);
+}
+
+/** "[label](target)" becomes "label", with balanced parentheses allowed in the target. Single forward scan. */
+function replaceMarkdownLinks(text: string): string {
+  let out = '';
+  let pos = 0;
+  for (;;) {
+    const open = text.indexOf('[', pos);
+    if (open < 0) break;
+    const close = text.indexOf(']', open + 1);
+    if (close < 0) break; // no later "[" can find a "]" either
+    if (text[close + 1] !== '(') {
+      out += text.slice(pos, close + 1);
+      pos = close + 1;
+      continue;
+    }
+    let depth = 1;
+    let i = close + 2;
+    while (i < text.length && depth > 0) {
+      if (text[i] === '(') depth += 1;
+      else if (text[i] === ')') depth -= 1;
+      i += 1;
+    }
+    if (depth > 0) break; // unbalanced target: keep the rest as it is and never rescan it
+    out += text.slice(pos, open) + text.slice(open + 1, close);
+    pos = i;
+  }
+  return out + text.slice(pos);
+}
+
 function cleanForSentences(text: string): string {
   return stripLocatorGroups(
-    text
-      .replace(/^\s*>\s?/, '')
-      .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '')
-      .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, a: string, b?: string) => b ?? a)
-      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    replaceMarkdownLinks(replaceWikilinks(
+      text
+        .replace(/^\s*>\s?/, '')
+        .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, ''),
+    ))
       .replace(/`([^`]*)`/g, '$1')
       .replace(/\[(?:measured|inferred|proposed)\]/g, '')
       .replace(/\*+/g, '')
@@ -238,10 +284,47 @@ function splitSentences(text: string): string[] {
 }
 
 /** The part of a line that can hold note references: no inline code, no link targets, no Source filename. */
+/** Removes "[[target|alias]]" (keeping the alias) and "[[target]]". A scan, not a regex: unterminated openers stay linear. */
+function stripWikilinks(text: string): string {
+  let out = '';
+  let pos = 0;
+  for (;;) {
+    const open = text.indexOf('[[', pos);
+    if (open < 0) break;
+    const close = text.indexOf(']]', open + 2);
+    if (close < 0) break;
+    const inner = text.slice(open + 2, close);
+    const bar = inner.indexOf('|');
+    out += text.slice(pos, open) + (bar >= 0 ? inner.slice(bar + 1) : '');
+    pos = close + 2;
+  }
+  return out + text.slice(pos);
+}
+
+/** Removes the "(target)" of "[label](target)", including targets with nested parentheses such as "a(run(C3)).csv". */
+function stripLinkTargets(text: string): string {
+  let out = '';
+  let pos = 0;
+  for (;;) {
+    const open = text.indexOf('](', pos);
+    if (open < 0) break;
+    let depth = 1;
+    let i = open + 2;
+    while (i < text.length && depth > 0) {
+      if (text[i] === '(') depth += 1;
+      else if (text[i] === ')') depth -= 1;
+      i += 1;
+    }
+    if (depth > 0) break; // unbalanced: leave the rest untouched (and never rescan it)
+    out += text.slice(pos, open + 1);
+    pos = i;
+  }
+  return out + text.slice(pos);
+}
+
+/** The part of a block that can hold note references: no inline code, links, link targets or Source filename. */
 function visibleForRefs(text: string): string {
-  return text
-    .replace(/`[^`]*`/g, '') // inline code is the escape for scientific symbols
-    .replace(/\]\((?:[^()]|\([^()]*\))*\)/g, ']') // link targets such as complement(C3).csv
+  return stripLinkTargets(stripWikilinks(text.replace(/`[^`]*`/g, ''))) // inline code is the escape for scientific symbols
     .replace(/\*\*Source:\*\*.*$/i, '') // the declared Source filename
     .replace(/^\s*>?\s*Source:.*$/i, '');
 }
@@ -554,7 +637,31 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
   // ---- claim references (prose + Mermaid labels) -----------------------------
   // Claim references are read everywhere (prose and diagram labels). A scientific symbol that looks like an ID, such as
   // complement component 3 or the E3 ligase, is written in backticks or spelled out; inline code is skipped here.
-  const refScope = lines.filter((l) => l.kind === 'prose' || (l.kind === 'fence-body' && l.lang === 'mermaid' && !/^\s*%%/.test(l.text)));
+  // Scanned per block, not per line: a paragraph or list item that wraps ("(Fig 1A,\n  E9)") is one parenthesis.
+  const refScope: Array<{ n: number; text: string }> = [];
+  {
+    let cur: { n: number; text: string } | null = null;
+    for (const l of lines) {
+      if (l.kind === 'fence-body' && l.lang === 'mermaid' && !/^\s*%%/.test(l.text)) {
+        refScope.push({ n: l.n, text: l.text });
+        cur = null;
+        continue;
+      }
+      if (l.kind !== 'prose' || l.text.trim() === '') {
+        cur = null;
+        continue;
+      }
+      const startsItem = /^\s*(?:[-*+]|\d+[.)])\s+/.test(l.text);
+      const standalone = /^#{1,6}\s/.test(l.text) || /^\s*\|/.test(l.text) || /^\s*>/.test(l.text);
+      if (cur && !startsItem && !standalone) {
+        cur.text += ` ${l.text.trim()}`;
+      } else {
+        cur = { n: l.n, text: l.text };
+        refScope.push(cur);
+        if (standalone) cur = null; // headings, table rows and callout lines never absorb the next line
+      }
+    }
+  }
   for (const l of refScope) {
     const seenClaims = new Set<number>();
     const seenEvidence = new Set<number>();
