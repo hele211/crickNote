@@ -856,7 +856,7 @@ describe('lintReadingNote — review round 6 regressions', () => {
 
   it('seeded fuzz over tag-like and link-like fragments stays fast (a regex-performance net)', () => {
     const blocks = [' x="y"', " x='y'", ' x=y', ' x', ' /', '/', '"', "'", '<', '>', ' ', '\t', '=', ' x="', ' a=1',
-      '](', ')', '(', '[[', ']]', '|', '[a', '[[a|', '](x', '(C1', 'E9)', ' (Fig 1A, ', '`', '**Source:** ', ' -- ', ' --> ', ' .-> ', ' x--x '];
+      '](', ')', '(', '[[', ']]', '|', '[a', '[[a|', '](x', '<!--', 'A[', 'A(', 'Source: ', '(C1', 'E9)', ' (Fig 1A, ', '`', '**Source:** ', ' -- ', ' --> ', ' .-> ', ' x--x '];
     let seed = 987654;
     const rand = (n: number): number => {
       seed = (seed * 1103515245 + 12345) & 0x7fffffff;
@@ -868,7 +868,7 @@ describe('lintReadingNote — review round 6 regressions', () => {
       // Half of the cases repeat ONE fragment many times (some thousands of times): the shape that makes ambiguous or
       // restarting regexes explode, polynomially or exponentially.
       const line = rand(2) === 0
-        ? head + blocks[rand(blocks.length)].repeat(rand(4) === 0 ? 4000 + rand(16000) : 8 + rand(300))
+        ? head + blocks[rand(blocks.length)].repeat(rand(4) === 0 ? 4000 + rand(30000) : 8 + rand(300))
         : head + Array.from({ length: 30 + rand(60) }, () => blocks[rand(blocks.length)]).join('').repeat(1 + rand(40));
       const inMermaid = golden.body + `\n\`\`\`mermaid\nflowchart TB\n${line.replace(/\n/g, ' ')}\n\`\`\`\n`;
       for (const body of [where(line.replace(/\n/g, ' ')), inMermaid]) {
@@ -907,5 +907,60 @@ describe('lintReadingNote — review round 6 regressions', () => {
     // unbalanced openers stay linear
     expect(timeIt(where('](' .repeat(20000)))).toBeLessThan(250);
     expect(timeIt(where('[[a|' .repeat(20000)))).toBeLessThan(250);
+  });
+});
+
+describe('lintReadingNote — review round 7 regressions (scaling audit)', () => {
+  const where = (extra: string): string => mutate(golden.body, 'In this assay, IL-42 lowered', `${extra} In this assay, IL-42 lowered`);
+  const inMermaid = (line: string): string => golden.body + `\n\`\`\`mermaid\nflowchart TB\n  ${line}\n\`\`\`\n`;
+  const timeIt = (body: string): number => {
+    const started = performance.now();
+    lintReadingNote(body, { sources: golden.sources });
+    return performance.now() - started;
+  };
+  const withClaimText = (text: string): string => mutate(golden.body, '- **C1** [measured] ', `- **C1** [measured] ${text} `);
+
+  it('is linear on ~100 KB runs of whitespace, comment openers and bracket openers (a doubling audit found 4-18 s here)', () => {
+    const cases: Array<[string, string]> = [
+      ['spaces in a paragraph', where(' '.repeat(100000))],
+      ['tabs in a paragraph', where('\t'.repeat(100000))],
+      ['spaces in a Mermaid line', inMermaid(' '.repeat(100000))],
+      ['tabs in a Mermaid line', inMermaid('\t'.repeat(100000))],
+      ['<!-- x25000 in a paragraph', where('<!--'.repeat(25000))],
+      ['<!-- x25000 in a claim', withClaimText('<!--'.repeat(25000))],
+      ['A[ x50000 in Mermaid', inMermaid('A['.repeat(50000))],
+      ['[a x50000 in Mermaid', inMermaid('[a'.repeat(50000))],
+      ['A( x50000 in Mermaid', inMermaid('A('.repeat(50000))],
+      ['A{{ x30000 in Mermaid', inMermaid('A{{'.repeat(30000))],
+    ];
+    for (const [name, body] of cases) expect(timeIt(body), name).toBeLessThan(300);
+  });
+
+  it('a Source line only hides its own value, not a real reference on the next line', () => {
+    const next = where('Source: paper.pdf\nThe inference follows (C99).');
+    expect(codes(lintReadingNote(next, { sources: golden.sources }).findings, 'warn')).toContain('undefined-claim-ref');
+    const inClaim = withClaimText('Tracer entered tissue.\n  **Source:** paper.pdf\n  The inference follows (C99), supported by (E9).');
+    expect(codes(lintReadingNote(inClaim, { sources: golden.sources }).findings, 'warn')).toContain('undefined-claim-ref');
+    // the declared Source value itself stays hidden
+    const hidden = mutate(golden.body, '**Source:** paper.md', '**Source:** paper(C9).pdf');
+    expect(codes(lintReadingNote(hidden, { sources: ['paper(C9).pdf'] }).findings)).not.toContain('undefined-claim-ref');
+  });
+
+  it('understands escaped parentheses and angle-bracket link targets, and nested brackets in a link label', () => {
+    for (const link of ['[raw data](../run\\(complement(C9).csv)', '[raw data](<../run((C9).csv>)', '[a [b] c](x(y(C9)).csv)']) {
+      expect(codes(lintReadingNote(where(`See ${link} for the table.`), { sources: golden.sources }).findings), link).not.toContain('undefined-claim-ref');
+    }
+    // a link target does not count as sentence text
+    const long = where('See [an [inner] label](' + 'word '.repeat(40).trim() + ') now.');
+    expect(codes(lintReadingNote(long, { sources: golden.sources }).findings)).not.toContain('long-sentence');
+    // the visible label is still read
+    expect(codes(lintReadingNote(where('See [a [b] (C99)](x.csv) here.'), { sources: golden.sources }).findings, 'warn')).toContain('undefined-claim-ref');
+  });
+
+  it('comments: many openers and a real close behave like the single-comment case', () => {
+    const body = where('<!-- one --> visible (C99) <!-- two --> more <!-- three');
+    expect(codes(lintReadingNote(body, { sources: golden.sources }).findings, 'warn')).toContain('undefined-claim-ref');
+    const hidden = where('<!-- (C99) --> fine');
+    expect(codes(lintReadingNote(hidden, { sources: golden.sources }).findings)).not.toContain('undefined-claim-ref');
   });
 });

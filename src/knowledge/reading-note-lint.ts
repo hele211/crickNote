@@ -123,6 +123,26 @@ const HTML_TAG_NAMES =
 const HTML_ATTRIBUTE = '\\s+[a-z-]+=(?:"[^"<>]*"|\'[^\'<>]*\'|[^\\s"\'<>]*)';
 const HTML_TAG = new RegExp(`<\\/?(?:${HTML_TAG_NAMES}|a|b|i|p|q|s|u)(?:${HTML_ATTRIBUTE})*\\s*\\/?>`, 'i');
 
+/**
+ * Removes "<!-- ... -->" comments from one line. A scan with indexOf, not a lazy regex: a regex restarts at every
+ * unterminated "<!--" and is quadratic on a line of repeated openers. `open` is true when the last comment never closes.
+ */
+function stripHtmlComments(text: string): { text: string; open: boolean; had: boolean } {
+  let out = '';
+  let pos = 0;
+  let had = false;
+  for (;;) {
+    const start = text.indexOf('<!--', pos);
+    if (start < 0) break;
+    had = true;
+    const end = text.indexOf('-->', start + 4);
+    if (end < 0) return { text: out + text.slice(pos, start), open: true, had };
+    out += text.slice(pos, start);
+    pos = end + 3;
+  }
+  return { text: out + text.slice(pos), open: false, had };
+}
+
 function scan(body: string): { lines: ScannedLine[]; unclosedFenceLine: number | null } {
   const raw = body.replace(/\r\n?/g, '\n').split('\n');
   const lines: ScannedLine[] = [];
@@ -131,17 +151,12 @@ function scan(body: string): { lines: ScannedLine[]; unclosedFenceLine: number |
 
   // Strip complete comments, then handle a comment that opens and does not close on this line.
   const pushProse = (text: string, n: number): void => {
-    let stripped = text.replace(/<!--[\s\S]*?-->/g, '');
-    const hadComment = stripped !== text;
-    const openIdx = stripped.indexOf('<!--');
-    if (openIdx >= 0) {
-      stripped = stripped.slice(0, openIdx);
-      inComment = true;
-    }
-    if ((hadComment || openIdx >= 0) && stripped.trim() === '') {
+    const r = stripHtmlComments(text);
+    if (r.open) inComment = true;
+    if (r.had && r.text.trim() === '') {
       lines.push({ n, text: '', kind: 'comment' });
     } else {
-      lines.push({ n, text: stripped, kind: 'prose' });
+      lines.push({ n, text: r.text, kind: 'prose' });
     }
   };
 
@@ -232,30 +247,24 @@ function replaceWikilinks(text: string): string {
   return out + text.slice(pos);
 }
 
-/** "[label](target)" becomes "label", with balanced parentheses allowed in the target. Single forward scan. */
+/** "[label](target)" becomes "label" (nested brackets and parentheses allowed). Single forward scan. */
 function replaceMarkdownLinks(text: string): string {
   let out = '';
   let pos = 0;
   for (;;) {
     const open = text.indexOf('[', pos);
     if (open < 0) break;
-    const close = text.indexOf(']', open + 1);
-    if (close < 0) break; // no later "[" can find a "]" either
+    const close = labelEnd(text, open);
+    if (close < 0) break; // unbalanced: keep the rest as it is and never rescan it
     if (text[close + 1] !== '(') {
       out += text.slice(pos, close + 1);
       pos = close + 1;
       continue;
     }
-    let depth = 1;
-    let i = close + 2;
-    while (i < text.length && depth > 0) {
-      if (text[i] === '(') depth += 1;
-      else if (text[i] === ')') depth -= 1;
-      i += 1;
-    }
-    if (depth > 0) break; // unbalanced target: keep the rest as it is and never rescan it
+    const end = linkTargetEnd(text, close + 2);
+    if (end < 0) break;
     out += text.slice(pos, open) + text.slice(open + 1, close);
-    pos = i;
+    pos = end;
   }
   return out + text.slice(pos);
 }
@@ -284,6 +293,46 @@ function splitSentences(text: string): string[] {
 }
 
 /** The part of a line that can hold note references: no inline code, no link targets, no Source filename. */
+/** Index just after the ")" that closes a link target starting at `from` (just after "("), or -1. Handles "\\(" escapes and "<...>" targets. */
+function linkTargetEnd(text: string, from: number): number {
+  if (text[from] === '<') {
+    const gt = text.indexOf('>', from + 1);
+    if (gt < 0) return -1;
+    const close = text.indexOf(')', gt + 1);
+    return close < 0 ? -1 : close + 1;
+  }
+  let depth = 1;
+  let i = from;
+  while (i < text.length && depth > 0) {
+    const ch = text[i];
+    if (ch === '\\') {
+      i += 2;
+      continue;
+    }
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth -= 1;
+    i += 1;
+  }
+  return depth === 0 ? i : -1;
+}
+
+/** Index of the "]" that matches the "[" at `open` (nested brackets allowed), or -1. */
+function labelEnd(text: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '\\') {
+      i += 1;
+    } else if (ch === '[') {
+      depth += 1;
+    } else if (ch === ']') {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
 /** Removes "[[target|alias]]" (keeping the alias) and "[[target]]". A scan, not a regex: unterminated openers stay linear. */
 function stripWikilinks(text: string): string {
   let out = '';
@@ -301,32 +350,33 @@ function stripWikilinks(text: string): string {
   return out + text.slice(pos);
 }
 
-/** Removes the "(target)" of "[label](target)", including targets with nested parentheses such as "a(run(C3)).csv". */
+/** Removes the "(target)" of "[label](target)". An unbalanced target stops the scan, so the rest is never rescanned. */
 function stripLinkTargets(text: string): string {
   let out = '';
   let pos = 0;
   for (;;) {
     const open = text.indexOf('](', pos);
     if (open < 0) break;
-    let depth = 1;
-    let i = open + 2;
-    while (i < text.length && depth > 0) {
-      if (text[i] === '(') depth += 1;
-      else if (text[i] === ')') depth -= 1;
-      i += 1;
-    }
-    if (depth > 0) break; // unbalanced: leave the rest untouched (and never rescan it)
+    const end = linkTargetEnd(text, open + 2);
+    if (end < 0) break;
     out += text.slice(pos, open + 1);
-    pos = i;
+    pos = end;
   }
   return out + text.slice(pos);
 }
 
-/** The part of a block that can hold note references: no inline code, links, link targets or Source filename. */
+/** The part of a block that can hold note references: no inline code, links or link targets. (Source fields are removed per line.) */
 function visibleForRefs(text: string): string {
-  return stripLinkTargets(stripWikilinks(text.replace(/`[^`]*`/g, ''))) // inline code is the escape for scientific symbols
-    .replace(/\*\*Source:\*\*.*$/i, '') // the declared Source filename
-    .replace(/^\s*>?\s*Source:.*$/i, '');
+  return stripLinkTargets(stripWikilinks(text.replace(/`[^`]*`/g, ''))); // inline code is the escape for scientific symbols
+}
+
+/** Drops the declared Source value from one line: "**Source:** x" to the end of that line, or a plain "Source:" line. Linear. */
+function stripSourceField(line: string): string {
+  const marker = line.search(/\*\*Source:\*\*/i);
+  if (marker >= 0) return line.slice(0, marker);
+  const s = line.trimStart();
+  const rest = s.startsWith('>') ? s.slice(1).trimStart() : s;
+  return /^source:/i.test(rest) ? '' : line;
 }
 
 function claimRefNumbers(token: string): number[] | null {
@@ -344,6 +394,7 @@ const MERMAID_LINKS = /<-->|(?<=\s)x--x(?=\s)|(?<=\s)o--o(?=\s)|-\.->|-\.-[xo]|-
 
 const NODE_SHAPES: Array<[open: string, close: string]> = [['([', '])'], ['{{', '}}'], ['((', '))'], ['[', ']'], ['(', ')'], ['{', '}']];
 const SPECIAL_LABEL_CHARS = /[(){}:;,/\\<>]/;
+const SPECIAL_LABEL_CHAR_SCAN = /[(){}:;,/\\<>]/g;
 
 /** True when an edge label or a node/subgraph label that is not in double quotes contains characters Mermaid may misparse. */
 function hasUnquotedSpecialLabel(text: string): boolean {
@@ -355,12 +406,32 @@ function hasUnquotedSpecialLabel(text: string): boolean {
   for (const label of inlineEdgeLabels(labels).labels) {
     if (SPECIAL_LABEL_CHARS.test(label)) return true;
   }
+  // Openers appear in increasing order, so the nearest closer and the nearest special character can be cached:
+  // searching to the end of the line again for every opener is quadratic on a line of unterminated openers.
+  const closers = new Map<string, number>();
+  const nearestCloser = (close: string, from: number): number => {
+    let at = closers.get(close);
+    if (at === undefined || (at !== -1 && at < from)) {
+      at = labels.indexOf(close, from);
+      closers.set(close, at);
+    }
+    return at;
+  };
+  let special = -2; // -2 = not searched yet, -1 = none left
+  const nearestSpecial = (from: number): number => {
+    if (special === -2 || (special !== -1 && special < from)) {
+      SPECIAL_LABEL_CHAR_SCAN.lastIndex = from;
+      special = SPECIAL_LABEL_CHAR_SCAN.exec(labels)?.index ?? -1;
+    }
+    return special;
+  };
   for (const m of labels.matchAll(/\b[A-Za-z_]\w*(\(\[|\{\{|\(\(|\[|\(|\{)/g)) {
     const close = NODE_SHAPES.find(([open]) => open === m[1])![1];
     const start = (m.index ?? 0) + m[0].length;
     if (labels[start] === '"') continue;
-    const end = labels.indexOf(close, start);
-    if (SPECIAL_LABEL_CHARS.test(labels.slice(start, end === -1 ? undefined : end))) return true;
+    const end = nearestCloser(close, start);
+    const at = nearestSpecial(start);
+    if (at !== -1 && (end === -1 || at < end)) return true;
   }
   return false;
 }
@@ -563,12 +634,12 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
       const blank = l.kind === 'prose' && l.text.trim() === '';
       if (blank) continue;
       if (l.kind === 'prose' && /^(?:[-*]|\d+[.)])\s+/.test(l.text)) {
-        cur = { line: l.n, text: l.text };
+        cur = { line: l.n, text: stripSourceField(l.text) };
         claimItems.push(cur);
         inStray = false;
       } else if (l.kind === 'prose' && cur && /^\s+\S/.test(l.text) && !/^\s+(?:(?:[-*+]|\d+[.)])\s|[|>#]|`{3,}|~{3,})/.test(l.text)) {
         // plain indented continuation only: a nested bullet, table, quote or heading is a second structure, not part of the claim
-        cur.text += ` ${l.text.trim()}`;
+        cur.text += ` ${stripSourceField(l.text).trim()}`;
       } else {
         cur = null;
         if (!inStray) {
@@ -654,9 +725,9 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
       const startsItem = /^\s*(?:[-*+]|\d+[.)])\s+/.test(l.text);
       const standalone = /^#{1,6}\s/.test(l.text) || /^\s*\|/.test(l.text) || /^\s*>/.test(l.text);
       if (cur && !startsItem && !standalone) {
-        cur.text += ` ${l.text.trim()}`;
+        cur.text += ` ${stripSourceField(l.text).trim()}`;
       } else {
-        cur = { n: l.n, text: l.text };
+        cur = { n: l.n, text: stripSourceField(l.text) };
         refScope.push(cur);
         if (standalone) cur = null; // headings, table rows and callout lines never absorb the next line
       }
