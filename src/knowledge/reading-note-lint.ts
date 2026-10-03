@@ -292,12 +292,31 @@ function splitSentences(text: string): string[] {
     .filter((s) => countWords(s) >= 3);
 }
 
-/** The part of a line that can hold note references: no inline code, no link targets, no Source filename. */
-/** Index just after the ")" that closes a link target starting at `from` (just after "("), or -1. Handles "\\(" escapes and "<...>" targets. */
+/** Index of the quote that closes the title opened at `open`, or -1. Backslash escapes are honoured. */
+function titleEnd(text: string, open: number): number {
+  const quote = text[open];
+  for (let i = open + 1; i < text.length; i++) {
+    if (text[i] === '\\') i += 1;
+    else if (text[i] === quote) return i;
+  }
+  return -1;
+}
+
+/** Index just after the ")" that closes a link target starting at `from` (just after "("), or -1. Handles "\\(" escapes, "<...>" targets and quoted titles. */
 function linkTargetEnd(text: string, from: number): number {
   if (text[from] === '<') {
     const gt = text.indexOf('>', from + 1);
     if (gt < 0) return -1;
+    let i = gt + 1;
+    while (text[i] === ' ' || text[i] === '\t') i += 1;
+    if (text[i] === '"' || text[i] === "'") {
+      const end = titleEnd(text, i);
+      if (end >= 0) {
+        let j = end + 1;
+        while (text[j] === ' ' || text[j] === '\t') j += 1;
+        if (text[j] === ')') return j + 1;
+      }
+    }
     const close = text.indexOf(')', gt + 1);
     return close < 0 ? -1 : close + 1;
   }
@@ -308,6 +327,13 @@ function linkTargetEnd(text: string, from: number): number {
     if (ch === '\\') {
       i += 2;
       continue;
+    }
+    if ((ch === '"' || ch === "'") && i > from && /\s/.test(text[i - 1])) {
+      const end = titleEnd(text, i); // a title may hold unbalanced parentheses
+      if (end >= 0) {
+        i = end + 1;
+        continue;
+      }
     }
     if (ch === '(') depth += 1;
     else if (ch === ')') depth -= 1;
@@ -370,13 +396,14 @@ function visibleForRefs(text: string): string {
   return stripLinkTargets(stripWikilinks(text.replace(/`[^`]*`/g, ''))); // inline code is the escape for scientific symbols
 }
 
-/** Drops the declared Source value from one line: "**Source:** x" to the end of that line, or a plain "Source:" line. Linear. */
+/** Drops the declared Source value from one line: "**Source:** x" to the end of that line, or a plain "Source:" line. Linear; literal text inside inline code is not a field. */
 function stripSourceField(line: string): string {
-  const marker = line.search(/\*\*Source:\*\*/i);
-  if (marker >= 0) return line.slice(0, marker);
   const s = line.trimStart();
   const rest = s.startsWith('>') ? s.slice(1).trimStart() : s;
-  return /^source:/i.test(rest) ? '' : line;
+  if (/^source:/i.test(rest)) return '';
+  const outsideCode = line.replace(/`[^`]*`/g, '');
+  const marker = outsideCode.search(/\*\*Source:\*\*/i);
+  return marker >= 0 ? outsideCode.slice(0, marker) : line;
 }
 
 function claimRefNumbers(token: string): number[] | null {
@@ -505,8 +532,8 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
   // ---- headings -----------------------------------------------------------
   const headings: Heading[] = [];
   for (const l of prose) {
-    const m = /^##(?!#)\s+(\S.*?)\s*$/.exec(l.text);
-    if (m) headings.push({ name: m[1], line: l.n });
+    const m = /^##(?!#)\s+(\S.*)$/.exec(l.text); // trimmed below: a lazy ".*?" before "\s*$" is quadratic on a long whitespace run
+    if (m) headings.push({ name: m[1].trimEnd(), line: l.n });
   }
   const firstH2Line = headings.length ? headings[0].line : Number.POSITIVE_INFINITY;
 

@@ -964,3 +964,63 @@ describe('lintReadingNote — review round 7 regressions (scaling audit)', () =>
     expect(codes(lintReadingNote(hidden, { sources: golden.sources }).findings)).not.toContain('undefined-claim-ref');
   });
 });
+
+describe('lintReadingNote — review round 8 regressions', () => {
+  const where = (extra: string): string => mutate(golden.body, 'In this assay, IL-42 lowered', `${extra} In this assay, IL-42 lowered`);
+  const timeIt = (body: string): number => {
+    const started = performance.now();
+    lintReadingNote(body, { sources: golden.sources });
+    return performance.now() - started;
+  };
+  const warnCodes = (body: string): string[] => codes(lintReadingNote(body, { sources: golden.sources }).findings, 'warn');
+
+  it('a heading with a long whitespace run followed by text stays linear', () => {
+    const spaces = ' '.repeat(100000);
+    expect(timeIt(mutate(golden.body, '## Extensions', `## Extensions ${spaces}X`))).toBeLessThan(300);
+    expect(timeIt(mutate(golden.body, '## Extensions', `## H ${spaces}X`))).toBeLessThan(300);
+    expect(timeIt(mutate(golden.body, '## Extensions', `##${spaces}X`))).toBeLessThan(300);
+    // the trimmed heading name still matches the layout
+    expect(warnCodes(mutate(golden.body, '## Extensions', '## Extensions   \t '))).not.toContain('missing-heading');
+  });
+
+  it('literal Source text inside inline code does not hide the rest of the line', () => {
+    expect(warnCodes(where('The template uses `**Source:** paper.pdf`; the inference follows (C99).'))).toContain('undefined-claim-ref');
+    expect(warnCodes(where('The template uses `Source: x` and `**Source:**` here (C99).'))).toContain('undefined-claim-ref');
+    // a real Source field still hides its value
+    const hidden = mutate(golden.body, '**Source:** paper.md', '**Source:** paper(C9).pdf');
+    expect(codes(lintReadingNote(hidden, { sources: ['paper(C9).pdf'] }).findings)).not.toContain('undefined-claim-ref');
+  });
+
+  it('link targets with quoted titles: parentheses inside the title do not end the link early', () => {
+    const links = [
+      '[x](<a.csv> "dataset (raw) for complement (C9)")',
+      "[x](<a.csv> 'dataset (raw) for complement (C9)')",
+      '[x](a.csv "dataset (raw) for complement (C9)")',
+      '[x](a.csv "title with ) paren and (C9)")',
+      '[x](<a b.csv>   "spaced (C9) title")',
+    ];
+    for (const link of links) expect(warnCodes(where(`See ${link} for data.`)), link).not.toContain('undefined-claim-ref');
+    // text after the link is still read, and a title-less angle target still closes at ")"
+    expect(warnCodes(where('See [x](<a.csv> "t (raw)") then (C99).'))).toContain('undefined-claim-ref');
+    expect(warnCodes(where('See [x](<a (C9).csv>) then (C99).'))).toContain('undefined-claim-ref');
+    // a quote with no partner does not run away
+    expect(timeIt(where('[x](<a> "'.repeat(20000)))).toBeLessThan(300);
+    expect(timeIt(where('[x](a "'.repeat(20000)))).toBeLessThan(300);
+  });
+
+  it('is linear when a non-whitespace character follows a long run (the doubling audit now ends every payload with text)', () => {
+    const tails = ['X', '.', '|'];
+    for (const run of [' ', '\t', '- ', '> ', '#', '`']) {
+      for (const tail of tails) {
+        const payload = run.repeat(Math.ceil(100000 / run.length)) + tail;
+        const contexts: Array<[string, string]> = [
+          ['paragraph', where(payload)],
+          ['heading', mutate(golden.body, '## Extensions', `## Extensions ${payload}`)],
+          ['claim', mutate(golden.body, '- **C1** [measured] ', `- **C1** [measured] ${payload} `)],
+          ['tldr', mutate(golden.body, '> **Did:** ', `> **Did:** ${payload} `)],
+        ];
+        for (const [name, body] of contexts) expect(timeIt(body), `${name}: ${JSON.stringify(run)}+${tail}`).toBeLessThan(400);
+      }
+    }
+  });
+});
