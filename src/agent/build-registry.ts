@@ -10,6 +10,7 @@ import { createContextTools } from './tools/context.js';
 import { createSerialTools } from './tools/serial-tools.js';
 import { createKbTools } from './tools/kb-tools.js';
 import { createZoteroTools } from './tools/zotero-tools.js';
+import { createStyleLintTools } from './tools/style-lint.js';
 import { loadConfig } from '../config/config.js';
 
 /**
@@ -58,6 +59,7 @@ export function buildToolRegistry(
   add(createSerialTools(vaultPath, db));
   add(createKbTools(vaultPath, undefined, attachmentsDir));
   add(createZoteroTools(vaultPath));
+  add(createStyleLintTools(vaultPath));
 
   return registry;
 }

@@ -22,6 +22,7 @@ describe('buildToolRegistry', () => {
     for (const expected of [
       'vault_read', 'vault_search', 'create_project', 'create_experiment',
       'task_add', 'task_list', 'compile_reading_note', 'kb_suggest', 'zotero_fetch_item',
+      'lint_reading_note',
     ]) {
       expect(names).toContain(expected);
     }

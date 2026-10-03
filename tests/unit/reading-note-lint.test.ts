@@ -1,0 +1,409 @@
+import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import matter from 'gray-matter';
+
+import { lintReadingNote, type LintFinding } from '../../src/knowledge/reading-note-lint.js';
+
+const repoRoot = path.resolve(import.meta.dirname, '..', '..');
+const GOLDEN = path.join(repoRoot, 'skills', '_shared', 'examples', 'reading-note-v2.md');
+const FIGURE_FIXTURE = path.join(repoRoot, 'tests', 'fixtures', 'readable-output', 'figure-paper-with-appraisal.md');
+
+function load(file: string): { body: string; sources: string[] } {
+  const parsed = matter(fs.readFileSync(file, 'utf-8'));
+  const sources = Array.isArray(parsed.data.sources)
+    ? (parsed.data.sources as Array<{ path: string }>).map((s) => s.path)
+    : [];
+  return { body: parsed.content, sources };
+}
+
+/** Replace text and fail loudly if the target is absent, so a mutation test can never pass vacuously. */
+function mutate(body: string, from: string, to: string): string {
+  if (!body.includes(from)) throw new Error(`mutation target not found: ${from}`);
+  return body.replace(from, to);
+}
+
+function codes(findings: LintFinding[], severity?: 'warn' | 'info'): string[] {
+  return findings.filter((f) => !severity || f.severity === severity).map((f) => f.code);
+}
+
+const golden = load(GOLDEN);
+const figure = load(FIGURE_FIXTURE);
+
+describe('lintReadingNote — shipped examples', () => {
+  it('the golden example (text-only paper, three attachments) lints clean', () => {
+    const result = lintReadingNote(golden.body, { sources: golden.sources });
+    expect(result.findings).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it('the figure paper with ### Figure Map subsections, E-IDs and an Appraisal lints clean', () => {
+    const result = lintReadingNote(figure.body, { sources: figure.sources });
+    expect(result.findings).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it('reports stats that the pilot can compare across versions', () => {
+    const { stats } = lintReadingNote(golden.body);
+    expect(stats.claims).toBe(6);
+    expect(stats.diagrams).toBe(1);
+    expect(stats.tldrWords).toBeGreaterThan(30);
+    expect(stats.sentences).toBeGreaterThan(20);
+    expect(stats.meanWords).toBeGreaterThan(4);
+    expect(stats.meanWords).toBeLessThan(25);
+    expect(stats.pctOver25).toBe(0);
+  });
+
+  it('does not throw on an empty body and reports the missing structure', () => {
+    const result = lintReadingNote('');
+    expect(result.ok).toBe(false);
+    expect(codes(result.findings, 'warn')).toContain('missing-tldr');
+    expect(codes(result.findings, 'warn')).toContain('missing-heading');
+  });
+});
+
+describe('lintReadingNote — TL;DR', () => {
+  it('warns when the TL;DR callout is missing', () => {
+    const body = golden.body.replace(/^> .*\n/gm, '');
+    const result = lintReadingNote(body);
+    expect(codes(result.findings, 'warn')).toContain('missing-tldr');
+    expect(result.ok).toBe(false);
+  });
+
+  it('warns when the TL;DR has more than 5 content lines', () => {
+    const body = mutate(golden.body, '> **Source:** paper.md', '> **Extra:** one more line\n> **Source:** paper.md');
+    expect(codes(lintReadingNote(body).findings, 'warn')).toContain('tldr-too-long');
+  });
+
+  it('warns when the TL;DR exceeds the word budget', () => {
+    const filler = Array.from({ length: 200 }, () => 'word').join(' ');
+    const body = mutate(golden.body, '**Trust:** ', `**Trust:** ${filler} `);
+    expect(codes(lintReadingNote(body).findings, 'warn')).toContain('tldr-too-long');
+  });
+
+  it('warns when the TL;DR has no Source line', () => {
+    const body = mutate(golden.body, '> **Source:** paper.md\n', '');
+    expect(codes(lintReadingNote(body).findings, 'warn')).toContain('tldr-no-source');
+  });
+
+  it('accepts abstract, summary and tldr callout types', () => {
+    for (const type of ['summary', 'tldr']) {
+      const body = mutate(golden.body, '[!abstract]', `[!${type}]`);
+      expect(codes(lintReadingNote(body).findings)).not.toContain('missing-tldr');
+    }
+  });
+
+  it('in path mode, warns when the declared Source is not a registered source', () => {
+    const result = lintReadingNote(golden.body, { sources: ['claude-notes.md', 'notebooklm-summary.md'] });
+    expect(codes(result.findings, 'warn')).toContain('source-not-registered');
+  });
+
+  it('uses the declared Source line, not sources[0], so a non-PDF source sorted first is fine', () => {
+    // golden frontmatter lists claude-notes.md first and paper.md last; Source: paper.md must still pass.
+    expect(golden.sources[0]).toBe('claude-notes.md');
+    const result = lintReadingNote(golden.body, { sources: golden.sources });
+    expect(codes(result.findings)).not.toContain('source-not-registered');
+  });
+
+  it('accepts a Source path whose basename matches a registered source', () => {
+    const body = mutate(golden.body, '**Source:** paper.md', '**Source:** Reading/attachments/lee/paper.md');
+    const result = lintReadingNote(body, { sources: golden.sources });
+    expect(codes(result.findings)).not.toContain('source-not-registered');
+  });
+});
+
+describe('lintReadingNote — headings', () => {
+  it('warns about a missing layout heading and names it', () => {
+    const body = mutate(golden.body, '## Evidence\n', '');
+    const finding = lintReadingNote(body).findings.find((f) => f.code === 'missing-heading');
+    expect(finding?.severity).toBe('warn');
+    expect(finding?.message).toContain('Evidence');
+  });
+
+  it('warns about a missing Figure Map (it is part of the layout)', () => {
+    const body = mutate(golden.body, '## Figure Map\n', '');
+    const finding = lintReadingNote(body).findings.find((f) => f.code === 'missing-heading');
+    expect(finding?.message).toContain('Figure Map');
+  });
+
+  it('warns about a duplicated heading', () => {
+    const body = golden.body + '\n## Claims\n\n- **C7** [measured] Extra. (§Results 1)\n';
+    expect(codes(lintReadingNote(body).findings, 'warn')).toContain('duplicate-heading');
+  });
+
+  it('warns when headings are out of order', () => {
+    const extensions = golden.body.slice(golden.body.indexOf('## Extensions'));
+    let body = golden.body.slice(0, golden.body.indexOf('## Extensions'));
+    body = mutate(body, '## Assumptions', '## TMP_A');
+    body = mutate(body, '## Takeaways', '## Assumptions');
+    body = mutate(body, '## TMP_A', '## Takeaways');
+    expect(codes(lintReadingNote(body + extensions).findings, 'warn')).toContain('heading-order');
+  });
+
+  it('warns when an Appraisal section sits before Extensions', () => {
+    const body = mutate(golden.body, '## Extensions', '## Appraisal: Early\n\nText here.\n\n## Extensions');
+    expect(codes(lintReadingNote(body).findings, 'warn')).toContain('heading-order');
+  });
+
+  it('allows trailing Appraisal sections after Extensions', () => {
+    const result = lintReadingNote(figure.body, { sources: figure.sources });
+    expect(codes(result.findings)).not.toContain('heading-order');
+  });
+
+  it('reports an unknown extra H2 as info only', () => {
+    const body = golden.body + '\n## Random notes\n\nSomething.\n';
+    const result = lintReadingNote(body, { sources: golden.sources });
+    expect(codes(result.findings, 'info')).toContain('extra-section');
+    expect(result.ok).toBe(true);
+  });
+
+  it('ignores headings inside fenced code and HTML comments', () => {
+    const body =
+      golden.body +
+      '\n```text\n## Claims\n## Evidence\n```\n\n<!--\n## Takeaways\n-->\n';
+    const result = lintReadingNote(body, { sources: golden.sources });
+    expect(codes(result.findings)).not.toContain('duplicate-heading');
+  });
+
+  it('accepts the no-figures placeholder comment under Figure Map', () => {
+    expect(golden.body).toContain('<!-- No data figures found in compiled sources -->');
+    const result = lintReadingNote(golden.body, { sources: golden.sources });
+    expect(codes(result.findings)).not.toContain('missing-heading');
+  });
+});
+
+describe('lintReadingNote — claims, locators and IDs', () => {
+  it('warns when a claim bullet lacks the support-type label', () => {
+    const body = mutate(golden.body, '- **C1** [measured] ', '- **C1** ');
+    const finding = lintReadingNote(body).findings.find((f) => f.code === 'claim-format');
+    expect(finding?.severity).toBe('warn');
+  });
+
+  it('warns about numbered-list claims (the pre-v2 format)', () => {
+    const body = mutate(golden.body, '- **C1** [measured] IL-42 at 20 ng/mL', '1. IL-42 at 20 ng/mL');
+    expect(codes(lintReadingNote(body).findings, 'warn')).toContain('claim-format');
+  });
+
+  it('rejects an unknown support-type label', () => {
+    const body = mutate(golden.body, '[inferred]', '[certain]');
+    expect(codes(lintReadingNote(body).findings, 'warn')).toContain('claim-format');
+  });
+
+  it('warns when a claim has no locator', () => {
+    const body = mutate(golden.body, ' (§Results 2)\n- **C3**', '\n- **C3**');
+    expect(codes(lintReadingNote(body).findings, 'warn')).toContain('claim-no-locator');
+  });
+
+  it('accepts every documented locator form', () => {
+    const forms = ['Fig 2A–E', 'Table 1', 'Suppl. S3', 'PDF p. 7', 'printed p. 7', '§Methods', 'Box 1', 'Movie S1', 'supp1.pdf, Suppl. S3'];
+    for (const form of forms) {
+      const body = mutate(golden.body, '(§Results 5)\n\n## Reasoning', `(${form})\n\n## Reasoning`);
+      expect(codes(lintReadingNote(body).findings), form).not.toContain('claim-no-locator');
+    }
+  });
+
+  it('warns about duplicate claim IDs', () => {
+    const body = mutate(golden.body, '- **C2** [measured]', '- **C1** [measured]');
+    expect(codes(lintReadingNote(body).findings, 'warn')).toContain('duplicate-claim-id');
+  });
+
+  it('warns when Reasoning cites an undefined claim in a step', () => {
+    const body = mutate(golden.body, '(C5).\n', '(C99).\n');
+    const result = lintReadingNote(body);
+    const finding = result.findings.find((f) => f.code === 'undefined-claim-ref');
+    expect(finding?.severity).toBe('warn');
+    expect(finding?.message).toContain('C99');
+  });
+
+  it('warns when a Mermaid edge label cites an undefined claim', () => {
+    const body = mutate(golden.body, '(C2)"|', '(C42)"|');
+    expect(codes(lintReadingNote(body).findings, 'warn')).toContain('undefined-claim-ref');
+  });
+
+  it('understands claim lists and ranges in references', () => {
+    const body = mutate(golden.body, '(C3, C4)', '(C3, C4, C77)');
+    expect(codes(lintReadingNote(body).findings, 'warn')).toContain('undefined-claim-ref');
+    const ok = mutate(golden.body, '(C3, C4)', '(C1–C4)');
+    expect(codes(lintReadingNote(ok).findings)).not.toContain('undefined-claim-ref');
+  });
+
+  it('does not treat unparenthesised chemistry-style tokens as claim references', () => {
+    const body = mutate(golden.body, 'IL-42 appears to weaken', 'Complement C9 and C57BL/6 mice matter. IL-42 appears to weaken');
+    expect(codes(lintReadingNote(body).findings)).not.toContain('undefined-claim-ref');
+  });
+
+  it('warns when a claim cites an undefined evidence ID', () => {
+    const body = mutate(figure.body, '(Fig 2B, E2)', '(Fig 2B, E9)');
+    const result = lintReadingNote(body, { sources: figure.sources });
+    expect(codes(result.findings, 'warn')).toContain('undefined-evidence-ref');
+  });
+
+  it('warns about duplicate evidence IDs', () => {
+    const body = mutate(figure.body, '- **E3** (Fig 3A–C)', '- **E2** (Fig 3A–C)');
+    const result = lintReadingNote(body, { sources: figure.sources });
+    expect(codes(result.findings, 'warn')).toContain('duplicate-evidence-id');
+  });
+
+  it('reports an evidence ID that no claim cites as info only', () => {
+    const body = mutate(figure.body, '- (Fig 1A–D) Volume', '- **E7** (Fig 1A–D) Volume');
+    const result = lintReadingNote(body, { sources: figure.sources });
+    expect(codes(result.findings, 'info')).toContain('orphan-evidence-id');
+    expect(result.ok).toBe(true);
+  });
+
+  it('reports an evidence bullet without any locator as info', () => {
+    const body = mutate(golden.body, ' (§Results 5)\n\n## Figure Map', '\n\n## Figure Map');
+    expect(codes(lintReadingNote(body, { sources: golden.sources }).findings, 'info')).toContain('evidence-no-locator');
+  });
+
+  it('flags a bare page locator as ambiguous but accepts PDF and printed pages', () => {
+    const bare = mutate(golden.body, '(§Results 4)\n', '(p. 7)\n');
+    expect(codes(lintReadingNote(bare).findings, 'info')).toContain('ambiguous-page-locator');
+    for (const good of ['PDF p. 7', 'printed p. 7']) {
+      const body = mutate(golden.body, '(§Results 4)\n', `(${good})\n`);
+      expect(codes(lintReadingNote(body).findings), good).not.toContain('ambiguous-page-locator');
+    }
+  });
+
+  it('reports line numbers relative to the body, starting at 1', () => {
+    const body = mutate(golden.body, '- **C1** [measured] ', '- **C1** ');
+    const lines = body.split('\n');
+    const expectedLine = lines.findIndex((l) => l.startsWith('- **C1** IL-42')) + 1;
+    const finding = lintReadingNote(body).findings.find((f) => f.code === 'claim-format');
+    expect(finding?.line).toBe(expectedLine);
+  });
+});
+
+describe('lintReadingNote — Mermaid and HTML', () => {
+  it('warns about an unclosed fence', () => {
+    const body = golden.body + '\n```mermaid\nflowchart TB\n  A["x"] --> B["y"]\n';
+    expect(codes(lintReadingNote(body).findings, 'warn')).toContain('fence-unclosed');
+  });
+
+  it('warns about double-bracket link syntax inside a Mermaid block', () => {
+    const body = mutate(golden.body, 'B["Activation entry preserved"]', 'B[["Activation entry preserved"]]');
+    expect(codes(lintReadingNote(body).findings, 'warn')).toContain('mermaid-wikilink');
+  });
+
+  it('warns about HTML tags in prose but not inside inline code or Mermaid', () => {
+    const prose = mutate(golden.body, 'IL-42 appears to weaken', 'IL-42<br>appears to weaken');
+    expect(codes(lintReadingNote(prose).findings, 'warn')).toContain('html-tag');
+    const inline = mutate(golden.body, 'IL-42 appears to weaken', 'The `<br>` tag is banned. IL-42 appears to weaken');
+    expect(codes(lintReadingNote(inline).findings)).not.toContain('html-tag');
+    const mermaid = mutate(golden.body, '"Effector output reduced"', '"Effector<br/>output reduced"');
+    expect(codes(lintReadingNote(mermaid).findings)).not.toContain('html-tag');
+  });
+
+  it('does not treat HTML comments or autolinks as HTML tags', () => {
+    const body = mutate(golden.body, 'IL-42 appears to weaken', 'See <https://example.org/x> for details. IL-42 appears to weaken');
+    expect(codes(lintReadingNote(body).findings)).not.toContain('html-tag');
+  });
+
+  it('suggests TB over LR as info only', () => {
+    const body = mutate(golden.body, 'flowchart TB', 'flowchart LR');
+    const result = lintReadingNote(body, { sources: golden.sources });
+    expect(codes(result.findings, 'info')).toContain('mermaid-direction');
+    expect(result.ok).toBe(true);
+  });
+
+  it('reports non-flowchart diagram types as info', () => {
+    const body = mutate(golden.body, 'flowchart TB\n', 'sequenceDiagram\n  A->>B: hello\n%% ');
+    expect(codes(lintReadingNote(body).findings, 'info')).toContain('mermaid-non-flowchart');
+  });
+
+  it('reports more than two diagrams as info', () => {
+    const diagram = '\n```mermaid\nflowchart TB\n  A["x"] --> B["y"]\n```\n';
+    const body = golden.body + diagram + diagram;
+    expect(codes(lintReadingNote(body).findings, 'info')).toContain('too-many-diagrams');
+  });
+
+  it('reports a diagram with more than 12 nodes as info', () => {
+    const edges = Array.from({ length: 13 }, (_, i) => `  N${i}["n${i}"] --> N${i + 1}["n${i + 1}"]`).join('\n');
+    const body = golden.body + `\n\`\`\`mermaid\nflowchart TB\n${edges}\n\`\`\`\n`;
+    expect(codes(lintReadingNote(body).findings, 'info')).toContain('mermaid-too-large');
+  });
+
+  it('reports an unquoted label with special characters as info', () => {
+    const body = mutate(golden.body, 'B["Activation entry preserved"]', 'B[Activation (entry) preserved]');
+    expect(codes(lintReadingNote(body).findings, 'info')).toContain('mermaid-unquoted-label');
+  });
+});
+
+describe('lintReadingNote — prose style (info only)', () => {
+  const long26 = Array.from({ length: 26 }, (_, i) => `word${i}`).join(' ') + '.';
+  const long25 = Array.from({ length: 25 }, (_, i) => `word${i}`).join(' ') + '.';
+
+  it('reports a sentence longer than 25 words, but never a 25-word one', () => {
+    const over = mutate(golden.body, 'IL-42 appears to weaken', `${long26} IL-42 appears to weaken`);
+    const result = lintReadingNote(over, { sources: golden.sources });
+    expect(codes(result.findings, 'info')).toContain('long-sentence');
+    expect(result.ok).toBe(true);
+    const exact = mutate(golden.body, 'IL-42 appears to weaken', `${long25} IL-42 appears to weaken`);
+    expect(codes(lintReadingNote(exact).findings)).not.toContain('long-sentence');
+  });
+
+  it('does not count locator parentheticals toward sentence length', () => {
+    const near = Array.from({ length: 24 }, (_, i) => `word${i}`).join(' ');
+    const body = mutate(golden.body, 'IL-42 appears to weaken', `${near} (Fig 1A–D, Fig 2A–D, Fig 3A–D, Fig 4A–D). IL-42 appears to weaken`);
+    expect(codes(lintReadingNote(body).findings)).not.toContain('long-sentence');
+  });
+
+  it('skips table rows when measuring sentences', () => {
+    const cell = Array.from({ length: 40 }, (_, i) => `w${i}`).join(' ');
+    const body = mutate(golden.body, '<!-- No data figures found in compiled sources -->', `| Figure | Note |\n|---|---|\n| Fig 1 | ${cell} |`);
+    expect(codes(lintReadingNote(body).findings)).not.toContain('long-sentence');
+  });
+
+  it('reports a paragraph with seven or more sentences as info', () => {
+    const sentences = Array.from({ length: 7 }, (_, i) => `Sentence number ${i} stands alone here.`).join(' ');
+    const body = mutate(golden.body, 'IL-42 appears to weaken', `${sentences}\n\nIL-42 appears to weaken`);
+    expect(codes(lintReadingNote(body).findings, 'info')).toContain('long-paragraph');
+  });
+
+  it('reports a sentence that starts with a bare pronoun verb, not a demonstrative plus noun', () => {
+    const bare = mutate(golden.body, 'IL-42 appears to weaken', 'It shows a drop. IL-42 appears to weaken');
+    expect(codes(lintReadingNote(bare).findings, 'info')).toContain('leading-pronoun');
+    const withNoun = mutate(golden.body, 'IL-42 appears to weaken', 'This pathway shows a drop. IL-42 appears to weaken');
+    expect(codes(lintReadingNote(withNoun).findings)).not.toContain('leading-pronoun');
+  });
+
+  it('caps repeated findings of one code and summarises the rest', () => {
+    const many = Array.from({ length: 20 }, () => `${long26}`).join('\n\n');
+    const body = mutate(golden.body, 'IL-42 appears to weaken', `${many}\n\nIL-42 appears to weaken`);
+    const longFindings = lintReadingNote(body).findings.filter((f) => f.code === 'long-sentence');
+    expect(longFindings.length).toBeLessThanOrEqual(9);
+    expect(longFindings[longFindings.length - 1].message).toMatch(/\+\d+ more/);
+  });
+});
+
+describe('lintReadingNote — Figure Map size', () => {
+  function figureMapRows(n: number): string {
+    const rows = Array.from({ length: n }, (_, i) => `| Fig ${i + 1} | Shows panel ${i + 1}. | Supports claim. |`).join('\n');
+    return `| Figure | What it shows | Significance |\n|---|---|---|\n${rows}`;
+  }
+
+  it('suggests ### subsections for more than 40 rows, without truncating', () => {
+    const body = mutate(golden.body, '<!-- No data figures found in compiled sources -->', figureMapRows(45));
+    const finding = lintReadingNote(body, { sources: golden.sources }).findings.find((f) => f.code === 'figure-map-long');
+    expect(finding?.severity).toBe('info');
+    expect(finding?.fix).toMatch(/###/);
+  });
+
+  it('does not flag a long Figure Map that is already split under ### subsections', () => {
+    const split = `### Main figures\n\n${figureMapRows(25)}\n\n### Supplementary\n\n${figureMapRows(25)}`;
+    const body = mutate(golden.body, '<!-- No data figures found in compiled sources -->', split);
+    expect(codes(lintReadingNote(body, { sources: golden.sources }).findings)).not.toContain('figure-map-long');
+  });
+
+  it('reports a Figure Map cell longer than 30 words as info', () => {
+    const cell = Array.from({ length: 31 }, (_, i) => `w${i}`).join(' ');
+    const table = `| Figure | What it shows | Significance |\n|---|---|---|\n| Fig 1 | ${cell} | Short. |`;
+    const body = mutate(golden.body, '<!-- No data figures found in compiled sources -->', table);
+    expect(codes(lintReadingNote(body, { sources: golden.sources }).findings, 'info')).toContain('figure-map-cell-long');
+  });
+
+  it('reports figure map row counts in stats', () => {
+    const body = mutate(golden.body, '<!-- No data figures found in compiled sources -->', figureMapRows(12));
+    expect(lintReadingNote(body).stats.figureMapRows).toBe(12);
+  });
+});
