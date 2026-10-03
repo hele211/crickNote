@@ -23,7 +23,7 @@ tags: [reading, immunology, il-42, cd8]
 
 > [!abstract] TL;DR
 > **Did:** The authors treated activated human CD8 T cells with recombinant IL-42 and measured CD69, IFN-gamma and granzyme B after 24 hours. They also ran a transwell test and an antibody rescue.
-> **Found:** IL-42 lowered granzyme B and IFN-gamma but left CD69 almost unchanged. The effect did not need cell contact.
+> **Found:** IL-42 lowered the fractions of granzyme B-positive and IFN-gamma-positive cells but left CD69 almost unchanged. The effect did not need cell contact.
 > **Trust:** Direct in vitro evidence at one time point. The paper has no in vivo test and does not identify the IL-42 receptor.
 > **Why it matters here:** It supports granzyme B as the best readout for cytokine-mediated CD8 suppression.
 > **Source:** paper.md
@@ -44,7 +44,7 @@ The authors first separate early activation from later effector output. They the
 ```mermaid
 flowchart TB
   A["IL-42 added to activated CD8 cells"] -->|"observed: CD69 changed by less than 5% (C2)"| B["CD69 readout nearly unchanged"]
-  A -->|"observed: granzyme B and IFN-gamma fall (C1)"| C["Effector output reduced"]
+  A -->|"observed: granzyme B- and IFN-gamma-positive fractions fall (C1)"| C["Fewer marker-positive cells"]
   C -.->|"inferred: soluble factor, no contact needed (C3, C4)"| D["Contact-independent suppression"]
 ```
 
@@ -64,7 +64,7 @@ flowchart TB
 ```
 
 1. **Early activation:** CD69 changed by less than 5% (C2). The authors read this as largely preserved activation (C4).
-2. **Effector output:** Granzyme B-positive and IFN-gamma-positive cells dropped at 20 ng/mL (C1).
+2. **Effector markers:** The fractions of granzyme B-positive and IFN-gamma-positive cells dropped at 20 ng/mL (C1).
 3. **Contact test:** Suppression persisted when a transwell separated the cells, which argues for a soluble mechanism (C3, C4).
 4. **Specificity:** Anti-IL-42 antibody restored granzyme B to near baseline (C6).
 5. **Cell model:** Jurkat cells responded less than primary cells (C5).
@@ -96,7 +96,7 @@ flowchart TB
 
 ### Plain-language summary
 
-IL-42 appears to weaken the killing machinery of activated CD8 T cells. It lowers granzyme B and IFN-gamma but does not stop the cells from switching on. The effect persisted when the cells were physically separated, so a soluble signal is likely.
+In this assay, IL-42 lowered the fraction of cells positive for granzyme B and for IFN-gamma. CD69 changed by less than 5% in these already-activated cells. The effect persisted when the cells were physically separated, so the authors infer a soluble signal.
 
 ### What the paper does not prove
 

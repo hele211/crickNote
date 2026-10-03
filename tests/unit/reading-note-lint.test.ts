@@ -72,7 +72,7 @@ describe('lintReadingNote — shipped examples', () => {
 describe('lintReadingNote — robustness', () => {
   it('handles a long, malformed ID list in parentheses without catastrophic backtracking', () => {
     const refs = Array.from({ length: 40 }, () => 'C1').join(', ');
-    const body = mutate(golden.body, 'IL-42 appears to weaken', `Result (${refs}, X). IL-42 appears to weaken`);
+    const body = mutate(golden.body, 'In this assay, IL-42 lowered', `Result (${refs}, X). In this assay, IL-42 lowered`);
     const started = performance.now();
     lintReadingNote(body, { sources: golden.sources });
     expect(performance.now() - started).toBeLessThan(500);
@@ -345,7 +345,7 @@ describe('lintReadingNote — claims, locators and IDs', () => {
   });
 
   it('does not treat unparenthesised chemistry-style tokens as claim references', () => {
-    const body = mutate(golden.body, 'IL-42 appears to weaken', 'Complement C9 and C57BL/6 mice matter. IL-42 appears to weaken');
+    const body = mutate(golden.body, 'In this assay, IL-42 lowered', 'Complement C9 and C57BL/6 mice matter. In this assay, IL-42 lowered');
     expect(codes(lintReadingNote(body).findings)).not.toContain('undefined-claim-ref');
   });
 
@@ -403,23 +403,23 @@ describe('lintReadingNote — Mermaid and HTML', () => {
   });
 
   it('warns about HTML tags in prose but not inside inline code or Mermaid', () => {
-    const prose = mutate(golden.body, 'IL-42 appears to weaken', 'IL-42<br>appears to weaken');
+    const prose = mutate(golden.body, 'In this assay, IL-42 lowered', 'IL-42<br>appears to weaken');
     expect(codes(lintReadingNote(prose).findings, 'warn')).toContain('html-tag');
-    const inline = mutate(golden.body, 'IL-42 appears to weaken', 'The `<br>` tag is banned. IL-42 appears to weaken');
+    const inline = mutate(golden.body, 'In this assay, IL-42 lowered', 'The `<br>` tag is banned. In this assay, IL-42 lowered');
     expect(codes(lintReadingNote(inline).findings)).not.toContain('html-tag');
-    const mermaid = mutate(golden.body, '"Effector output reduced"', '"Effector<br/>output reduced"');
+    const mermaid = mutate(golden.body, '"Fewer marker-positive cells"', '"Fewer<br/>marker-positive cells"');
     expect(codes(lintReadingNote(mermaid).findings)).not.toContain('html-tag');
   });
 
   it('flags real HTML tags such as sub and sup, but not math-like angle brackets', () => {
-    const sub = mutate(golden.body, 'IL-42 appears to weaken', 'Amyloid-β<sub>1–40</sub> and Ca<sup>2+</sup> matter. IL-42 appears to weaken');
+    const sub = mutate(golden.body, 'In this assay, IL-42 lowered', 'Amyloid-β<sub>1–40</sub> and Ca<sup>2+</sup> matter. In this assay, IL-42 lowered');
     expect(codes(lintReadingNote(sub).findings, 'warn')).toContain('html-tag');
-    const math = mutate(golden.body, 'IL-42 appears to weaken', 'When x<y and z>w the order flips. IL-42 appears to weaken');
+    const math = mutate(golden.body, 'In this assay, IL-42 lowered', 'When x<y and z>w the order flips. In this assay, IL-42 lowered');
     expect(codes(lintReadingNote(math).findings)).not.toContain('html-tag');
   });
 
   it('does not treat HTML comments or autolinks as HTML tags', () => {
-    const body = mutate(golden.body, 'IL-42 appears to weaken', 'See <https://example.org/x> for details. IL-42 appears to weaken');
+    const body = mutate(golden.body, 'In this assay, IL-42 lowered', 'See <https://example.org/x> for details. In this assay, IL-42 lowered');
     expect(codes(lintReadingNote(body).findings)).not.toContain('html-tag');
   });
 
@@ -493,17 +493,17 @@ describe('lintReadingNote — prose style (info only)', () => {
   const long25 = Array.from({ length: 25 }, (_, i) => `word${i}`).join(' ') + '.';
 
   it('reports a sentence longer than 25 words, but never a 25-word one', () => {
-    const over = mutate(golden.body, 'IL-42 appears to weaken', `${long26} IL-42 appears to weaken`);
+    const over = mutate(golden.body, 'In this assay, IL-42 lowered', `${long26} In this assay, IL-42 lowered`);
     const result = lintReadingNote(over, { sources: golden.sources });
     expect(codes(result.findings, 'info')).toContain('long-sentence');
     expect(result.ok).toBe(true);
-    const exact = mutate(golden.body, 'IL-42 appears to weaken', `${long25} IL-42 appears to weaken`);
+    const exact = mutate(golden.body, 'In this assay, IL-42 lowered', `${long25} In this assay, IL-42 lowered`);
     expect(codes(lintReadingNote(exact).findings)).not.toContain('long-sentence');
   });
 
   it('does not count locator parentheticals toward sentence length', () => {
     const near = Array.from({ length: 24 }, (_, i) => `word${i}`).join(' ');
-    const body = mutate(golden.body, 'IL-42 appears to weaken', `${near} (Fig 1A–D, Fig 2A–D, Fig 3A–D, Fig 4A–D). IL-42 appears to weaken`);
+    const body = mutate(golden.body, 'In this assay, IL-42 lowered', `${near} (Fig 1A–D, Fig 2A–D, Fig 3A–D, Fig 4A–D). In this assay, IL-42 lowered`);
     expect(codes(lintReadingNote(body).findings)).not.toContain('long-sentence');
   });
 
@@ -515,20 +515,20 @@ describe('lintReadingNote — prose style (info only)', () => {
 
   it('reports a paragraph with seven or more sentences as info', () => {
     const sentences = Array.from({ length: 7 }, (_, i) => `Sentence number ${i} stands alone here.`).join(' ');
-    const body = mutate(golden.body, 'IL-42 appears to weaken', `${sentences}\n\nIL-42 appears to weaken`);
+    const body = mutate(golden.body, 'In this assay, IL-42 lowered', `${sentences}\n\nIn this assay, IL-42 lowered`);
     expect(codes(lintReadingNote(body).findings, 'info')).toContain('long-paragraph');
   });
 
   it('reports a sentence that starts with a bare pronoun verb, not a demonstrative plus noun', () => {
-    const bare = mutate(golden.body, 'IL-42 appears to weaken', 'It shows a drop. IL-42 appears to weaken');
+    const bare = mutate(golden.body, 'In this assay, IL-42 lowered', 'It shows a drop. In this assay, IL-42 lowered');
     expect(codes(lintReadingNote(bare).findings, 'info')).toContain('leading-pronoun');
-    const withNoun = mutate(golden.body, 'IL-42 appears to weaken', 'This pathway shows a drop. IL-42 appears to weaken');
+    const withNoun = mutate(golden.body, 'In this assay, IL-42 lowered', 'This pathway shows a drop. In this assay, IL-42 lowered');
     expect(codes(lintReadingNote(withNoun).findings)).not.toContain('leading-pronoun');
   });
 
   it('caps repeated findings of one code and summarises the rest', () => {
     const many = Array.from({ length: 20 }, () => `${long26}`).join('\n\n');
-    const body = mutate(golden.body, 'IL-42 appears to weaken', `${many}\n\nIL-42 appears to weaken`);
+    const body = mutate(golden.body, 'In this assay, IL-42 lowered', `${many}\n\nIn this assay, IL-42 lowered`);
     const longFindings = lintReadingNote(body).findings.filter((f) => f.code === 'long-sentence');
     expect(longFindings.length).toBeLessThanOrEqual(9);
     expect(longFindings[longFindings.length - 1].message).toMatch(/\+\d+ more/);
@@ -604,11 +604,11 @@ describe('lintReadingNote — review round 2 regressions', () => {
 
   it('flags common block and list HTML such as dl, details and b, but still not math-like angle brackets', () => {
     for (const html of ['<dl><dt>Term</dt><dd>Definition</dd></dl>', '<details><summary>More</summary>text</details>', '<b>bold</b>', '<section class="x">y</section>']) {
-      const body = mutate(golden.body, 'IL-42 appears to weaken', `${html} IL-42 appears to weaken`);
+      const body = mutate(golden.body, 'In this assay, IL-42 lowered', `${html} In this assay, IL-42 lowered`);
       expect(codes(lintReadingNote(body).findings, 'warn'), html).toContain('html-tag');
     }
     for (const prose of ['when a<b and c>d holds', 'when x<y and z>w holds', 'P<0.05 and n>3']) {
-      const body = mutate(golden.body, 'IL-42 appears to weaken', `${prose}. IL-42 appears to weaken`);
+      const body = mutate(golden.body, 'In this assay, IL-42 lowered', `${prose}. In this assay, IL-42 lowered`);
       expect(codes(lintReadingNote(body).findings), prose).not.toContain('html-tag');
     }
   });
@@ -653,8 +653,8 @@ describe('lintReadingNote — review round 3 regressions', () => {
       inMermaid([`A -- ${spaces}X`]),
       inMermaid([`A -- ${spaces} --> B`]),
       inMermaid([`A -- ${'x '.repeat(1600)}`]),
-      mutate(golden.body, 'IL-42 appears to weaken', `<div ${spaces}x IL-42 appears to weaken`),
-      mutate(golden.body, 'IL-42 appears to weaken', `${'<div '.repeat(800)} IL-42 appears to weaken`),
+      mutate(golden.body, 'In this assay, IL-42 lowered', `<div ${spaces}x In this assay, IL-42 lowered`),
+      mutate(golden.body, 'In this assay, IL-42 lowered', `${'<div '.repeat(800)} In this assay, IL-42 lowered`),
       withClaim(`- **C1** [measured] ${spaces}claim text. (Fig 1A)`),
       mutate(golden.body, '> **Source:** paper.md', `> **Source:** ${spaces}paper.md`),
     ];
@@ -682,25 +682,39 @@ describe('lintReadingNote — review round 3 regressions', () => {
 
   it('does not read comparisons like "t<time and n>3" as HTML, but still flags real tags', () => {
     for (const prose of ['The effect occurred when t<time and n>3', 'when n<data and m>2 held', 'if x<label and y>z']) {
-      const body = mutate(golden.body, 'IL-42 appears to weaken', `${prose}. IL-42 appears to weaken`);
+      const body = mutate(golden.body, 'In this assay, IL-42 lowered', `${prose}. In this assay, IL-42 lowered`);
       expect(codes(lintReadingNote(body).findings), prose).not.toContain('html-tag');
     }
     for (const html of ['line one<br />line two', '<time datetime="2026-01-01">x</time>', '<dl><dt>a</dt></dl>', '<b>bold</b>']) {
-      const body = mutate(golden.body, 'IL-42 appears to weaken', `${html} IL-42 appears to weaken`);
+      const body = mutate(golden.body, 'In this assay, IL-42 lowered', `${html} In this assay, IL-42 lowered`);
       expect(codes(lintReadingNote(body).findings, 'warn'), html).toContain('html-tag');
     }
   });
 
-  it('reads claim references only in Reasoning, so scientific symbols like complement (C3) and the E3 ligase are not note references', () => {
-    const complement = withClaim('- **C1** [measured] Complement component 3 (C3) increased in mouse serum. (Fig 1A)');
-    expect(codes(lintReadingNote(complement, { sources: golden.sources }).findings)).not.toContain('undefined-claim-ref');
-    const ligase = withClaim('- **C1** [measured] The E3 ubiquitin ligase (E3) was recruited. (Fig 1A)');
-    expect(codes(lintReadingNote(ligase, { sources: golden.sources }).findings)).not.toContain('undefined-evidence-ref');
-    const takeaways = mutate(golden.body, 'IL-42 appears to weaken', 'Complement (C9) and the E3 ligase (E7) are unrelated. IL-42 appears to weaken');
-    expect(codes(lintReadingNote(takeaways, { sources: golden.sources }).findings)).not.toContain('undefined-claim-ref');
-    // Genuine undefined references are still caught where they are read.
-    expect(codes(lintReadingNote(withClaim('- **C1** [measured] A claim. (Fig 1A, E9)'), { sources: golden.sources }).findings, 'warn')).toContain('undefined-evidence-ref');
-    expect(codes(lintReadingNote(mutate(golden.body, '(C5).\n', '(C99).\n'), { sources: golden.sources }).findings, 'warn')).toContain('undefined-claim-ref');
+  it('reads references everywhere, and a scientific symbol escapes by backticks or by spelling it out', () => {
+    const where = (extra: string): string => mutate(golden.body, 'In this assay, IL-42 lowered', `${extra} In this assay, IL-42 lowered`);
+    // genuine undefined references are caught wherever they sit
+    expect(codes(lintReadingNote(where('The result supports the inference (C99).'), { sources: golden.sources }).findings, 'warn')).toContain('undefined-claim-ref');
+    expect(codes(lintReadingNote(withClaim('- **C1** [measured] Tracer moved as predicted (C99). (Fig 1A)'), { sources: golden.sources }).findings, 'warn')).toContain('undefined-claim-ref');
+    const diagramInTakeaways = golden.body.replace('## Extensions', '```mermaid\nflowchart TB\n  A["x"] -->|"prediction (C99)"| B["y"]\n```\n\n## Extensions');
+    expect(codes(lintReadingNote(diagramInTakeaways, { sources: golden.sources }).findings, 'warn')).toContain('undefined-claim-ref');
+    expect(codes(lintReadingNote(withClaim('- **C1** [measured] Tracer spread (Fig 1A, E9), and cortex signal increased. (Table 2)'), { sources: golden.sources }).findings, 'warn')).toContain('undefined-evidence-ref');
+    // the warning tells the author how to escape a scientific symbol
+    const finding = lintReadingNote(where('Complement (C9) rose.'), { sources: golden.sources }).findings.find((f) => f.code === 'undefined-claim-ref');
+    expect(finding?.fix).toMatch(/backtick/i);
+    // escapes: inline code, or no parentheses
+    for (const claim of [
+      '- **C1** [measured] Complement component 3 (`C3`) increased in mouse serum. (Fig 1A)',
+      '- **C1** [measured] Complement C3 increased in mouse serum. (Fig 1A)',
+      '- **C1** [measured] The E3 ubiquitin ligase (`E3`) was recruited. (Fig 1A)',
+      '- **C1** [measured] The figure shows recruitment. (Fig 1A) The E3 ligase (`E3`) participates.',
+    ]) {
+      const codesFound = codes(lintReadingNote(withClaim(claim), { sources: golden.sources }).findings);
+      expect(codesFound, claim).not.toContain('undefined-claim-ref');
+      expect(codesFound, claim).not.toContain('undefined-evidence-ref');
+    }
+    const escaped = where('Complement (`C9`) and the E3 ligase (`E7`) are unrelated.');
+    expect(codes(lintReadingNote(escaped, { sources: golden.sources }).findings)).not.toContain('undefined-claim-ref');
   });
 
   it('does not give label advice for Mermaid comment lines', () => {
@@ -717,5 +731,55 @@ describe('lintReadingNote — review round 3 regressions', () => {
   it('the golden example keeps the measured CD69 readout separate from the inferred activation reading', () => {
     expect(golden.body).not.toMatch(/\*\*C2\*\* \[measured\][^\n]*so early activation/);
     expect(golden.body).not.toMatch(/observed: CD69 unchanged/);
+  });
+});
+
+describe('lintReadingNote — review round 4 regressions', () => {
+  const inMermaid = (lines: string[]): string => golden.body + `\n\`\`\`mermaid\nflowchart TB\n${lines.join('\n')}\n\`\`\`\n`;
+  const timeIt = (body: string): number => {
+    const started = performance.now();
+    lintReadingNote(body, { sources: golden.sources });
+    return performance.now() - started;
+  };
+
+  it('stays fast on long attribute-like HTML runs and on thousands of inline edge labels on one line', () => {
+    const html = mutate(golden.body, 'In this assay, IL-42 lowered', `<div x=${' '.repeat(51200)}X In this assay, IL-42 lowered`);
+    expect(timeIt(html)).toBeLessThan(150);
+    const manyLabels = inMermaid([Array.from({ length: 3200 }, (_, i) => `N${i} -- label --> N${i + 1}`).join('; ')]);
+    expect(timeIt(manyLabels)).toBeLessThan(150);
+    const manyDotted = inMermaid([Array.from({ length: 3200 }, (_, i) => `N${i} -. label .-> N${i + 1}`).join('; ')]);
+    expect(timeIt(manyDotted)).toBeLessThan(150);
+  });
+
+  it('keeps a plain "Source:" field on its own line', () => {
+    const body = mutate(golden.body, '> **Source:** paper.md', '> Source:\n> **Found:** The tracer reached tissue.');
+    expect(codes(lintReadingNote(body, { sources: golden.sources }).findings, 'warn')).toContain('tldr-no-source');
+    const filled = mutate(golden.body, '> **Source:** paper.md', '> Source: paper.md');
+    expect(codes(lintReadingNote(filled, { sources: golden.sources }).findings)).not.toContain('tldr-no-source');
+  });
+
+  it('removes only a matching outer wrapper from a Source filename, keeping literal punctuation', () => {
+    const cases: Array<[written: string, registered: string]> = [
+      ["`'Authors'.pdf`", "'Authors'.pdf"],
+      ['"\'Authors\'.pdf"', "'Authors'.pdf"],
+      ['`"Quoted".pdf`', '"Quoted".pdf'],
+      ["'Authors'.pdf", "'Authors'.pdf"],
+      ['`paper.pdf`', 'paper.pdf'],
+    ];
+    for (const [written, registered] of cases) {
+      const body = mutate(golden.body, '**Source:** paper.md', `**Source:** ${written}`);
+      expect(codes(lintReadingNote(body, { sources: [registered] }).findings), written).not.toContain('source-not-registered');
+    }
+  });
+
+  it('counts the targets of dotted inline edges', () => {
+    const make = (n: number): string => inMermaid([`  N0 ${Array.from({ length: n - 1 }, (_, i) => `-. signal${i} .-> N${i + 1}`).join(' ')}`]);
+    expect(codes(lintReadingNote(make(12)).findings)).not.toContain('mermaid-too-large');
+    expect(codes(lintReadingNote(make(13)).findings)).toContain('mermaid-too-large');
+  });
+
+  it('the golden example does not say more than its readouts show', () => {
+    expect(golden.body).not.toMatch(/does not stop the cells from switching on/);
+    expect(golden.body).not.toMatch(/observed: granzyme B and IFN-gamma fall/);
   });
 });

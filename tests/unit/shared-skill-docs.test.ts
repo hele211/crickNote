@@ -65,6 +65,13 @@ describe('skills/_shared documents', () => {
     expect(guide).toMatch(/manual|by hand|you check/i);
   });
 
+  it('the layout explains how to write a scientific symbol that looks like a note reference', () => {
+    expect(layout).toMatch(/scientific symbol that looks like an ID/i);
+    expect(layout).toMatch(/backticks/i);
+    expect(layout).toMatch(/complement/i);
+    expect(layout).not.toMatch(/references only in this section/i);
+  });
+
   it('both documents point agents at the checker tool', () => {
     expect(guide).toContain('lint_reading_note');
     expect(layout).toContain('lint_reading_note');

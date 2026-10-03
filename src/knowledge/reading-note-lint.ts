@@ -117,7 +117,8 @@ const HTML_TAG_NAMES =
   + 'iframe|img|input|ins|kbd|label|legend|li|link|main|map|mark|menu|meta|meter|nav|noscript|object|ol|optgroup|option|output|picture|'
   + 'pre|progress|rp|rt|ruby|samp|script|section|select|slot|small|source|span|strike|strong|style|sub|summary|sup|svg|table|tbody|td|'
   + 'template|textarea|tfoot|th|thead|time|title|tr|track|tt|ul|var|video|wbr';
-const HTML_TAG = new RegExp(`<\\/?(?:${HTML_TAG_NAMES}|a|b|i|p|q|s|u)(?:\\s+[a-z-]+=[^<>]*)?\\s*\\/?>`, 'i');
+// At most one optional space before "/>": a "\\s*" after the attribute run would overlap it and backtrack quadratically.
+const HTML_TAG = new RegExp(`<\\/?(?:${HTML_TAG_NAMES}|a|b|i|p|q|s|u)(?:\\s+[a-z-]+=[^<>]*)?\\s?\\/?>`, 'i');
 
 function scan(body: string): { lines: ScannedLine[]; unclosedFenceLine: number | null } {
   const raw = body.replace(/\r\n?/g, '\n').split('\n');
@@ -278,36 +279,33 @@ function hasUnquotedSpecialLabel(text: string): boolean {
   return false;
 }
 
-const INLINE_LABEL_OPEN = /\s(?:--|==|-\.)\s/;
-const INLINE_LABEL_CLOSE = ['-->', '==>', '.->', '--x', '--o', '---'];
+const INLINE_LABEL_OPEN = /\s(?:--|==|-\.)\s/g;
+const INLINE_LABEL_CLOSE = /-->|==>|\.->|\.-(?!>)|--x|--o|---/g;
+const FULL_OPERATOR: Record<string, string> = { '.->': '-.->', '.-': '-.-' };
 
 /**
  * Splits "A -- text --> B" style edges into the text of each inline label and a copy of the line with each label
- * removed. Written as a scan, not one regex: overlapping whitespace quantifiers backtrack badly on long lines.
+ * removed (the closing operator is kept, completed to a whole operator, so the target node is still seen).
+ * One forward pass with sticky positions: never restarts a search from the beginning of the remaining text, and has
+ * no overlapping whitespace quantifiers, so a long line stays linear.
  */
 function inlineEdgeLabels(line: string): { stripped: string; labels: string[] } {
   const labels: string[] = [];
   let stripped = '';
-  let rest = line;
+  let pos = 0;
   for (;;) {
-    const open = INLINE_LABEL_OPEN.exec(rest);
+    INLINE_LABEL_OPEN.lastIndex = pos;
+    const open = INLINE_LABEL_OPEN.exec(line);
     if (!open) break;
     const textStart = open.index + open[0].length;
-    let end = -1;
-    let op = '';
-    for (const candidate of INLINE_LABEL_CLOSE) {
-      const at = rest.indexOf(candidate, textStart);
-      if (at >= 0 && (end < 0 || at < end)) {
-        end = at;
-        op = candidate;
-      }
-    }
-    if (end < 0) break;
-    labels.push(rest.slice(textStart, end).trim());
-    stripped += `${rest.slice(0, open.index)} ${op}`;
-    rest = rest.slice(end + op.length);
+    INLINE_LABEL_CLOSE.lastIndex = textStart;
+    const close = INLINE_LABEL_CLOSE.exec(line);
+    if (!close) break;
+    labels.push(line.slice(textStart, close.index).trim());
+    stripped += `${line.slice(pos, open.index)} ${FULL_OPERATOR[close[0]] ?? close[0]}`;
+    pos = close.index + close[0].length;
   }
-  return { stripped: stripped + rest, labels };
+  return { stripped: stripped + line.slice(pos), labels };
 }
 
 function mermaidNodeCount(lines: ScannedLine[]): number {
@@ -430,16 +428,19 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
       }
     }
     // The Source value is the rest of its own line: filenames can contain spaces and punctuation.
-    const plainSource = /(?:^|\n)\s*Source:\s*(.*)/i.exec(joined);
+    const plainSource = /(?:^|\n)[ \t]*Source:[ \t]*(.*)/i.exec(joined);
     const rawSource = (fields.get('source') ?? plainSource?.[1] ?? '').split('\n')[0].trim();
     if (!rawSource) {
       add('tldr-no-source', 'warn', startLine, 'TL;DR has no "**Source:** <filename>" line.', 'Name the primary attachment, for example "> **Source:** paper.pdf".');
     } else if (options.sources !== undefined) {
       const baseName = (s: string): string => path.posix.basename(s.replace(/\\/g, '/'));
       const registered = new Set(options.sources.map(baseName));
-      // Try the exact text first (a real filename may start with an apostrophe), then without wrapping quotes or backticks.
-      const unwrapped = rawSource.replace(/^[`"'“‘]+|[`"'”’]+$/g, '').trim();
-      if (!registered.has(baseName(rawSource)) && !registered.has(baseName(unwrapped))) {
+      // Try the exact text first (a real filename may start with an apostrophe), then without ONE matching outer wrapper.
+      const candidates = [rawSource];
+      for (const [open, close] of [['`', '`'], ['"', '"'], ["'", "'"], ['“', '”'], ['‘', '’']]) {
+        if (rawSource.length > 2 && rawSource.startsWith(open) && rawSource.endsWith(close)) candidates.push(rawSource.slice(1, -1).trim());
+      }
+      if (!candidates.some((c) => registered.has(baseName(c)))) {
         add('source-not-registered', 'warn', startLine, `Declared Source "${rawSource}" is not listed in the note's frontmatter sources.`, 'Use one of the registered attachment filenames, or register the source first.');
       }
     }
@@ -509,13 +510,14 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
     if (!hasLocator(item.text)) {
       add('claim-no-locator', 'warn', item.line, `Claim C${id} has no locator.`, 'Add a locator such as (Fig 2A–E), (Table 1), (Suppl. S3), (PDF p. 7) or (§Methods).');
     }
-    // Evidence IDs are read only from the claim's final parenthesis, next to the locator: "(Fig 2B, E2)".
-    // An earlier "(E3)" is more likely a gene or enzyme symbol.
-    const groups = [...item.text.matchAll(/\(([^()]*)\)/g)];
-    const last = groups[groups.length - 1];
-    for (const token of last ? last[1].split(/[;,]/).map((s) => s.trim()) : []) {
-      const em = /^E(\d+)$/.exec(token);
-      if (em) evidenceRefs.push({ id: Number(em[1]), line: item.line });
+    // Evidence IDs are read from any parenthesis that holds a locator or only IDs: "(Fig 2B, E2)" or "(E2)".
+    // A symbol that looks like an ID (the E3 ligase) is written in backticks, which are skipped here.
+    for (const group of item.text.replace(/`[^`]*`/g, '').matchAll(/\(([^()]*)\)/g)) {
+      if (!hasLocator(group[1]) && !isIdList(group[1])) continue;
+      for (const token of group[1].split(/[;,]/).map((s) => s.trim())) {
+        const em = /^E(\d+)$/.exec(token);
+        if (em) evidenceRefs.push({ id: Number(em[1]), line: item.line });
+      }
     }
   }
 
@@ -543,7 +545,7 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
   for (const ref of evidenceRefs) {
     cited.add(ref.id);
     if (!evidenceIds.has(ref.id)) {
-      add('undefined-evidence-ref', 'warn', ref.line, `A claim cites E${ref.id}, which is not defined in Evidence.`, `Define "- **E${ref.id}** …" in ## Evidence or remove the reference.`);
+      add('undefined-evidence-ref', 'warn', ref.line, `A claim cites E${ref.id}, which is not defined in Evidence.`, `Define "- **E${ref.id}** …" in ## Evidence or remove the reference. If E${ref.id} is a scientific symbol (the E${ref.id} ligase), write it in backticks.`);
     }
   }
   for (const [id, line] of evidenceIds) {
@@ -553,16 +555,16 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
   }
 
   // ---- claim references (prose + Mermaid labels) -----------------------------
-  // Claim references are read only where the layout puts them (numbered steps and diagram labels in Reasoning).
-  // Elsewhere "(C3)" is more likely complement component 3 than claim 3.
-  const refScope = sectionLines('Reasoning').filter((l) => l.kind === 'prose' || (l.kind === 'fence-body' && l.lang === 'mermaid' && !/^\s*%%/.test(l.text)));
+  // Claim references are read everywhere (prose and diagram labels). A scientific symbol that looks like an ID, such as
+  // complement component 3 or the E3 ligase, is written in backticks or spelled out; inline code is skipped here.
+  const refScope = lines.filter((l) => l.kind === 'prose' || (l.kind === 'fence-body' && l.lang === 'mermaid' && !/^\s*%%/.test(l.text)));
   for (const l of refScope) {
     const seen = new Set<number>();
-    for (const token of parentheticalTokens(l.text)) {
+    for (const token of parentheticalTokens(l.text.replace(/`[^`]*`/g, ''))) {
       for (const num of claimRefNumbers(token) ?? []) {
         if (!claimIds.has(num) && !seen.has(num)) {
           seen.add(num);
-          add('undefined-claim-ref', 'warn', l.n, `Reference to C${num}, which is not defined in Claims.`, 'Cite an existing claim ID or add the claim.');
+          add('undefined-claim-ref', 'warn', l.n, `Reference to C${num}, which is not defined in Claims.`, `Cite an existing claim ID or add the claim. If C${num} is a scientific symbol (complement C${num}), write it in backticks or spell it out.`);
         }
       }
     }

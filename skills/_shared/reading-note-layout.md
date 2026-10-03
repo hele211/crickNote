@@ -83,9 +83,9 @@ note is re-ingested.
 
 Write one sentence that says how the paper's argument is built. Add a diagram only
 if it shows something the text cannot show quickly. Then add up to 6 numbered steps
-that cite claims in parentheses: `(C1)`, `(C2, C4)` or `(C1–C3)`. The checker reads these
-references only in this section. Write a protein or complement component as plain text
-("complement C3"), and never put a bare C3 or E3 in parentheses inside Reasoning.
+that cite claims in parentheses: `(C1)`, `(C2, C4)` or `(C1–C3)`. References are read
+everywhere in the note, including diagram labels, and each one must point at a claim
+that exists. See "Writing a scientific symbol that looks like an ID" below.
 
 There are two kinds of diagram. Use at most one of each.
 
@@ -159,7 +159,7 @@ Rules for reading and writing the symbols:
 
 One bullet per observation, each with a locator. Plain bullets are enough. Give a
 bullet an ID (`- **E1** (Fig 3A) …`) only when two or more claims reuse it, and
-then cite it in the final parenthesis of those claims: `(Fig 2B, E1)`. A cited ID must exist.
+then cite it in a parenthesis with the locator: `(Fig 2B, E1)`. A cited ID must exist.
 
 ## Figure Map
 
@@ -189,6 +189,15 @@ critical analysis. Each factual item cites its source. When you cannot name a
 source, end the item with "Not verified: no source recorded." Put a
 `> [!warning] Not verified` callout around claims that nobody has checked. Label a
 closing interpretation "Analyst synthesis".
+
+## Writing a scientific symbol that looks like an ID
+
+The checker reads `(C1)`, `(C2, C4)` and `(Fig 2B, E1)` as references to claims and
+evidence in this note, wherever they appear. Some scientific symbols look the same:
+complement component 3 (`C3`), an E3 ubiquitin ligase (`E3`), estradiol (`E2`). Write
+such a symbol in backticks, as `C3`, or spell it out without parentheses ("complement
+C3", "the E3 ligase"). Inline code is skipped. Do not put a bare C3 or E3 in
+parentheses.
 
 ## Checking a note
 
