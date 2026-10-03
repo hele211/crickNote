@@ -398,7 +398,7 @@ describe('lintReadingNote — Mermaid and HTML', () => {
   });
 
   it('warns about double-bracket link syntax inside a Mermaid block', () => {
-    const body = mutate(golden.body, 'B["Activation entry preserved"]', 'B[["Activation entry preserved"]]');
+    const body = mutate(golden.body, 'B["CD69 readout nearly unchanged"]', 'B[["CD69 readout nearly unchanged"]]');
     expect(codes(lintReadingNote(body).findings, 'warn')).toContain('mermaid-wikilink');
   });
 
@@ -483,7 +483,7 @@ describe('lintReadingNote — Mermaid and HTML', () => {
   });
 
   it('reports an unquoted label with special characters as info', () => {
-    const body = mutate(golden.body, 'B["Activation entry preserved"]', 'B[Activation (entry) preserved]');
+    const body = mutate(golden.body, 'B["CD69 readout nearly unchanged"]', 'B[CD69 readout (nearly) unchanged]');
     expect(codes(lintReadingNote(body).findings, 'info')).toContain('mermaid-unquoted-label');
   });
 });
@@ -593,7 +593,7 @@ describe('lintReadingNote — review round 2 regressions', () => {
   });
 
   it('keeps scanning visible text that follows the end of a multi-line HTML comment', () => {
-    const body = mutate(golden.body, 'IL-42 appears to weaken', '<!--\nhidden\n--> See (C99).\n\nIL-42 appears to weaken');
+    const body = mutate(golden.body, 'The authors first separate early activation', '<!--\nhidden\n--> See (C99). The authors first separate early activation');
     expect(codes(lintReadingNote(body, { sources: golden.sources }).findings, 'warn')).toContain('undefined-claim-ref');
   });
 
@@ -631,5 +631,91 @@ describe('lintReadingNote — review round 2 regressions', () => {
     expect(codes(lintReadingNote(chained).findings, 'info')).toContain('mermaid-unquoted-label');
     const inline = golden.body + '\n```mermaid\nflowchart TB\n  A -- bad (C1) --> B\n```\n';
     expect(codes(lintReadingNote(inline).findings, 'info')).toContain('mermaid-unquoted-label');
+  });
+});
+
+describe('lintReadingNote — review round 3 regressions', () => {
+  const inMermaid = (lines: string[]): string => golden.body + `\n\`\`\`mermaid\nflowchart TB\n${lines.join('\n')}\n\`\`\`\n`;
+  const withClaim = (claim: string): string => {
+    const start = golden.body.indexOf('## Claims\n') + '## Claims\n'.length;
+    return golden.body.slice(0, start) + `\n${claim}\n` + golden.body.slice(golden.body.indexOf('\n- **C2**'));
+  };
+  const timeIt = (body: string): number => {
+    const started = performance.now();
+    lintReadingNote(body, { sources: golden.sources });
+    return performance.now() - started;
+  };
+
+  it('does not stall on whitespace-heavy lines (inline edge label scan, HTML, claims, labels)', () => {
+    const spaces = ' '.repeat(3200);
+    const payloads = [
+      inMermaid([`A --${spaces}X`]),
+      inMermaid([`A -- ${spaces}X`]),
+      inMermaid([`A -- ${spaces} --> B`]),
+      inMermaid([`A -- ${'x '.repeat(1600)}`]),
+      mutate(golden.body, 'IL-42 appears to weaken', `<div ${spaces}x IL-42 appears to weaken`),
+      mutate(golden.body, 'IL-42 appears to weaken', `${'<div '.repeat(800)} IL-42 appears to weaken`),
+      withClaim(`- **C1** [measured] ${spaces}claim text. (Fig 1A)`),
+      mutate(golden.body, '> **Source:** paper.md', `> **Source:** ${spaces}paper.md`),
+    ];
+    for (const [i, body] of payloads.entries()) expect(timeIt(body), `payload ${i}`).toBeLessThan(500);
+  });
+
+  it('requires a value for every TL;DR field and stops reading Source at the next field', () => {
+    const emptySource = mutate(golden.body, '> **Source:** paper.md', '> **Source:**\n> **Found:** The tracer reached tissue.');
+    expect(codes(lintReadingNote(emptySource, { sources: golden.sources }).findings, 'warn')).toContain('tldr-no-source');
+    for (const field of ['Did', 'Found', 'Trust', 'Why it matters here']) {
+      const body = golden.body.replace(new RegExp(`^> \\*\\*${field}:\\*\\*.*$`, 'm'), `> **${field}:**`);
+      expect(body, field).not.toBe(golden.body);
+      const finding = lintReadingNote(body, { sources: golden.sources }).findings.find((f) => f.code === 'tldr-missing-field');
+      expect(finding?.severity, field).toBe('warn');
+      expect(finding?.message, field).toContain(field);
+    }
+  });
+
+  it('keeps an exactly registered filename even when it starts or ends with quote-like characters', () => {
+    for (const name of ["'Authors'.pdf", '"Quoted".pdf', '`tick`.pdf']) {
+      const body = mutate(golden.body, '**Source:** paper.md', `**Source:** ${name}`);
+      expect(codes(lintReadingNote(body, { sources: [name] }).findings), name).not.toContain('source-not-registered');
+    }
+  });
+
+  it('does not read comparisons like "t<time and n>3" as HTML, but still flags real tags', () => {
+    for (const prose of ['The effect occurred when t<time and n>3', 'when n<data and m>2 held', 'if x<label and y>z']) {
+      const body = mutate(golden.body, 'IL-42 appears to weaken', `${prose}. IL-42 appears to weaken`);
+      expect(codes(lintReadingNote(body).findings), prose).not.toContain('html-tag');
+    }
+    for (const html of ['line one<br />line two', '<time datetime="2026-01-01">x</time>', '<dl><dt>a</dt></dl>', '<b>bold</b>']) {
+      const body = mutate(golden.body, 'IL-42 appears to weaken', `${html} IL-42 appears to weaken`);
+      expect(codes(lintReadingNote(body).findings, 'warn'), html).toContain('html-tag');
+    }
+  });
+
+  it('reads claim references only in Reasoning, so scientific symbols like complement (C3) and the E3 ligase are not note references', () => {
+    const complement = withClaim('- **C1** [measured] Complement component 3 (C3) increased in mouse serum. (Fig 1A)');
+    expect(codes(lintReadingNote(complement, { sources: golden.sources }).findings)).not.toContain('undefined-claim-ref');
+    const ligase = withClaim('- **C1** [measured] The E3 ubiquitin ligase (E3) was recruited. (Fig 1A)');
+    expect(codes(lintReadingNote(ligase, { sources: golden.sources }).findings)).not.toContain('undefined-evidence-ref');
+    const takeaways = mutate(golden.body, 'IL-42 appears to weaken', 'Complement (C9) and the E3 ligase (E7) are unrelated. IL-42 appears to weaken');
+    expect(codes(lintReadingNote(takeaways, { sources: golden.sources }).findings)).not.toContain('undefined-claim-ref');
+    // Genuine undefined references are still caught where they are read.
+    expect(codes(lintReadingNote(withClaim('- **C1** [measured] A claim. (Fig 1A, E9)'), { sources: golden.sources }).findings, 'warn')).toContain('undefined-evidence-ref');
+    expect(codes(lintReadingNote(mutate(golden.body, '(C5).\n', '(C99).\n'), { sources: golden.sources }).findings, 'warn')).toContain('undefined-claim-ref');
+  });
+
+  it('does not give label advice for Mermaid comment lines', () => {
+    const body = inMermaid(['%% Example A[kinase (C99)]', '  A["signal"] --> B["output"]']);
+    expect(codes(lintReadingNote(body).findings)).not.toContain('mermaid-unquoted-label');
+  });
+
+  it('does not count inline edge-label text as nodes', () => {
+    const make = (n: number): string => inMermaid(Array.from({ length: n - 1 }, (_, i) => `  N${i} -- signal${i} --> N${i + 1}`));
+    expect(codes(lintReadingNote(make(12)).findings)).not.toContain('mermaid-too-large');
+    expect(codes(lintReadingNote(make(13)).findings)).toContain('mermaid-too-large');
+  });
+
+  it('the golden example keeps the measured CD69 readout separate from the inferred activation reading', () => {
+    expect(golden.body).not.toMatch(/\*\*C2\*\* \[measured\][^\n]*so early activation/);
+    expect(golden.body).not.toMatch(/observed: CD69 unchanged/);
   });
 });

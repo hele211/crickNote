@@ -93,8 +93,10 @@ and the remaining checker warnings to the user for review. The note stays `draft
 `vault_write_body` on the (small) note; only "re-read the paper" warrants
 re-dispatching the subagent. The raw paper never enters this (parent) context.
 
-If your runtime has no subagent mechanism, run steps 1–4 inline instead — you lose
-the context isolation but the written note is identical.
+If your runtime has no subagent mechanism, run steps 0–6 inline instead (read the
+shared docs, inspect, compile, draft, write, run the checker, and report the
+remaining warnings) — you lose the context isolation but the written note is
+identical.
 
 ## Check status
 `cricknote tool reading_pipeline_status '{"path":"Reading/Papers/<slug>.md"}'`

@@ -32,6 +32,32 @@ describe('cricknote-reading-intake skill (layout v2 wiring)', () => {
     expect(skill).toMatch(/remaining (warnings|findings)/i);
   });
 
+  it('runs the steps in order: read the shared docs, inspect, compile, draft, write, then lint', () => {
+    const at = (needle: string): number => {
+      const i = skill.indexOf(needle);
+      expect(i, needle).toBeGreaterThanOrEqual(0);
+      return i;
+    };
+    const order = [
+      at('0. Read `.claude/skills/_shared/readable-output.md`'),
+      at('1. `cricknote tool inspect_reading_note_sources'),
+      at('2. Compile each recommended PDF range'),
+      at('3. Draft the note in the layout'),
+      at('4. Write it: `cricknote tool vault_write_body'),
+      at('5. Check it: `cricknote tool lint_reading_note'),
+      at('6. Return ONLY'),
+    ];
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  it('the no-subagent fallback covers the whole sequence, including the shared docs, the checker and the warning report', () => {
+    const fallback = skill.slice(skill.indexOf('no subagent mechanism'));
+    expect(fallback).toMatch(/steps 0[–-]6|steps 0 to 6/);
+    expect(fallback).not.toMatch(/steps 1[–-]4/);
+    expect(fallback).toMatch(/lint_reading_note|checker/i);
+    expect(fallback).toMatch(/warnings/i);
+  });
+
   it('moves the Figure Map below Evidence and no longer says it goes at the top', () => {
     expect(skill).not.toMatch(/goes at the top, before `## Claims`/);
     expect(skill).toMatch(/Figure Map[^\n]*(after|below)[^\n]*Evidence|(after|below)[^\n]*`## Evidence`[^\n]*Figure Map/i);

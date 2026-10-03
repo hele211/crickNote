@@ -83,7 +83,9 @@ note is re-ingested.
 
 Write one sentence that says how the paper's argument is built. Add a diagram only
 if it shows something the text cannot show quickly. Then add up to 6 numbered steps
-that cite claims in parentheses: `(C1)`, `(C2, C4)` or `(C1–C3)`.
+that cite claims in parentheses: `(C1)`, `(C2, C4)` or `(C1–C3)`. The checker reads these
+references only in this section. Write a protein or complement component as plain text
+("complement C3"), and never put a bare C3 or E3 in parentheses inside Reasoning.
 
 There are two kinds of diagram. Use at most one of each.
 
@@ -157,7 +159,7 @@ Rules for reading and writing the symbols:
 
 One bullet per observation, each with a locator. Plain bullets are enough. Give a
 bullet an ID (`- **E1** (Fig 3A) …`) only when two or more claims reuse it, and
-then cite it from those claims: `(Fig 2B, E1)`. A cited ID must exist.
+then cite it in the final parenthesis of those claims: `(Fig 2B, E1)`. A cited ID must exist.
 
 ## Figure Map
 

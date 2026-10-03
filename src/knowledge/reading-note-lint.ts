@@ -107,16 +107,17 @@ export function hasLocator(text: string): boolean {
 
 const BARE_PAGE_LOCATOR = /(?<!PDF )(?<!printed )\bp\.\s*\d+/;
 
-// Common HTML element names. Single-letter tags (a, b, i, p, q, s, u) only count with an immediate ">" or an
-// attribute with "=", because "a<b and c>d" and "P<0.05 and n>3" are ordinary prose. This is a heuristic, not an
-// HTML parser: it catches the usual tags, not every possible construct.
+// Common HTML element names. Every tag only counts with an immediate ">" ("<br>", "<br />") or an attribute with
+// "=", because "a<b and c>d", "t<time and n>3" and "P<0.05 and n>3" are ordinary prose. This is a heuristic, not an
+// HTML parser: it catches the usual tags, not every possible construct (a bare boolean attribute such as
+// "<p hidden>" slips through).
 const HTML_TAG_NAMES =
   'abbr|address|area|article|aside|audio|base|bdi|bdo|big|blockquote|body|br|button|canvas|caption|center|cite|code|col|colgroup|'
   + 'data|datalist|dd|del|details|dfn|dialog|div|dl|dt|em|embed|fieldset|figcaption|figure|font|footer|form|h[1-6]|head|header|hr|html|'
   + 'iframe|img|input|ins|kbd|label|legend|li|link|main|map|mark|menu|meta|meter|nav|noscript|object|ol|optgroup|option|output|picture|'
   + 'pre|progress|rp|rt|ruby|samp|script|section|select|slot|small|source|span|strike|strong|style|sub|summary|sup|svg|table|tbody|td|'
   + 'template|textarea|tfoot|th|thead|time|title|tr|track|tt|ul|var|video|wbr';
-const HTML_TAG = new RegExp(`<\\/?(?:(?:${HTML_TAG_NAMES})(?:\\s[^<>]*)?|(?:a|b|i|p|q|s|u)(?:\\s+[a-z-]+=[^<>]*)?)\\/?>`, 'i');
+const HTML_TAG = new RegExp(`<\\/?(?:${HTML_TAG_NAMES}|a|b|i|p|q|s|u)(?:\\s+[a-z-]+=[^<>]*)?\\s*\\/?>`, 'i');
 
 function scan(body: string): { lines: ScannedLine[]; unclosedFenceLine: number | null } {
   const raw = body.replace(/\r\n?/g, '\n').split('\n');
@@ -178,6 +179,21 @@ function scan(body: string): { lines: ScannedLine[]; unclosedFenceLine: number |
 
   const unclosed = fence as { startLine: number } | null;
   return { lines, unclosedFenceLine: unclosed ? unclosed.startLine : null };
+}
+
+const TLDR_FIELD_MARKER = /\*\*(Did|Found|Trust|Why it matters here|Source):\*\*/gi;
+
+/** Maps each TL;DR field label (lower case) to the text up to the next field marker. */
+function tldrFields(joined: string): Map<string, string> {
+  const fields = new Map<string, string>();
+  const marks = [...joined.matchAll(TLDR_FIELD_MARKER)];
+  marks.forEach((m, i) => {
+    const start = (m.index ?? 0) + m[0].length;
+    const end = i + 1 < marks.length ? (marks[i + 1].index ?? joined.length) : joined.length;
+    const key = m[1].toLowerCase();
+    if (!fields.has(key)) fields.set(key, joined.slice(start, end));
+  });
+  return fields;
 }
 
 function countWords(text: string): number {
@@ -249,8 +265,8 @@ function hasUnquotedSpecialLabel(text: string): boolean {
     if (SPECIAL_LABEL_CHARS.test(edge[1])) return true;
   }
   // Inline edge text: "A -- text --> B", "A == text ==> B", "A -. text .-> B".
-  for (const edge of labels.matchAll(/(?:--|==|-\.)\s+([^|"]*?)\s+(?:-->|==>|\.->|--[xo]|---)/g)) {
-    if (SPECIAL_LABEL_CHARS.test(edge[1])) return true;
+  for (const label of inlineEdgeLabels(labels).labels) {
+    if (SPECIAL_LABEL_CHARS.test(label)) return true;
   }
   for (const m of labels.matchAll(/\b[A-Za-z_]\w*(\(\[|\{\{|\(\(|\[|\(|\{)/g)) {
     const close = NODE_SHAPES.find(([open]) => open === m[1])![1];
@@ -262,12 +278,44 @@ function hasUnquotedSpecialLabel(text: string): boolean {
   return false;
 }
 
+const INLINE_LABEL_OPEN = /\s(?:--|==|-\.)\s/;
+const INLINE_LABEL_CLOSE = ['-->', '==>', '.->', '--x', '--o', '---'];
+
+/**
+ * Splits "A -- text --> B" style edges into the text of each inline label and a copy of the line with each label
+ * removed. Written as a scan, not one regex: overlapping whitespace quantifiers backtrack badly on long lines.
+ */
+function inlineEdgeLabels(line: string): { stripped: string; labels: string[] } {
+  const labels: string[] = [];
+  let stripped = '';
+  let rest = line;
+  for (;;) {
+    const open = INLINE_LABEL_OPEN.exec(rest);
+    if (!open) break;
+    const textStart = open.index + open[0].length;
+    let end = -1;
+    let op = '';
+    for (const candidate of INLINE_LABEL_CLOSE) {
+      const at = rest.indexOf(candidate, textStart);
+      if (at >= 0 && (end < 0 || at < end)) {
+        end = at;
+        op = candidate;
+      }
+    }
+    if (end < 0) break;
+    labels.push(rest.slice(textStart, end).trim());
+    stripped += `${rest.slice(0, open.index)} ${op}`;
+    rest = rest.slice(end + op.length);
+  }
+  return { stripped: stripped + rest, labels };
+}
+
 function mermaidNodeCount(lines: ScannedLine[]): number {
   const ids = new Set<string>();
   const skip = /^\s*(?:flowchart|graph|subgraph|end\b|classDef|class\b|style\b|linkStyle|click\b|direction\b|%%)/;
   for (const l of lines) {
     if (skip.test(l.text) || l.text.trim() === '') continue;
-    const bare = l.text.replace(/"[^"]*"/g, '""').replace(/\|[^|]*\|/g, '');
+    const bare = inlineEdgeLabels(l.text.replace(/"[^"]*"/g, '""').replace(/\|[^|]*\|/g, '')).stripped;
     for (const segment of bare.split(MERMAID_LINKS)) {
       const m = /^\s*([A-Za-z_]\w*)/.exec(segment);
       if (m) ids.add(m[1]);
@@ -372,22 +420,27 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
       add('tldr-too-long', 'warn', startLine, `TL;DR has ${tldrWords} words (limit ${TLDR_MAX_WORDS}).`, 'Cut it to Did, Found, Trust, Why it matters here, Source.');
     }
     const joined = content.map((c) => c.text).join('\n');
+    const fields = tldrFields(joined);
     for (const field of ['Did', 'Found', 'Trust', 'Why it matters here']) {
-      if (!new RegExp(`\\*\\*${field}:\\*\\*`, 'i').test(joined)) {
+      const value = fields.get(field.toLowerCase());
+      if (value === undefined) {
         add('tldr-missing-field', 'warn', startLine, `TL;DR has no "**${field}:**" field.`, `Add "**${field}:** …" to the TL;DR callout.`);
+      } else if (value.replace(/\*/g, '').trim() === '') {
+        add('tldr-missing-field', 'warn', startLine, `TL;DR field "**${field}:**" is empty.`, `Write the ${field.toLowerCase()} field, or remove the label.`);
       }
     }
-    // The Source value is the rest of the field, up to the next bold field: filenames can contain spaces.
-    const srcMatch = /\*\*Source:\*\*\s*(.+)/i.exec(joined) ?? /(?:^|\n)Source:\s*(.+)/i.exec(joined);
-    const srcValue = srcMatch ? srcMatch[1].split(/\s+\*\*/)[0].trim().replace(/^[`"'“‘]+|[`"'”’]+$/g, '').trim() : '';
-    const src = srcMatch && srcValue ? [srcMatch[0], srcValue] : null;
-    if (!src) {
+    // The Source value is the rest of its own line: filenames can contain spaces and punctuation.
+    const plainSource = /(?:^|\n)\s*Source:\s*(.*)/i.exec(joined);
+    const rawSource = (fields.get('source') ?? plainSource?.[1] ?? '').split('\n')[0].trim();
+    if (!rawSource) {
       add('tldr-no-source', 'warn', startLine, 'TL;DR has no "**Source:** <filename>" line.', 'Name the primary attachment, for example "> **Source:** paper.pdf".');
     } else if (options.sources !== undefined) {
-      const declared = path.posix.basename(src[1].replace(/\\/g, '/'));
-      const registered = new Set(options.sources.map((s) => path.posix.basename(s.replace(/\\/g, '/'))));
-      if (!registered.has(declared)) {
-        add('source-not-registered', 'warn', startLine, `Declared Source "${src[1]}" is not listed in the note's frontmatter sources.`, 'Use one of the registered attachment filenames, or register the source first.');
+      const baseName = (s: string): string => path.posix.basename(s.replace(/\\/g, '/'));
+      const registered = new Set(options.sources.map(baseName));
+      // Try the exact text first (a real filename may start with an apostrophe), then without wrapping quotes or backticks.
+      const unwrapped = rawSource.replace(/^[`"'“‘]+|[`"'”’]+$/g, '').trim();
+      if (!registered.has(baseName(rawSource)) && !registered.has(baseName(unwrapped))) {
+        add('source-not-registered', 'warn', startLine, `Declared Source "${rawSource}" is not listed in the note's frontmatter sources.`, 'Use one of the registered attachment filenames, or register the source first.');
       }
     }
   }
@@ -456,7 +509,11 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
     if (!hasLocator(item.text)) {
       add('claim-no-locator', 'warn', item.line, `Claim C${id} has no locator.`, 'Add a locator such as (Fig 2A–E), (Table 1), (Suppl. S3), (PDF p. 7) or (§Methods).');
     }
-    for (const token of parentheticalTokens(item.text)) {
+    // Evidence IDs are read only from the claim's final parenthesis, next to the locator: "(Fig 2B, E2)".
+    // An earlier "(E3)" is more likely a gene or enzyme symbol.
+    const groups = [...item.text.matchAll(/\(([^()]*)\)/g)];
+    const last = groups[groups.length - 1];
+    for (const token of last ? last[1].split(/[;,]/).map((s) => s.trim()) : []) {
       const em = /^E(\d+)$/.exec(token);
       if (em) evidenceRefs.push({ id: Number(em[1]), line: item.line });
     }
@@ -496,7 +553,9 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
   }
 
   // ---- claim references (prose + Mermaid labels) -----------------------------
-  const refScope = lines.filter((l) => l.kind === 'prose' || (l.kind === 'fence-body' && l.lang === 'mermaid' && !/^\s*%%/.test(l.text)));
+  // Claim references are read only where the layout puts them (numbered steps and diagram labels in Reasoning).
+  // Elsewhere "(C3)" is more likely complement component 3 than claim 3.
+  const refScope = sectionLines('Reasoning').filter((l) => l.kind === 'prose' || (l.kind === 'fence-body' && l.lang === 'mermaid' && !/^\s*%%/.test(l.text)));
   for (const l of refScope) {
     const seen = new Set<number>();
     for (const token of parentheticalTokens(l.text)) {
@@ -537,7 +596,7 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
         add('mermaid-too-large', 'info', block.startLine, `Diagram has about ${nodes} nodes (guide: at most ${MERMAID_MAX_NODES}).`, 'Split the argument or drop minor steps.');
       }
       for (const l of block.lines) {
-        if (hasUnquotedSpecialLabel(l.text)) {
+        if (!/^\s*%%/.test(l.text) && hasUnquotedSpecialLabel(l.text)) {
           add('mermaid-unquoted-label', 'info', l.n, 'Label with special characters is not quoted.', 'Wrap the label in double quotes.');
         }
       }

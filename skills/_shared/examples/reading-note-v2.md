@@ -31,7 +31,7 @@ tags: [reading, immunology, il-42, cd8]
 ## Claims
 
 - **C1** [measured] IL-42 at 20 ng/mL reduced granzyme B-positive primary human CD8 cells by 38% and IFN-gamma-positive cells by 24%. (§Results 1)
-- **C2** [measured] CD69 changed by less than 5%, so early activation was largely preserved. (§Results 2)
+- **C2** [measured] CD69 changed by less than 5%. (§Results 2)
 - **C3** [measured] Suppression also occurred when a transwell separated the secreting cells from the responder cells. (§Results 3)
 - **C4** [inferred] The authors infer that IL-42 acts through a soluble, contact-independent mechanism that lowers effector output instead of blocking activation. (§Results 2, §Results 3, §Interpretation)
 - **C5** [measured] Jurkat cells showed a weaker granzyme B reduction (about 15%) than primary cells. (§Results 4)
@@ -43,7 +43,7 @@ The authors first separate early activation from later effector output. They the
 
 ```mermaid
 flowchart TB
-  A["IL-42 added to activated CD8 cells"] -->|"observed: CD69 unchanged (C2)"| B["Activation entry preserved"]
+  A["IL-42 added to activated CD8 cells"] -->|"observed: CD69 changed by less than 5% (C2)"| B["CD69 readout nearly unchanged"]
   A -->|"observed: granzyme B and IFN-gamma fall (C1)"| C["Effector output reduced"]
   C -.->|"inferred: soluble factor, no contact needed (C3, C4)"| D["Contact-independent suppression"]
 ```
@@ -63,7 +63,7 @@ flowchart TB
   IL -.->|"inferred: soluble signal, no contact needed (C3, C4)"| CD8
 ```
 
-1. **Early activation:** CD69 changed by less than 5%, so the cells still entered activation (C2).
+1. **Early activation:** CD69 changed by less than 5% (C2). The authors read this as largely preserved activation (C4).
 2. **Effector output:** Granzyme B-positive and IFN-gamma-positive cells dropped at 20 ng/mL (C1).
 3. **Contact test:** Suppression persisted when a transwell separated the cells, which argues for a soluble mechanism (C3, C4).
 4. **Specificity:** Anti-IL-42 antibody restored granzyme B to near baseline (C6).
