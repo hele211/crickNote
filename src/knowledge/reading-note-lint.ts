@@ -55,7 +55,6 @@ export const SUPPORT_TYPES = ['measured', 'inferred', 'proposed'] as const;
 
 /** Numeric limits. Exported so tests can check that the shared docs quote the same numbers. */
 export const LINT_LIMITS = {
-  tldrMaxLines: 5,
   tldrMaxWords: 160,
   longSentenceWords: 25,
   longParagraphSentences: 7,
@@ -66,7 +65,6 @@ export const LINT_LIMITS = {
   maxFindingsPerCode: 8,
 } as const;
 
-const TLDR_MAX_LINES = LINT_LIMITS.tldrMaxLines;
 const TLDR_MAX_WORDS = LINT_LIMITS.tldrMaxWords;
 const LONG_SENTENCE_WORDS = LINT_LIMITS.longSentenceWords;
 const LONG_PARAGRAPH_SENTENCES = LINT_LIMITS.longParagraphSentences;
@@ -109,21 +107,38 @@ export function hasLocator(text: string): boolean {
 
 const BARE_PAGE_LOCATOR = /(?<!PDF )(?<!printed )\bp\.\s*\d+/;
 
-// Real HTML tag names only, so that text like "x<y and z>w" is not flagged. Single-letter
-// tags need an immediate ">" or an attribute, because "a<b and c>d" is common in prose.
-const HTML_TAG = new RegExp(
-  '<\\/?(?:'
-    + '(?:br|code|del|details|div|em|font|h[1-6]|hr|iframe|img|ins|kbd|li|mark|ol|pre|script|small|span|strong|style|sub|summary|sup|table|tbody|td|th|thead|tr|ul|video|audio|svg|center|blockquote)(?:\\s[^<>]*)?'
-    + '|(?:a|b|i|u|p|s|q)(?:\\s+[a-z-]+=[^<>]*)?'
-    + ')\\/?>',
-  'i',
-);
+// Common HTML element names. Single-letter tags (a, b, i, p, q, s, u) only count with an immediate ">" or an
+// attribute with "=", because "a<b and c>d" and "P<0.05 and n>3" are ordinary prose. This is a heuristic, not an
+// HTML parser: it catches the usual tags, not every possible construct.
+const HTML_TAG_NAMES =
+  'abbr|address|area|article|aside|audio|base|bdi|bdo|big|blockquote|body|br|button|canvas|caption|center|cite|code|col|colgroup|'
+  + 'data|datalist|dd|del|details|dfn|dialog|div|dl|dt|em|embed|fieldset|figcaption|figure|font|footer|form|h[1-6]|head|header|hr|html|'
+  + 'iframe|img|input|ins|kbd|label|legend|li|link|main|map|mark|menu|meta|meter|nav|noscript|object|ol|optgroup|option|output|picture|'
+  + 'pre|progress|rp|rt|ruby|samp|script|section|select|slot|small|source|span|strike|strong|style|sub|summary|sup|svg|table|tbody|td|'
+  + 'template|textarea|tfoot|th|thead|time|title|tr|track|tt|ul|var|video|wbr';
+const HTML_TAG = new RegExp(`<\\/?(?:(?:${HTML_TAG_NAMES})(?:\\s[^<>]*)?|(?:a|b|i|p|q|s|u)(?:\\s+[a-z-]+=[^<>]*)?)\\/?>`, 'i');
 
 function scan(body: string): { lines: ScannedLine[]; unclosedFenceLine: number | null } {
   const raw = body.replace(/\r\n?/g, '\n').split('\n');
   const lines: ScannedLine[] = [];
   let fence: { marker: string; lang: string; startLine: number } | null = null;
   let inComment = false;
+
+  // Strip complete comments, then handle a comment that opens and does not close on this line.
+  const pushProse = (text: string, n: number): void => {
+    let stripped = text.replace(/<!--[\s\S]*?-->/g, '');
+    const hadComment = stripped !== text;
+    const openIdx = stripped.indexOf('<!--');
+    if (openIdx >= 0) {
+      stripped = stripped.slice(0, openIdx);
+      inComment = true;
+    }
+    if ((hadComment || openIdx >= 0) && stripped.trim() === '') {
+      lines.push({ n, text: '', kind: 'comment' });
+    } else {
+      lines.push({ n, text: stripped, kind: 'prose' });
+    }
+  };
 
   raw.forEach((text, i) => {
     const n = i + 1;
@@ -138,8 +153,18 @@ function scan(body: string): { lines: ScannedLine[]; unclosedFenceLine: number |
       return;
     }
     if (inComment) {
-      lines.push({ n, text: '', kind: 'comment' });
-      if (text.includes('-->')) inComment = false;
+      const end = text.indexOf('-->');
+      if (end < 0) {
+        lines.push({ n, text: '', kind: 'comment' });
+        return;
+      }
+      inComment = false;
+      const rest = text.slice(end + 3);
+      if (rest.trim() === '') {
+        lines.push({ n, text: '', kind: 'comment' });
+        return;
+      }
+      pushProse(rest, n); // visible text after "-->" is still note text
       return;
     }
     const open = /^\s*(`{3,}|~{3,})\s*([^\s`]*)/.exec(text);
@@ -148,19 +173,7 @@ function scan(body: string): { lines: ScannedLine[]; unclosedFenceLine: number |
       lines.push({ n, text: '', kind: 'fence-open', lang: open[2].toLowerCase() });
       return;
     }
-    // Strip complete comments, then handle a comment that opens and does not close on this line.
-    let stripped = text.replace(/<!--[\s\S]*?-->/g, '');
-    const hadComment = stripped !== text;
-    const openIdx = stripped.indexOf('<!--');
-    if (openIdx >= 0) {
-      stripped = stripped.slice(0, openIdx);
-      inComment = true;
-    }
-    if ((hadComment || openIdx >= 0) && stripped.trim() === '') {
-      lines.push({ n, text: '', kind: 'comment' });
-    } else {
-      lines.push({ n, text: stripped, kind: 'prose' });
-    }
+    pushProse(text, n);
   });
 
   const unclosed = fence as { startLine: number } | null;
@@ -223,7 +236,8 @@ function claimRefNumbers(token: string): number[] | null {
 }
 
 // Flowchart link operators, longest first so "--x" is not read as "--" plus a node called "x".
-const MERMAID_LINKS = /<-->|x--x|o--o|-\.->|-\.-[xo]|-->|==>|--[xo]|---|-\.-|--/;
+// "x--x" and "o--o" only count when set off by spaces: node IDs such as "Box" end in x or o.
+const MERMAID_LINKS = /<-->|(?<=\s)x--x(?=\s)|(?<=\s)o--o(?=\s)|-\.->|-\.-[xo]|-->|==>|--[xo]|---|-\.-|--/;
 
 const NODE_SHAPES: Array<[open: string, close: string]> = [['([', '])'], ['{{', '}}'], ['((', '))'], ['[', ']'], ['(', ')'], ['{', '}']];
 const SPECIAL_LABEL_CHARS = /[(){}:;,/\\<>]/;
@@ -231,8 +245,13 @@ const SPECIAL_LABEL_CHARS = /[(){}:;,/\\<>]/;
 /** True when an edge label or a node/subgraph label that is not in double quotes contains characters Mermaid may misparse. */
 function hasUnquotedSpecialLabel(text: string): boolean {
   const labels = text.replace(/"[^"]*"/g, '""');
-  const edge = /\|([^|"][^|]*)\|/.exec(labels);
-  if (edge && SPECIAL_LABEL_CHARS.test(edge[1])) return true;
+  for (const edge of labels.matchAll(/\|([^|"][^|]*)\|/g)) {
+    if (SPECIAL_LABEL_CHARS.test(edge[1])) return true;
+  }
+  // Inline edge text: "A -- text --> B", "A == text ==> B", "A -. text .-> B".
+  for (const edge of labels.matchAll(/(?:--|==|-\.)\s+([^|"]*?)\s+(?:-->|==>|\.->|--[xo]|---)/g)) {
+    if (SPECIAL_LABEL_CHARS.test(edge[1])) return true;
+  }
   for (const m of labels.matchAll(/\b[A-Za-z_]\w*(\(\[|\{\{|\(\(|\[|\(|\{)/g)) {
     const close = NODE_SHAPES.find(([open]) => open === m[1])![1];
     const start = (m.index ?? 0) + m[0].length;
@@ -349,11 +368,19 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
       if (text) content.push({ ...l, text });
     }
     tldrWords = countWords(content.map((c) => c.text.replace(/\*+/g, '')).join(' '));
-    if (content.length > TLDR_MAX_LINES || tldrWords > TLDR_MAX_WORDS) {
-      add('tldr-too-long', 'warn', startLine, `TL;DR has ${content.length} lines and ${tldrWords} words (limit ${TLDR_MAX_LINES} lines, ${TLDR_MAX_WORDS} words).`, 'Cut it to Did, Found, Trust, Why it matters here, Source.');
+    if (tldrWords > TLDR_MAX_WORDS) {
+      add('tldr-too-long', 'warn', startLine, `TL;DR has ${tldrWords} words (limit ${TLDR_MAX_WORDS}).`, 'Cut it to Did, Found, Trust, Why it matters here, Source.');
     }
     const joined = content.map((c) => c.text).join('\n');
-    const src = /\*\*Source:\*\*\s*([^\s,;]+)/i.exec(joined) ?? /(?:^|\n)Source:\s*([^\s,;]+)/i.exec(joined);
+    for (const field of ['Did', 'Found', 'Trust', 'Why it matters here']) {
+      if (!new RegExp(`\\*\\*${field}:\\*\\*`, 'i').test(joined)) {
+        add('tldr-missing-field', 'warn', startLine, `TL;DR has no "**${field}:**" field.`, `Add "**${field}:** …" to the TL;DR callout.`);
+      }
+    }
+    // The Source value is the rest of the field, up to the next bold field: filenames can contain spaces.
+    const srcMatch = /\*\*Source:\*\*\s*(.+)/i.exec(joined) ?? /(?:^|\n)Source:\s*(.+)/i.exec(joined);
+    const srcValue = srcMatch ? srcMatch[1].split(/\s+\*\*/)[0].trim().replace(/^[`"'“‘]+|[`"'”’]+$/g, '').trim() : '';
+    const src = srcMatch && srcValue ? [srcMatch[0], srcValue] : null;
     if (!src) {
       add('tldr-no-source', 'warn', startLine, 'TL;DR has no "**Source:** <filename>" line.', 'Name the primary attachment, for example "> **Source:** paper.pdf".');
     } else if (options.sources !== undefined) {
@@ -399,7 +426,8 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
         cur = { line: l.n, text: l.text };
         claimItems.push(cur);
         inStray = false;
-      } else if (l.kind === 'prose' && cur && /^\s+\S/.test(l.text)) {
+      } else if (l.kind === 'prose' && cur && /^\s+\S/.test(l.text) && !/^\s+(?:(?:[-*+]|\d+[.)])\s|[|>#]|`{3,}|~{3,})/.test(l.text)) {
+        // plain indented continuation only: a nested bullet, table, quote or heading is a second structure, not part of the claim
         cur.text += ` ${l.text.trim()}`;
       } else {
         cur = null;
@@ -468,7 +496,7 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
   }
 
   // ---- claim references (prose + Mermaid labels) -----------------------------
-  const refScope = lines.filter((l) => l.kind === 'prose' || (l.kind === 'fence-body' && l.lang === 'mermaid'));
+  const refScope = lines.filter((l) => l.kind === 'prose' || (l.kind === 'fence-body' && l.lang === 'mermaid' && !/^\s*%%/.test(l.text)));
   for (const l of refScope) {
     const seen = new Set<number>();
     for (const token of parentheticalTokens(l.text)) {

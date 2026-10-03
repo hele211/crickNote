@@ -117,24 +117,41 @@ Diagram rules (both kinds):
 
 ### Interaction diagrams
 
-Draw only interactions that the paper states. Never fill a gap with a plausible
-partner: when the paper names no partner, add a node called "(not identified)" and
-a dashed edge.
+Draw only interactions that the paper states.
+
+A solid line claims only what its label says: the exact labelled predicate. "Aqp4
+deletion lowers clearance by about 55%" is solid because the deletion and the
+readout were both measured. It does not make the mechanism between them observed:
+draw that part dashed, with its own label ("inferred: acts through bulk flow").
+Label each dashed line individually as inferred, proposed or discussed.
 
 | Draw | With |
 |---|---|
 | A cell | a stadium node `T(["CD8 T cell"])`, or a `subgraph` box when you need to show what is inside it |
-| A molecule, protein or readout | a rectangle `IL["IL-42"]` |
+| A molecule, protein, receptor, readout or experimental perturbation | a rectangle `IL["IL-42"]`, `KO["Aqp4 deletion (Aqp4-null vs wild type)"]` |
 | Binds, activates, produces, moves | `-->` |
-| Inhibits, lowers, blocks | `--x` (the line ends in a cross) |
-| Binds both ways | `<-->` |
-| Linked, but no change observed | `---` with the label "no change" |
-| Inferred, proposed or only discussed | the dashed form of any of these: `-.->`, `-.-x` |
+| Lowers or blocks the named readout or molecule | `--x` (the line ends in a cross) |
+| Inferred, proposed or only discussed | the dashed form: `-.->`, `-.-x` |
 
-Label each edge with a verb, the condition if it matters, and the claim that backs it:
-`IL --x|"lowers (C1)"| GZB`. When the order of events matters, number the labels:
-`"1 binds (C2)"`, `"2 activates (C3)"`. Write one sentence above the diagram that
-explains the line styles, as in `examples/reading-note-v2.md`.
+Rules for reading and writing the symbols:
+
+- `--x` is a local convention for "lowers". The label must say what is lowered.
+  "lowers the fraction of granzyme B-positive cells" states a measured decrease in a
+  readout. "inhibits kinase K" states molecular inhibition, and needs the paper to
+  say so.
+- A receptor is a molecule, not a cell: use a rectangle.
+- Write a null result in the readout's own box ("CD69: changed by less than 5%").
+  Do not draw it as a line: a negative assay does not prove that there is no link.
+- Add a node called "(not identified)" only when the paper explicitly posits an
+  unidentified partner, for example "a receptor we did not identify". When the paper
+  simply names no partner, draw nothing.
+- Label each edge with a verb, the condition if it matters, and the claim that backs
+  it: `IL --x|"lowers the fraction (C1)"| GZB`. When the order of events matters,
+  number the labels: `"1 binds (C2)"`, `"2 activates (C3)"`.
+- A percentage that describes one perturbation does not split a process into shares.
+  "Clearance fell 55% without AQP4" does not mean that 55% of clearance uses AQP4.
+- Write one sentence above the diagram that explains the line styles, as in
+  `examples/reading-note-v2.md`.
 
 ## Evidence
 

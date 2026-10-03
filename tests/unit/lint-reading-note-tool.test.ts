@@ -52,6 +52,19 @@ describe('lint_reading_note tool', () => {
     expect(result.counts.warn).toBeGreaterThan(0);
   });
 
+  it('in path mode, treats a note with no frontmatter sources as having none registered', async () => {
+    const noSources = goldenRaw.replace(/sources:\n(?:  .*\n)+/, '');
+    expect(noSources).not.toBe(goldenRaw);
+    expect(noSources).not.toContain('sources:');
+    writeNote('Reading/Papers/lee-2026-il42.md', noSources);
+    const result = await run({ path: 'Reading/Papers/lee-2026-il42.md' });
+    expect(result.ok).toBe(false);
+    expect(result.findings.map((f: { code: string }) => f.code)).toContain('source-not-registered');
+    // Body mode with the same text and no frontmatter at all keeps the check optional.
+    const bare = await run({ body: noSources.replace(/^---\n[\s\S]*?\n---\n/, '') });
+    expect(bare.findings.map((f: { code: string }) => f.code)).not.toContain('source-not-registered');
+  });
+
   it('works on Reading/Threads notes too', async () => {
     writeNote('Reading/Threads/topic.md', goldenRaw);
     const result = await run({ path: 'Reading/Threads/topic.md' });

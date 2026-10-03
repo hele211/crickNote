@@ -3,11 +3,18 @@
 Humans review these notes in Obsidian. Agents read them later as raw Markdown.
 Both must be able to use a note without the paper or the chat in hand.
 
-**Required** (the checker warns): headings and their order, IDs and the references
-to them, locators, attribution, closed code fences, no HTML tags. **Preferences**
-(the checker only informs): sentence and paragraph length, bare pronouns, noun
-stacks, diagram size. Break a preference when a qualifier, a comparison or an exact
-term needs the space. Never break rule 6.
+**Checked by `lint_reading_note`.** It warns about: layout headings and their order,
+claim bullets, IDs and the references to them, locators, the TL;DR fields and its
+Source line, closed code fences, and common HTML tags. It only informs about:
+sentence and paragraph length, sentences that start with a bare pronoun, diagram
+size and unquoted diagram labels.
+
+**Checked by hand, by you.** Rule 6 (qualifiers), whose voice each sentence has,
+attribution of outside commentary, one term per concept, noun stacks, and whether a
+locator really supports its claim. No tool checks these.
+
+Break a preference when a qualifier, a comparison or an exact term needs the space.
+Never break rule 6.
 
 ## Say it plainly
 

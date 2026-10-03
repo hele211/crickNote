@@ -42,6 +42,29 @@ describe('skills/_shared documents', () => {
     expect(guide).toContain(`${LINT_LIMITS.longSentenceWords - 5} words or fewer`);
   });
 
+  it('the shipped examples are labelled as synthetic so an agent cannot mistake them for source material', () => {
+    for (const file of [
+      path.join(sharedDir, 'examples', 'reading-note-v2.md'),
+      path.join(repoRoot, 'tests', 'fixtures', 'readable-output', 'figure-paper-with-appraisal.md'),
+    ]) {
+      const text = fs.readFileSync(file, 'utf-8');
+      expect(text, file).toMatch(/^synthetic_example: true$/m);
+      expect(text, file).toMatch(/SYNTHETIC EXAMPLE/);
+    }
+  });
+
+  it('the diagram vocabulary does not promise more than a figure can show', () => {
+    expect(layout).not.toMatch(/binds both ways/i);
+    expect(layout).not.toMatch(/no change observed/i);
+    expect(layout).toMatch(/exact (labelled|labeled) (predicate|claim)|what the (edge )?label (says|names)/i);
+    expect(layout).toMatch(/explicitly (posits|names|states)[^.]*unidentified|unidentified[^.]*explicitly/i);
+  });
+
+  it('the guide only claims the checks the checker really runs', () => {
+    expect(guide).not.toMatch(/attribution\b[^.\n]*\(the checker warns\)|\(the checker warns\)[^.]*attribution/i);
+    expect(guide).toMatch(/manual|by hand|you check/i);
+  });
+
   it('both documents point agents at the checker tool', () => {
     expect(guide).toContain('lint_reading_note');
     expect(layout).toContain('lint_reading_note');

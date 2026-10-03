@@ -1,4 +1,5 @@
 ---
+synthetic_example: true
 title: Compound Q slows tumour spheroid growth by inhibiting kinase K
 authors: [Novak A, Osei B, Tran C]
 year: 2025
@@ -15,6 +16,8 @@ sources:
 related_projects: []
 tags: [reading, oncology]
 ---
+
+<!-- SYNTHETIC EXAMPLE: invented paper, authors, DOI and results used only as a lint fixture. -->
 
 > [!abstract] TL;DR
 > **Did:** The authors dosed 3D tumour spheroids with compound Q and measured growth, kinase K activity and cell death. They tested a kinase K knockdown as a control.

@@ -171,9 +171,25 @@ describe('lintReadingNote — TL;DR', () => {
     expect(result.ok).toBe(false);
   });
 
-  it('warns when the TL;DR has more than 5 content lines', () => {
-    const body = mutate(golden.body, '> **Source:** paper.md', '> **Extra:** one more line\n> **Source:** paper.md');
-    expect(codes(lintReadingNote(body).findings, 'warn')).toContain('tldr-too-long');
+  it('budgets the TL;DR by words, not by physical lines (line breaks change with the window width)', () => {
+    const body = mutate(golden.body, '> **Source:** paper.md', '> **Extra:** one more short line\n> **Source:** paper.md');
+    expect(codes(lintReadingNote(body, { sources: golden.sources }).findings)).not.toContain('tldr-too-long');
+  });
+
+  it('warns about each missing TL;DR field (Did, Found, Trust, Why it matters here)', () => {
+    for (const field of ['Did', 'Found', 'Trust', 'Why it matters here']) {
+      const body = golden.body.replace(new RegExp(`^> \\*\\*${field}:\\*\\*.*\\n`, 'm'), '');
+      expect(body, field).not.toBe(golden.body);
+      const finding = lintReadingNote(body, { sources: golden.sources }).findings.find((f) => f.code === 'tldr-missing-field');
+      expect(finding?.severity, field).toBe('warn');
+      expect(finding?.message, field).toContain(field);
+    }
+  });
+
+  it('a TL;DR that holds only the Source line is not enough', () => {
+    const body = golden.body.replace(/^> \*\*(Did|Found|Trust|Why it matters here):\*\*.*\n/gm, '');
+    const missing = lintReadingNote(body, { sources: golden.sources }).findings.filter((f) => f.code === 'tldr-missing-field');
+    expect(missing).toHaveLength(4);
   });
 
   it('warns when the TL;DR exceeds the word budget', () => {
@@ -548,5 +564,72 @@ describe('lintReadingNote — Figure Map size', () => {
   it('reports figure map row counts in stats', () => {
     const body = mutate(golden.body, '<!-- No data figures found in compiled sources -->', figureMapRows(12));
     expect(lintReadingNote(body).stats.figureMapRows).toBe(12);
+  });
+});
+
+describe('lintReadingNote — review round 2 regressions', () => {
+  const withClaims = (claims: string): string => {
+    const start = golden.body.indexOf('## Claims\n') + '## Claims\n'.length;
+    return golden.body.slice(0, start) + claims + golden.body.slice(golden.body.indexOf('## Reasoning'));
+  };
+
+  it('warns when a nested list item or an indented table sits under a claim', () => {
+    const nested = withClaims('\n- **C1** [measured] Real claim. (§Results 1)\n  - This second claim has no ID or locator.\n\n');
+    expect(codes(lintReadingNote(nested, { sources: golden.sources }).findings, 'warn')).toContain('claim-format');
+    const table = withClaims('\n- **C1** [measured] Real claim. (§Results 1)\n  | a | b |\n  |---|---|\n\n');
+    expect(codes(lintReadingNote(table, { sources: golden.sources }).findings, 'warn')).toContain('claim-format');
+    const quote = withClaims('\n- **C1** [measured] Real claim. (§Results 1)\n  > a hidden second claim\n\n');
+    expect(codes(lintReadingNote(quote, { sources: golden.sources }).findings, 'warn')).toContain('claim-format');
+  });
+
+  it('reads a Source filename with spaces, backticks or quotes in full', () => {
+    for (const written of ['main paper.pdf', '`main paper.pdf`', '"main paper.pdf"']) {
+      const body = mutate(golden.body, '**Source:** paper.md', `**Source:** ${written}`);
+      const result = lintReadingNote(body, { sources: ['main paper.pdf'] });
+      expect(codes(result.findings), written).not.toContain('source-not-registered');
+    }
+    const body = mutate(golden.body, '**Source:** paper.md', '**Source:** main paper.pdf');
+    expect(codes(lintReadingNote(body, { sources: ['paper.md'] }).findings, 'warn')).toContain('source-not-registered');
+  });
+
+  it('keeps scanning visible text that follows the end of a multi-line HTML comment', () => {
+    const body = mutate(golden.body, 'IL-42 appears to weaken', '<!--\nhidden\n--> See (C99).\n\nIL-42 appears to weaken');
+    expect(codes(lintReadingNote(body, { sources: golden.sources }).findings, 'warn')).toContain('undefined-claim-ref');
+  });
+
+  it('does not treat a Mermaid %% comment as a claim reference', () => {
+    const body = mutate(golden.body, '  IL --x|"lowers the fraction (C1)"| GZB\n', '  %% example (C99)\n  IL --x|"lowers the fraction (C1)"| GZB\n');
+    expect(codes(lintReadingNote(body, { sources: golden.sources }).findings)).not.toContain('undefined-claim-ref');
+  });
+
+  it('flags common block and list HTML such as dl, details and b, but still not math-like angle brackets', () => {
+    for (const html of ['<dl><dt>Term</dt><dd>Definition</dd></dl>', '<details><summary>More</summary>text</details>', '<b>bold</b>', '<section class="x">y</section>']) {
+      const body = mutate(golden.body, 'IL-42 appears to weaken', `${html} IL-42 appears to weaken`);
+      expect(codes(lintReadingNote(body).findings, 'warn'), html).toContain('html-tag');
+    }
+    for (const prose of ['when a<b and c>d holds', 'when x<y and z>w holds', 'P<0.05 and n>3']) {
+      const body = mutate(golden.body, 'IL-42 appears to weaken', `${prose}. IL-42 appears to weaken`);
+      expect(codes(lintReadingNote(body).findings), prose).not.toContain('html-tag');
+    }
+  });
+
+  it('counts nodes whose IDs end in x or o correctly (they are not part of an x--x or o--o operator)', () => {
+    const make = (n: number, arrow: string): string => {
+      const edges = Array.from({ length: n - 1 }, (_, i) => `  N${i}x${arrow} N${i + 1}x`).join('\n'); // no space before the operator: the form that used to lose the ID's last letter
+      return golden.body + `\n\`\`\`mermaid\nflowchart TB\n${edges}\n\`\`\`\n`;
+    };
+    for (const arrow of ['-->', '--x', '--o']) {
+      expect(codes(lintReadingNote(make(12, arrow)).findings), `12 nodes ${arrow}`).not.toContain('mermaid-too-large');
+      expect(codes(lintReadingNote(make(13, arrow)).findings), `13 nodes ${arrow}`).toContain('mermaid-too-large');
+    }
+    const spaced = golden.body + '\n```mermaid\nflowchart TB\n  A x--x B\n  C o--o D\n```\n';
+    expect(codes(lintReadingNote(spaced).findings)).not.toContain('mermaid-too-large');
+  });
+
+  it('inspects every edge label on a line and inline "-- text -->" labels, not just the first', () => {
+    const chained = golden.body + '\n```mermaid\nflowchart TB\n  A[Good] -->|plain| B[Good] -->|bad (C1)| C[Good]\n```\n';
+    expect(codes(lintReadingNote(chained).findings, 'info')).toContain('mermaid-unquoted-label');
+    const inline = golden.body + '\n```mermaid\nflowchart TB\n  A -- bad (C1) --> B\n```\n';
+    expect(codes(lintReadingNote(inline).findings, 'info')).toContain('mermaid-unquoted-label');
   });
 });

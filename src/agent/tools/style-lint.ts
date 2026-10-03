@@ -32,7 +32,10 @@ function result(content: string, relPath?: string): string {
   } catch (err) {
     return JSON.stringify({ error: `Frontmatter could not be parsed: ${(err as Error).message}` });
   }
-  const lint = lintReadingNote(parsed.content, { sources: sourcePaths(parsed.data) });
+  // Path mode: a note on disk with no registered sources has none, so a declared Source cannot be registered.
+  // Body mode keeps the check optional unless the supplied text carries frontmatter sources.
+  const declared = sourcePaths(parsed.data);
+  const lint = lintReadingNote(parsed.content, { sources: relPath ? (declared ?? []) : declared });
   const counts = {
     warn: lint.findings.filter((f) => f.severity === 'warn').length,
     info: lint.findings.filter((f) => f.severity === 'info').length,

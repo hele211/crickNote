@@ -1,4 +1,5 @@
 ---
+synthetic_example: true
 title: IL-42 suppresses activated CD8 T cells by lowering granzyme B
 authors: [Lee H, Raman S, Ortega M]
 year: 2026
@@ -17,6 +18,8 @@ sources:
 related_projects: [P001]
 tags: [reading, immunology, il-42, cd8]
 ---
+
+<!-- SYNTHETIC EXAMPLE: the paper, authors, journal, DOI and results below are invented to show the layout. Do not cite or reuse this content. -->
 
 > [!abstract] TL;DR
 > **Did:** The authors treated activated human CD8 T cells with recombinant IL-42 and measured CD69, IFN-gamma and granzyme B after 24 hours. They also ran a transwell test and an antibody rescue.
@@ -45,19 +48,18 @@ flowchart TB
   C -.->|"inferred: soluble factor, no contact needed (C3, C4)"| D["Contact-independent suppression"]
 ```
 
-The second diagram shows who acts on whom. A line ending in a cross means the paper observed a decrease, a plain line means no change, and a dashed line is inferred.
+The second diagram shows who acts on whom. A line ending in a cross means the paper observed a decrease in the named readout, and a dashed line is inferred. The CD69 box has no line. The paper saw no clear change, so the null result is written in the box and not drawn as a link.
 
 ```mermaid
 flowchart TB
   IL["IL-42 (recombinant)"]
-  subgraph CD8["Activated CD8 T cell"]
-    GZB["Granzyme B"]
-    IFN["IFN-gamma"]
-    CD69["CD69"]
+  subgraph CD8["Activated CD8 T cells"]
+    GZB["Granzyme B-positive cells"]
+    IFN["IFN-gamma-positive cells"]
+    CD69["CD69: changed by less than 5% (C2)"]
   end
-  IL --x|"lowers (C1)"| GZB
-  IL --x|"lowers (C1)"| IFN
-  IL ---|"no change (C2)"| CD69
+  IL --x|"lowers the fraction (C1)"| GZB
+  IL --x|"lowers the fraction (C1)"| IFN
   IL -.->|"inferred: soluble signal, no contact needed (C3, C4)"| CD8
 ```
 

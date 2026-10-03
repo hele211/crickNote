@@ -169,15 +169,35 @@ describe('installAssets (config-driven)', () => {
     expect(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf-8')).toBe(config);
   });
 
-  it('follows the CRICKNOTE_DATA_DIR override, so a scratch vault never touches the real one', () => {
-    fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ vaultPath: vault }));
-    const other = fs.mkdtempSync(path.join(os.tmpdir(), 'assets-other-'));
+  it('follows the CRICKNOTE_DATA_DIR override: a scratch vault is written and the default (real) vault is not', () => {
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'assets-home-'));
+    const realVault = fs.mkdtempSync(path.join(os.tmpdir(), 'assets-realvault-'));
+    const previousHome = process.env.HOME;
     try {
-      installAssets({ repoRoot: repo });
+      // The default data dir is ~/.cricknote; point it at a "real" vault that must stay untouched.
+      fs.mkdirSync(path.join(fakeHome, '.cricknote'), { recursive: true });
+      fs.writeFileSync(path.join(fakeHome, '.cricknote', 'config.json'), JSON.stringify({ vaultPath: realVault }));
+      process.env.HOME = fakeHome;
+      // The override selects the scratch config instead.
+      fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ vaultPath: vault }));
+      resetConfigCache();
+
+      const report = installAssets({ repoRoot: repo });
+
+      expect(report.vaultPath).toBe(vault);
       expect(fs.existsSync(path.join(vault, 'CLAUDE.md'))).toBe(true);
-      expect(fs.readdirSync(other)).toEqual([]);
+      expect(fs.readdirSync(realVault)).toEqual([]);
+
+      // Control: without the override, the same call really would target the default vault.
+      delete process.env.CRICKNOTE_DATA_DIR;
+      resetConfigCache();
+      expect(installAssets({ repoRoot: repo, dryRun: true }).vaultPath).toBe(realVault);
+      expect(fs.readdirSync(realVault)).toEqual([]);
     } finally {
-      fs.rmSync(other, { recursive: true, force: true });
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      process.env.CRICKNOTE_DATA_DIR = dataDir;
+      for (const d of [fakeHome, realVault]) fs.rmSync(d, { recursive: true, force: true });
     }
   });
 
