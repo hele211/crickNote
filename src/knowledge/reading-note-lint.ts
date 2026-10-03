@@ -222,13 +222,34 @@ function claimRefNumbers(token: string): number[] | null {
   return Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
 }
 
+// Flowchart link operators, longest first so "--x" is not read as "--" plus a node called "x".
+const MERMAID_LINKS = /<-->|x--x|o--o|-\.->|-\.-[xo]|-->|==>|--[xo]|---|-\.-|--/;
+
+const NODE_SHAPES: Array<[open: string, close: string]> = [['([', '])'], ['{{', '}}'], ['((', '))'], ['[', ']'], ['(', ')'], ['{', '}']];
+const SPECIAL_LABEL_CHARS = /[(){}:;,/\\<>]/;
+
+/** True when an edge label or a node/subgraph label that is not in double quotes contains characters Mermaid may misparse. */
+function hasUnquotedSpecialLabel(text: string): boolean {
+  const labels = text.replace(/"[^"]*"/g, '""');
+  const edge = /\|([^|"][^|]*)\|/.exec(labels);
+  if (edge && SPECIAL_LABEL_CHARS.test(edge[1])) return true;
+  for (const m of labels.matchAll(/\b[A-Za-z_]\w*(\(\[|\{\{|\(\(|\[|\(|\{)/g)) {
+    const close = NODE_SHAPES.find(([open]) => open === m[1])![1];
+    const start = (m.index ?? 0) + m[0].length;
+    if (labels[start] === '"') continue;
+    const end = labels.indexOf(close, start);
+    if (SPECIAL_LABEL_CHARS.test(labels.slice(start, end === -1 ? undefined : end))) return true;
+  }
+  return false;
+}
+
 function mermaidNodeCount(lines: ScannedLine[]): number {
   const ids = new Set<string>();
   const skip = /^\s*(?:flowchart|graph|subgraph|end\b|classDef|class\b|style\b|linkStyle|click\b|direction\b|%%)/;
   for (const l of lines) {
     if (skip.test(l.text) || l.text.trim() === '') continue;
     const bare = l.text.replace(/"[^"]*"/g, '""').replace(/\|[^|]*\|/g, '');
-    for (const segment of bare.split(/-->|-\.->|==>|---|-\.-|--/)) {
+    for (const segment of bare.split(MERMAID_LINKS)) {
       const m = /^\s*([A-Za-z_]\w*)/.exec(segment);
       if (m) ids.add(m[1]);
     }
@@ -488,11 +509,7 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
         add('mermaid-too-large', 'info', block.startLine, `Diagram has about ${nodes} nodes (guide: at most ${MERMAID_MAX_NODES}).`, 'Split the argument or drop minor steps.');
       }
       for (const l of block.lines) {
-        const labels = l.text.replace(/"[^"]*"/g, '""');
-        const nodeLabel = /\b[A-Za-z_]\w*\[([^\]"][^\]]*)\]/.exec(labels);
-        const edgeLabel = /\|([^|"][^|]*)\|/.exec(labels);
-        const text = nodeLabel?.[1] ?? edgeLabel?.[1];
-        if (text && /[(){}:;,/\\<>]/.test(text)) {
+        if (hasUnquotedSpecialLabel(l.text)) {
           add('mermaid-unquoted-label', 'info', l.n, 'Label with special characters is not quoted.', 'Wrap the label in double quotes.');
         }
       }

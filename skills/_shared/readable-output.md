@@ -45,8 +45,11 @@ term needs the space. Never break rule 6.
     the exception: they always use the bullet format in the layout, never a table.
     Use callouts only for the TL;DR (`abstract`), a caveat (`warning`) and an open
     question (`question`).
-13. Use a Mermaid `flowchart TB` only when the source states a direction of 3 or
-    more steps. Otherwise write a list. Never invent causal structure.
+13. Use a Mermaid `flowchart TB` only when it shows something the text cannot show
+    quickly: a direction of 3 or more steps, or how named molecules and cells act on
+    each other. Otherwise write a list. Never invent causal structure or draw an
+    interaction the source does not state. Do not use a diagram for anatomy or
+    structure: Mermaid has no geometry.
 14. Write no HTML tags. Do not store an image or a video as the only record of a
     fact. Link another note with a wikilink only if that note exists.
 

@@ -29,7 +29,7 @@ seventh, and the checker requires it too.
 |---|---|---|
 | TL;DR | Did · Found · Trust · Why it matters here · Source | 5 fields, 160 words |
 | Claims | What the paper says it found, one claim per bullet | 8 claims |
-| Reasoning | How the paper gets from data to claims: one optional diagram and numbered steps | 6 steps, 1 diagram |
+| Reasoning | How the paper gets from data to claims: up to 2 optional diagrams and numbered steps | 6 steps, 2 diagrams |
 | Evidence | The observations behind the claims, with locators | group under `###` beyond 15 bullets |
 | Figure Map | One row per figure, table or supplementary panel | no limit; split under `###` beyond 40 rows |
 | Assumptions | Limits of the evidence (analyst layer) | 10 bullets |
@@ -82,25 +82,59 @@ note is re-ingested.
 ## Reasoning
 
 Write one sentence that says how the paper's argument is built. Add a diagram only
-if the paper states a direction of 3 or more steps. Then add up to 6 numbered steps
+if it shows something the text cannot show quickly. Then add up to 6 numbered steps
 that cite claims in parentheses: `(C1)`, `(C2, C4)` or `(C1–C3)`.
 
-Diagram rules:
+There are two kinds of diagram. Use at most one of each.
+
+- **Argument or pathway diagram:** the paper states a direction of 3 or more steps,
+  for example data to inference, or a route through compartments.
+- **Interaction diagram:** the paper states how named molecules and cells act on each
+  other: binding, activation, inhibition, secretion, uptake. See the next section.
+
+Do not draw a diagram of what things look like or where they sit: Mermaid has no
+geometry, so anatomy, membranes, 3D structures and tissue layouts come out
+cluttered and misleading. Describe those in words.
+
+Diagram rules (both kinds):
 
 - `flowchart TB`. A left-to-right chart shrinks to an unreadable size in Obsidian's
   narrow note column.
-- Solid arrow `-->` means the paper observed the movement or link that the edge
-  label names. It does not prove the whole mechanism. Dashed arrow `-.->` means the
-  paper inferred or proposed it. Say so in the sentence above the diagram.
+- A **solid** line means the paper observed the link that the edge label names. It
+  does not prove the whole mechanism. A **dashed** line (`-.->`, `-.-x`) means the
+  paper inferred, proposed or only discussed it. Say so in the sentence above the
+  diagram.
 - Put qualifiers on the edges: `-->|"observed: tracer beside arteries (C1)"|`.
   Name the tracer, assay or group when the observation holds only for it.
 - If the paper reconstructed a path from fixed tissue at different times, say that
-  in the sentence above the diagram: the dashed arrows alone are easy to miss.
+  in the sentence above the diagram: the dashed lines alone are easy to miss.
 - Quote every label. Keep edge labels to about 10 words; claim IDs in a label do
-  not count. Use at most 12 nodes and at most 2 diagrams per note.
-- Use plain rectangles only. Do not use double-bracket or other special node
-  shapes: the vault's link checker reads them as links.
+  not count. Use at most 12 nodes (subgraph boxes do not count) and at most 2
+  diagrams per note.
+- Never use the double-square-bracket node shape (a subroutine node): the vault's
+  link checker reads it as a wikilink. The shapes listed below are safe.
 - Every fact in the diagram must also appear in the text.
+
+### Interaction diagrams
+
+Draw only interactions that the paper states. Never fill a gap with a plausible
+partner: when the paper names no partner, add a node called "(not identified)" and
+a dashed edge.
+
+| Draw | With |
+|---|---|
+| A cell | a stadium node `T(["CD8 T cell"])`, or a `subgraph` box when you need to show what is inside it |
+| A molecule, protein or readout | a rectangle `IL["IL-42"]` |
+| Binds, activates, produces, moves | `-->` |
+| Inhibits, lowers, blocks | `--x` (the line ends in a cross) |
+| Binds both ways | `<-->` |
+| Linked, but no change observed | `---` with the label "no change" |
+| Inferred, proposed or only discussed | the dashed form of any of these: `-.->`, `-.-x` |
+
+Label each edge with a verb, the condition if it matters, and the claim that backs it:
+`IL --x|"lowers (C1)"| GZB`. When the order of events matters, number the labels:
+`"1 binds (C2)"`, `"2 activates (C3)"`. Write one sentence above the diagram that
+explains the line styles, as in `examples/reading-note-v2.md`.
 
 ## Evidence
 

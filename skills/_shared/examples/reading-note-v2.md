@@ -36,13 +36,29 @@ tags: [reading, immunology, il-42, cd8]
 
 ## Reasoning
 
-The authors first separate early activation from later effector output. They then test whether contact is needed. In the diagram, solid arrows were observed and dashed arrows were inferred.
+The authors first separate early activation from later effector output. They then test whether contact is needed. In the first diagram, solid arrows were observed and dashed arrows were inferred.
 
 ```mermaid
 flowchart TB
   A["IL-42 added to activated CD8 cells"] -->|"observed: CD69 unchanged (C2)"| B["Activation entry preserved"]
   A -->|"observed: granzyme B and IFN-gamma fall (C1)"| C["Effector output reduced"]
   C -.->|"inferred: soluble factor, no contact needed (C3, C4)"| D["Contact-independent suppression"]
+```
+
+The second diagram shows who acts on whom. A line ending in a cross means the paper observed a decrease, a plain line means no change, and a dashed line is inferred.
+
+```mermaid
+flowchart TB
+  IL["IL-42 (recombinant)"]
+  subgraph CD8["Activated CD8 T cell"]
+    GZB["Granzyme B"]
+    IFN["IFN-gamma"]
+    CD69["CD69"]
+  end
+  IL --x|"lowers (C1)"| GZB
+  IL --x|"lowers (C1)"| IFN
+  IL ---|"no change (C2)"| CD69
+  IL -.->|"inferred: soluble signal, no contact needed (C3, C4)"| CD8
 ```
 
 1. **Early activation:** CD69 changed by less than 5%, so the cells still entered activation (C2).

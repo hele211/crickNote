@@ -46,7 +46,7 @@ describe('lintReadingNote — shipped examples', () => {
   it('reports stats that the pilot can compare across versions', () => {
     const { stats } = lintReadingNote(golden.body);
     expect(stats.claims).toBe(6);
-    expect(stats.diagrams).toBe(1);
+    expect(stats.diagrams).toBe(2);
     expect(stats.tldrWords).toBeGreaterThan(30);
     expect(stats.sentences).toBeGreaterThan(20);
     expect(stats.meanWords).toBeGreaterThan(4);
@@ -429,6 +429,41 @@ describe('lintReadingNote — Mermaid and HTML', () => {
     const edges = Array.from({ length: 13 }, (_, i) => `  N${i}["n${i}"] --> N${i + 1}["n${i + 1}"]`).join('\n');
     const body = golden.body + `\n\`\`\`mermaid\nflowchart TB\n${edges}\n\`\`\`\n`;
     expect(codes(lintReadingNote(body).findings, 'info')).toContain('mermaid-too-large');
+  });
+
+  it('counts nodes correctly for inhibition, circle, dotted-inhibition and bidirectional arrows', () => {
+    const arrows = ['-->', '--x', '--o', '-.->', '-.-x', '-.-o', '<-->', '---', '==>'];
+    const make = (n: number): string => {
+      const edges = Array.from({ length: n - 1 }, (_, i) => `  N${i}["n${i}"] ${arrows[i % arrows.length]}|"label"| N${i + 1}["n${i + 1}"]`).join('\n');
+      return golden.body + `\n\`\`\`mermaid\nflowchart TB\n${edges}\n\`\`\`\n`;
+    };
+    expect(codes(lintReadingNote(make(12)).findings)).not.toContain('mermaid-too-large');
+    expect(codes(lintReadingNote(make(13)).findings)).toContain('mermaid-too-large');
+  });
+
+  it('accepts subgraphs, stadium and hexagon shapes, and quoted labels in an interaction diagram', () => {
+    const diagram = [
+      'flowchart TB',
+      '  IL["IL-42"]',
+      '  subgraph CD8["Activated CD8 T cell"]',
+      '    GZB["Granzyme B"]',
+      '  end',
+      '  T(["T cell (CD8)"]) -->|"secretes (C1)"| IL',
+      '  R{{"Receptor (not identified)"}} -.->|"inferred (C4)"| T',
+      '  IL --x|"lowers (C1)"| GZB',
+    ].join('\n');
+    const body = golden.body + `\n\`\`\`mermaid\n${diagram}\n\`\`\`\n`;
+    const findings = lintReadingNote(body, { sources: golden.sources }).findings;
+    expect(codes(findings)).not.toContain('mermaid-unquoted-label');
+    expect(codes(findings)).not.toContain('mermaid-too-large');
+    expect(codes(findings)).not.toContain('mermaid-wikilink');
+  });
+
+  it('reports unquoted stadium, round and hexagon labels with special characters as info', () => {
+    for (const shape of ['T([T cell (CD8)])', 'T(T cell (CD8))', 'T{{T cell: CD8}}']) {
+      const body = golden.body + `\n\`\`\`mermaid\nflowchart TB\n  ${shape} --> B["b"]\n\`\`\`\n`;
+      expect(codes(lintReadingNote(body).findings, 'info'), shape).toContain('mermaid-unquoted-label');
+    }
   });
 
   it('reports an unquoted label with special characters as info', () => {
