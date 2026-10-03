@@ -72,6 +72,67 @@ describe('refreshAgentAssets', () => {
   });
 });
 
+describe('refreshAgentAssets — symlink safety', () => {
+  let vault: string;
+  let repo: string;
+  let outside: string;
+
+  const write = (root: string, rel: string, content: string): void => {
+    const abs = path.join(root, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, content);
+  };
+
+  beforeEach(() => {
+    vault = fs.mkdtempSync(path.join(os.tmpdir(), 'assets-vault-'));
+    repo = fs.mkdtempSync(path.join(os.tmpdir(), 'assets-repo-'));
+    outside = fs.mkdtempSync(path.join(os.tmpdir(), 'assets-outside-'));
+    write(repo, 'skills/cricknote-reading-intake/SKILL.md', '# intake v2');
+    write(repo, 'templates/agent-docs/CLAUDE.md', '# claude v2');
+    write(repo, 'templates/agent-docs/AGENTS.md', '# agents v2');
+  });
+  afterEach(() => {
+    for (const d of [vault, repo, outside]) fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  it('refuses, before writing anything, when a guide doc is a symlink out of the vault', () => {
+    write(outside, 'precious.md', '# precious');
+    fs.symlinkSync(path.join(outside, 'precious.md'), path.join(vault, 'CLAUDE.md'));
+    expect(() => refreshAgentAssets(vault, repo)).toThrow(/symlink/i);
+    expect(fs.readFileSync(path.join(outside, 'precious.md'), 'utf-8')).toBe('# precious');
+    expect(fs.existsSync(path.join(vault, '.claude'))).toBe(false);
+    expect(fs.existsSync(path.join(vault, 'AGENTS.md'))).toBe(false);
+  });
+
+  it('refuses when AGENTS.md is a symlink to CLAUDE.md inside the vault (it would overwrite CLAUDE.md)', () => {
+    write(vault, 'CLAUDE.md', '# my claude');
+    fs.symlinkSync(path.join(vault, 'CLAUDE.md'), path.join(vault, 'AGENTS.md'));
+    expect(() => refreshAgentAssets(vault, repo)).toThrow(/symlink/i);
+    expect(fs.readFileSync(path.join(vault, 'CLAUDE.md'), 'utf-8')).toBe('# my claude');
+  });
+
+  it('refuses when a skills directory is a symlink that leaves the vault', () => {
+    fs.mkdirSync(path.join(vault, '.claude'), { recursive: true });
+    fs.symlinkSync(outside, path.join(vault, '.claude', 'skills'));
+    expect(() => refreshAgentAssets(vault, repo)).toThrow(/outside the vault|symlink/i);
+    expect(fs.readdirSync(outside)).toEqual([]);
+  });
+
+  it('refuses in dry-run mode too, and still writes nothing', () => {
+    fs.symlinkSync(path.join(outside, 'x.md'), path.join(vault, 'CLAUDE.md'));
+    expect(() => refreshAgentAssets(vault, repo, { dryRun: true })).toThrow(/symlink/i);
+    expect(fs.readdirSync(outside)).toEqual([]);
+  });
+
+  it('allows a symlinked skills directory that stays inside the vault', () => {
+    fs.mkdirSync(path.join(vault, 'shared-skills'), { recursive: true });
+    fs.mkdirSync(path.join(vault, '.claude'), { recursive: true });
+    fs.symlinkSync(path.join(vault, 'shared-skills'), path.join(vault, '.claude', 'skills'));
+    expect(() => refreshAgentAssets(vault, repo)).not.toThrow();
+    expect(fs.existsSync(path.join(vault, 'shared-skills', 'cricknote-reading-intake', 'SKILL.md'))).toBe(true);
+  });
+});
+
 describe('installAssets (config-driven)', () => {
   let dataDir: string;
   let vault: string;

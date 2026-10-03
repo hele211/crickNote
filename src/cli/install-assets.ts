@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { loadConfig } from '../config/config.js';
+import { resolveVaultPath } from '../utils/paths.js';
 import { installAgentAssets } from './install-agent-assets.js';
 
 const GUIDE_DOCS = ['CLAUDE.md', 'AGENTS.md'] as const;
@@ -32,12 +33,49 @@ function compare(src: string, dest: string): 'new' | 'unchanged' | 'changed' {
 }
 
 /**
+ * Refuse, before anything is written, if a copy could land outside the vault or overwrite a symlink
+ * target: a symlinked guide doc (AGENTS.md -> CLAUDE.md would clobber CLAUDE.md), a symlinked skill
+ * file, or a skills directory whose real path leaves the vault. In-vault directory symlinks are fine.
+ */
+function assertSafeDestinations(vaultPath: string, repoRoot: string, skillRels: string[]): void {
+  const dests: string[] = [];
+  for (const file of GUIDE_DOCS) {
+    if (fs.existsSync(path.join(repoRoot, 'templates', 'agent-docs', file))) dests.push(file);
+  }
+  for (const rel of skillRels) {
+    for (const root of SKILL_ROOTS) dests.push(path.join(root, 'skills', rel));
+  }
+  for (const rel of dests) {
+    let abs: string;
+    try {
+      abs = resolveVaultPath(vaultPath, rel);
+    } catch {
+      throw new Error(`Refusing to install: ${rel} resolves outside the vault through a symlink. Remove or fix the symlink and re-run.`);
+    }
+    const direct = path.join(vaultPath, rel);
+    let isLink = false;
+    try {
+      isLink = fs.lstatSync(direct).isSymbolicLink();
+    } catch {
+      // destination does not exist yet
+    }
+    if (isLink) {
+      throw new Error(`Refusing to overwrite ${rel}: it is a symlink (target ${abs}). Replace it with a regular file or remove it, then re-run.`);
+    }
+  }
+}
+
+/**
  * Copy skills and guide docs into the vault and report what changed. Unlike
  * `cricknote setup` this never reads or writes config.json, so it is safe to
  * re-run (setup overwrites config.json with only the vault path).
  */
 export function refreshAgentAssets(vaultPath: string, repoRoot: string, options: { dryRun?: boolean } = {}): AssetRefreshReport {
   const dryRun = options.dryRun ?? false;
+
+  const skillsSrc = path.join(repoRoot, 'skills');
+  const skillRels = fs.existsSync(skillsSrc) ? listFiles(skillsSrc) : [];
+  assertSafeDestinations(vaultPath, repoRoot, skillRels);
 
   const docs: AssetRefreshReport['docs'] = [];
   for (const file of GUIDE_DOCS) {
@@ -48,12 +86,9 @@ export function refreshAgentAssets(vaultPath: string, repoRoot: string, options:
   }
 
   const skillFiles = { new: 0, changed: 0, unchanged: 0 };
-  const skillsSrc = path.join(repoRoot, 'skills');
-  if (fs.existsSync(skillsSrc)) {
-    for (const rel of listFiles(skillsSrc)) {
-      for (const root of SKILL_ROOTS) {
-        skillFiles[compare(path.join(skillsSrc, rel), path.join(vaultPath, root, 'skills', rel))] += 1;
-      }
+  for (const rel of skillRels) {
+    for (const root of SKILL_ROOTS) {
+      skillFiles[compare(path.join(skillsSrc, rel), path.join(vaultPath, root, 'skills', rel))] += 1;
     }
   }
 

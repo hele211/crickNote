@@ -8,6 +8,16 @@ import { resolveVaultPath } from '../../utils/paths.js';
 const READING_NOTE_PATH = /^Reading\/(?:Papers|Threads)\/[^/]+\.md$/;
 const NOT_A_NOTE = /(?:^|\/)_[^/]*\.md$|-mapping(?:-\d{8}T\d{6})?\.md$/;
 
+// gray-matter runs "---js" frontmatter as code by default, and caches by content so a repeated malformed
+// input silently parses to {}. A read-only checker must do neither: block the JS engines, and pass an
+// options object (which also bypasses the cache).
+const BLOCKED_ENGINE = {
+  parse(): never {
+    throw new Error('JavaScript frontmatter is not supported');
+  },
+};
+const SAFE_MATTER_OPTIONS = { engines: { js: BLOCKED_ENGINE, javascript: BLOCKED_ENGINE } };
+
 function sourcePaths(data: Record<string, unknown>): string[] | undefined {
   if (!Array.isArray(data.sources)) return undefined;
   return (data.sources as unknown[])
@@ -16,7 +26,12 @@ function sourcePaths(data: Record<string, unknown>): string[] | undefined {
 }
 
 function result(content: string, relPath?: string): string {
-  const parsed = matter(content);
+  let parsed: matter.GrayMatterFile<string>;
+  try {
+    parsed = matter(content, SAFE_MATTER_OPTIONS);
+  } catch (err) {
+    return JSON.stringify({ error: `Frontmatter could not be parsed: ${(err as Error).message}` });
+  }
   const lint = lintReadingNote(parsed.content, { sources: sourcePaths(parsed.data) });
   const counts = {
     warn: lint.findings.filter((f) => f.severity === 'warn').length,
@@ -55,7 +70,12 @@ export function createStyleLintTools(vaultPath: string): ToolHandler[] {
         if (!READING_NOTE_PATH.test(relPath) || NOT_A_NOTE.test(relPath)) {
           return JSON.stringify({ error: 'path must be a reading note under Reading/Papers/ or Reading/Threads/ (not a mapping artifact or _housekeeping file).' });
         }
-        const absPath = resolveVaultPath(vaultPath, relPath);
+        let absPath: string;
+        try {
+          absPath = resolveVaultPath(vaultPath, relPath);
+        } catch (err) {
+          return JSON.stringify({ error: (err as Error).message });
+        }
         if (!fs.existsSync(absPath)) {
           return JSON.stringify({ error: `File not found: ${relPath}` });
         }

@@ -54,11 +54,79 @@ describe('lintReadingNote — shipped examples', () => {
     expect(stats.pctOver25).toBe(0);
   });
 
+  it('treats Windows (CRLF) line endings like Unix ones', () => {
+    const crlf = golden.body.replace(/\n/g, '\r\n');
+    const result = lintReadingNote(crlf, { sources: golden.sources });
+    expect(result.findings).toEqual([]);
+    expect(result.stats).toEqual(lintReadingNote(golden.body, { sources: golden.sources }).stats);
+  });
+
   it('does not throw on an empty body and reports the missing structure', () => {
     const result = lintReadingNote('');
     expect(result.ok).toBe(false);
     expect(codes(result.findings, 'warn')).toContain('missing-tldr');
     expect(codes(result.findings, 'warn')).toContain('missing-heading');
+  });
+});
+
+describe('lintReadingNote — robustness', () => {
+  it('handles a long, malformed ID list in parentheses without catastrophic backtracking', () => {
+    const refs = Array.from({ length: 40 }, () => 'C1').join(', ');
+    const body = mutate(golden.body, 'IL-42 appears to weaken', `Result (${refs}, X). IL-42 appears to weaken`);
+    const started = performance.now();
+    lintReadingNote(body, { sources: golden.sources });
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
+  it('lints a note with thousands of lines in well under a few seconds', () => {
+    const filler = Array.from({ length: 4000 }, (_, i) => `Line ${i} states one plain fact about the sample. (Fig ${i % 9 + 1}A)`).join('\n');
+    const body = mutate(golden.body, '## Extensions', `${filler}\n\n## Extensions`);
+    const started = performance.now();
+    lintReadingNote(body, { sources: golden.sources });
+    expect(performance.now() - started).toBeLessThan(3000);
+  });
+});
+
+describe('lintReadingNote — Claims must be claim bullets', () => {
+  const claimsBlock = (body: string): { start: number; end: number } => ({
+    start: body.indexOf('## Claims\n') + '## Claims\n'.length,
+    end: body.indexOf('## Reasoning'),
+  });
+  const replaceClaims = (replacement: string): string => {
+    const { start, end } = claimsBlock(golden.body);
+    return golden.body.slice(0, start) + replacement + golden.body.slice(end);
+  };
+
+  it('warns when the Claims section has prose instead of bullets, and reports no claims', () => {
+    const result = lintReadingNote(replaceClaims('\nIL-42 lowers granzyme B in primary human CD8 T cells. (§Results 1)\n\n'), { sources: golden.sources });
+    expect(codes(result.findings, 'warn')).toContain('claim-format');
+    expect(codes(result.findings, 'warn')).toContain('no-claims');
+    expect(result.ok).toBe(false);
+  });
+
+  it('warns when claims are written as a table', () => {
+    const table = '\n| ID | Claim |\n|---|---|\n| C1 | IL-42 lowers granzyme B. (§Results 1) |\n\n';
+    expect(codes(lintReadingNote(replaceClaims(table), { sources: golden.sources }).findings, 'warn')).toContain('claim-format');
+  });
+
+  it('warns when a claim bullet is indented or uses a plus marker', () => {
+    const indented = '\n  - **C1** [measured] IL-42 lowers granzyme B. (§Results 1)\n\n';
+    expect(codes(lintReadingNote(replaceClaims(indented), { sources: golden.sources }).findings, 'warn')).toContain('claim-format');
+    const plus = '\n+ **C1** [measured] IL-42 lowers granzyme B. (§Results 1)\n\n';
+    expect(codes(lintReadingNote(replaceClaims(plus), { sources: golden.sources }).findings, 'warn')).toContain('claim-format');
+  });
+
+  it('warns about an empty Claims section but does not double-report when the heading itself is missing', () => {
+    const empty = lintReadingNote(replaceClaims('\n'), { sources: golden.sources });
+    expect(codes(empty.findings, 'warn')).toContain('no-claims');
+    const noHeading = lintReadingNote(mutate(golden.body, '## Claims\n', ''), { sources: golden.sources });
+    expect(codes(noHeading.findings, 'warn')).toContain('missing-heading');
+    expect(codes(noHeading.findings)).not.toContain('no-claims');
+  });
+
+  it('still allows indented continuation lines of a claim and HTML comments inside Claims', () => {
+    const body = replaceClaims('\n- **C1** [measured] IL-42 lowers granzyme B in primary cells\n  and in Jurkat cells. (§Results 1)\n<!-- reviewed -->\n\n');
+    expect(codes(lintReadingNote(body, { sources: golden.sources }).findings)).not.toContain('claim-format');
   });
 });
 
@@ -292,6 +360,13 @@ describe('lintReadingNote — Mermaid and HTML', () => {
     expect(codes(lintReadingNote(inline).findings)).not.toContain('html-tag');
     const mermaid = mutate(golden.body, '"Effector output reduced"', '"Effector<br/>output reduced"');
     expect(codes(lintReadingNote(mermaid).findings)).not.toContain('html-tag');
+  });
+
+  it('flags real HTML tags such as sub and sup, but not math-like angle brackets', () => {
+    const sub = mutate(golden.body, 'IL-42 appears to weaken', 'Amyloid-β<sub>1–40</sub> and Ca<sup>2+</sup> matter. IL-42 appears to weaken');
+    expect(codes(lintReadingNote(sub).findings, 'warn')).toContain('html-tag');
+    const math = mutate(golden.body, 'IL-42 appears to weaken', 'When x<y and z>w the order flips. IL-42 appears to weaken');
+    expect(codes(lintReadingNote(math).findings)).not.toContain('html-tag');
   });
 
   it('does not treat HTML comments or autolinks as HTML tags', () => {

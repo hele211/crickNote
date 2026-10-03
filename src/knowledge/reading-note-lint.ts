@@ -109,8 +109,18 @@ export function hasLocator(text: string): boolean {
 
 const BARE_PAGE_LOCATOR = /(?<!PDF )(?<!printed )\bp\.\s*\d+/;
 
+// Real HTML tag names only, so that text like "x<y and z>w" is not flagged. Single-letter
+// tags need an immediate ">" or an attribute, because "a<b and c>d" is common in prose.
+const HTML_TAG = new RegExp(
+  '<\\/?(?:'
+    + '(?:br|code|del|details|div|em|font|h[1-6]|hr|iframe|img|ins|kbd|li|mark|ol|pre|script|small|span|strong|style|sub|summary|sup|table|tbody|td|th|thead|tr|ul|video|audio|svg|center|blockquote)(?:\\s[^<>]*)?'
+    + '|(?:a|b|i|u|p|s|q)(?:\\s+[a-z-]+=[^<>]*)?'
+    + ')\\/?>',
+  'i',
+);
+
 function scan(body: string): { lines: ScannedLine[]; unclosedFenceLine: number | null } {
-  const raw = body.split('\n');
+  const raw = body.replace(/\r\n?/g, '\n').split('\n');
   const lines: ScannedLine[] = [];
   let fence: { marker: string; lang: string; startLine: number } | null = null;
   let inComment = false;
@@ -161,11 +171,15 @@ function countWords(text: string): number {
   return text.split(/\s+/).filter((t) => /[\p{L}\p{N}]/u.test(t)).length;
 }
 
+const ID_TOKEN = /^\s*[CE]\d+(?:\s*[–-]\s*[CE]?\d+)?\s*$/;
+
+/** True for "C1", "C2, E3" or "C1–C3". Tokenised, not one big regex: a nested-quantifier pattern backtracks exponentially. */
+function isIdList(inner: string): boolean {
+  return inner.split(/[;,]/).every((token) => ID_TOKEN.test(token));
+}
+
 function stripLocatorGroups(text: string): string {
-  return text.replace(/\(([^()]*)\)/g, (match, inner: string) => {
-    const idsOnly = /^(?:\s*[CE]\d+(?:\s*[–-]\s*[CE]?\d+)?\s*(?:[,;]\s*|$))+$/.test(inner);
-    return hasLocator(inner) || idsOnly ? '' : match;
-  });
+  return text.replace(/\(([^()]*)\)/g, (match, inner: string) => (hasLocator(inner) || isIdList(inner) ? '' : match));
 }
 
 function cleanForSentences(text: string): string {
@@ -349,9 +363,36 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
     return items;
   };
 
+  // Claims are strict: every visible line must belong to a claim bullet (or its indented continuation),
+  // otherwise claim text could sit in a paragraph, table or indented list and still report ok.
+  const claimItems: Item[] = [];
+  const claimsHeading = headings.find((h) => h.name === 'Claims');
+  {
+    let cur: Item | null = null;
+    let inStray = false;
+    for (const l of sectionLines('Claims')) {
+      if (l.kind === 'comment') continue;
+      const blank = l.kind === 'prose' && l.text.trim() === '';
+      if (blank) continue;
+      if (l.kind === 'prose' && /^(?:[-*]|\d+[.)])\s+/.test(l.text)) {
+        cur = { line: l.n, text: l.text };
+        claimItems.push(cur);
+        inStray = false;
+      } else if (l.kind === 'prose' && cur && /^\s+\S/.test(l.text)) {
+        cur.text += ` ${l.text.trim()}`;
+      } else {
+        cur = null;
+        if (!inStray) {
+          inStray = true;
+          add('claim-format', 'warn', l.n, 'Text in Claims that is not a claim bullet.', 'Write every claim as "- **C1** [measured] Claim text. (Fig 2A)"; move prose to Reasoning and tables to Evidence or Figure Map.');
+        }
+      }
+    }
+  }
+
   const claimIds = new Map<number, number>();
   const evidenceRefs: Array<{ id: number; line: number }> = [];
-  for (const item of collectItems('Claims')) {
+  for (const item of claimItems) {
     const m = /^[-*]\s+\*\*C(\d+)\*\*\s+\[([^\]]+)\]\s+\S/.exec(item.text);
     if (!m || !(SUPPORT_TYPES as readonly string[]).includes(m[2])) {
       add('claim-format', 'warn', item.line, 'Claim does not match "- **Cn** [measured|inferred|proposed] text (locator)".', 'Rewrite it as "- **C1** [measured] Claim text. (Fig 2A)".');
@@ -370,6 +411,10 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
       const em = /^E(\d+)$/.exec(token);
       if (em) evidenceRefs.push({ id: Number(em[1]), line: item.line });
     }
+  }
+
+  if (claimsHeading && claimIds.size === 0) {
+    add('no-claims', 'warn', claimsHeading.line, 'The Claims section has no valid claim bullets.', 'Add at least one claim: "- **C1** [measured] Claim text. (Fig 2A)".');
   }
 
   // ---- evidence -----------------------------------------------------------
@@ -463,7 +508,7 @@ export function lintReadingNote(body: string, options: LintOptions = {}): LintRe
   // ---- HTML and page locators -------------------------------------------------
   for (const l of prose) {
     const noCode = l.text.replace(/`[^`]*`/g, '');
-    if (/<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?\/?>/.test(noCode)) {
+    if (HTML_TAG.test(noCode)) {
       add('html-tag', 'warn', l.n, 'HTML tag in note text.', 'Use Markdown instead; HTML renders unreliably in Obsidian.');
     }
     if (BARE_PAGE_LOCATOR.test(noCode)) {

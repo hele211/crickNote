@@ -91,6 +91,49 @@ describe('lint_reading_note tool', () => {
     expect((await run({ path: 'Reading/Papers/a.md', body: 'x' })).error).toBeTruthy();
   });
 
+  it('returns an error (does not throw) for a symlink that escapes the vault', async () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'cricknote-outside-'));
+    try {
+      fs.writeFileSync(path.join(outside, 'secret.md'), goldenRaw);
+      fs.mkdirSync(path.join(vault, 'Reading', 'Papers'), { recursive: true });
+      fs.symlinkSync(path.join(outside, 'secret.md'), path.join(vault, 'Reading', 'Papers', 'evil.md'));
+      const result = await run({ path: 'Reading/Papers/evil.md' });
+      expect(result.error).toBeTruthy();
+      expect(result.ok).toBeUndefined();
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('returns an error (does not throw) when the frontmatter cannot be parsed', async () => {
+    writeNote('Reading/Papers/broken.md', '---\ntitle: [unclosed\nsources: : :\n---\n\n## Claims\n');
+    const result = await run({ path: 'Reading/Papers/broken.md' });
+    expect(result.error).toMatch(/frontmatter/i);
+    const viaBody = await run({ body: '---\ntitle: [unclosed\n---\n\n## Claims\n' });
+    expect(viaBody.error).toMatch(/frontmatter/i);
+  });
+
+  it('does not execute JavaScript frontmatter, in path mode or body mode', async () => {
+    const hostile = '---js\n(globalThis.__lintToolPwned = true) && ({ sources: [] })\n---\n\n## Claims\n';
+    (globalThis as Record<string, unknown>).__lintToolPwned = false;
+    writeNote('Reading/Papers/hostile.md', hostile);
+    const viaPath = await run({ path: 'Reading/Papers/hostile.md' });
+    const viaBody = await run({ body: hostile });
+    expect((globalThis as Record<string, unknown>).__lintToolPwned).toBe(false);
+    expect(viaPath.error).toMatch(/frontmatter/i);
+    expect(viaBody.error).toMatch(/frontmatter/i);
+    delete (globalThis as Record<string, unknown>).__lintToolPwned;
+  });
+
+  it('reports the same error every time for the same malformed frontmatter (no parser cache quirk)', async () => {
+    const broken = '---\ntitle: [unclosed\n---\n\n## Claims\n';
+    for (let i = 0; i < 3; i++) {
+      const result = await run({ body: broken });
+      expect(result.error, `call ${i}`).toMatch(/frontmatter/i);
+      expect(result.ok).toBeUndefined();
+    }
+  });
+
   it('never writes: the note is byte-identical and no pending_edit is returned', async () => {
     writeNote('Reading/Papers/lee-2026-il42.md', goldenRaw);
     const before = fs.readFileSync(path.join(vault, 'Reading/Papers/lee-2026-il42.md'), 'utf-8');
