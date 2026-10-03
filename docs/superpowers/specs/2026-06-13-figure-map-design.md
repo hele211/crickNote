@@ -185,3 +185,13 @@ Table header rows contain non-empty text. Including them in the empty scaffold w
 
 **Why not add Figure Map to `CREATE_SECTION_HEADINGS`?**
 CREATE is a specific acronym framework. Figure Map is a separate structural aid, not a CREATE section. Keeping them distinct avoids polluting the `CREATE_SECTION_HEADINGS` constant used by `hasCreateHeadings` and `kb_suggest`.
+
+## 10. Revision (2026-10-03) — placement of drafted notes
+
+**Placement superseded for drafted notes.** §3 put the Figure Map at the top of the note "so a reader sees the evidence structure immediately". Real notes show the opposite effect: a Figure Map of 47–77 rows pushes the claims off the first screen, and 19 of 22 papers are still `draft` awaiting review. The reading-note layout v2 (`skills/_shared/reading-note-layout.md`) therefore opens with a `> [!abstract] TL;DR` callout and places `## Figure Map` **after `## Evidence` and before `## Assumptions`**, as reference material.
+
+**Unchanged:**
+- Row rules: one row per figure, table or supplementary panel whose caption is present in an attached source; separate rows for distinct experiments; `?` where the caption is unclear; never reconstruct a missing supplementary caption.
+- The Figure Map stays outside `CREATE_SECTION_HEADINGS` and `TEMPLATE_CONTRACTS` (§7, §9). The empty scaffold and the default templates still list `## Figure Map` first, because `hasMeaningfulReadingBody` treats any visible text as "already drafted" and tests pin that order; the order is applied when the note body is drafted (`vault_write_body` replaces the body). Aligning the scaffold and the on-disk templates is a separate change.
+
+**New:** long Figure Maps are never truncated. For more than 40 rows the table is split under `### Main figures` and `### Supplementary`. `lint_reading_note` reports a long unsplit table as an `info` finding, and a Figure Map cell over 30 words the same way.
