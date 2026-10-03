@@ -54,6 +54,87 @@ describe('compile_reading_note', () => {
     expect(result.instruction).toContain('CREATE sections');
   });
 
+  it('flags transport_truncation_risk for a large (untruncated) source', async () => {
+    fs.writeFileSync(
+      path.join(vaultPath, 'Reading', 'attachments', 'smith-2026-il42', 'paper.md'),
+      'x'.repeat(116000) // ~29k tokens: under the 50k cap (not truncated) but transport-risky
+    );
+    fs.writeFileSync(
+      path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-il42.md'),
+      '---\ntitle: IL-42\nstatus: draft\nkb_status: pending\nsources:\n  - type: notes\n    path: paper.md\n---\n\n# IL-42\n\n## Claims\n'
+    );
+    const result = JSON.parse(await tool.execute({ path: 'Reading/Papers/smith-2026-il42.md' }));
+    expect(result.sources[0].truncated).toBe(false);
+    expect(result.transport_truncation_risk).toBe(true);
+  });
+
+  it('does not flag transport_truncation_risk for a small source', async () => {
+    fs.writeFileSync(
+      path.join(vaultPath, 'Reading', 'attachments', 'smith-2026-il42', 'notes.md'),
+      'IL-42 suppresses CD8 by 40%.'
+    );
+    fs.writeFileSync(
+      path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-il42.md'),
+      '---\ntitle: IL-42\nstatus: draft\nkb_status: pending\nsources:\n  - type: notes\n    path: notes.md\n---\n\n# IL-42\n\n## Claims\n'
+    );
+    const result = JSON.parse(await tool.execute({ path: 'Reading/Papers/smith-2026-il42.md' }));
+    expect(result.transport_truncation_risk).toBe(false);
+  });
+
+  it('supports selecting one source and limiting response tokens', async () => {
+    fs.writeFileSync(
+      path.join(vaultPath, 'Reading', 'attachments', 'smith-2026-il42', 'paper.md'),
+      'x'.repeat(40000)
+    );
+    fs.writeFileSync(
+      path.join(vaultPath, 'Reading', 'attachments', 'smith-2026-il42', 'notes.md'),
+      'short notes'
+    );
+    fs.writeFileSync(
+      path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-il42.md'),
+      '---\ntitle: IL-42\nsources:\n  - type: notes\n    path: notes.md\n  - type: notes\n    path: paper.md\n---\n\n## Claims\n'
+    );
+
+    const result = JSON.parse(await tool.execute({
+      path: 'Reading/Papers/smith-2026-il42.md',
+      source_path: 'paper.md',
+      max_tokens: 2000,
+    }));
+
+    expect(result.sources).toHaveLength(1);
+    expect(result.sources[0].path).toBe('paper.md');
+    expect(result.totalTokens).toBe(2000);
+    expect(result.transport_truncation_risk).toBe(false);
+    expect(result.instruction).toContain('vault_write_body');
+  });
+
+  it('validates page range arguments', async () => {
+    const result = JSON.parse(await tool.execute({
+      path: 'Reading/Papers/smith-2026-il42.md',
+      page_start: 3,
+      page_end: 2,
+    }));
+    expect(result.error).toContain('page_end');
+  });
+
+  it('inspects source metadata without returning full source text', async () => {
+    fs.writeFileSync(
+      path.join(vaultPath, 'Reading', 'attachments', 'smith-2026-il42', 'notes.md'),
+      'IL-42 suppresses CD8 by 40%.'
+    );
+    fs.writeFileSync(
+      path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-il42.md'),
+      '---\ntitle: IL-42\nsources:\n  - type: notes\n    path: notes.md\n---\n\n## Claims\n'
+    );
+    const inspectTool = createKbTools(vaultPath).find((candidate) => candidate.definition.name === 'inspect_reading_note_sources')!;
+    const result = JSON.parse(await inspectTool.execute({ path: 'Reading/Papers/smith-2026-il42.md' }));
+
+    expect(result.sources).toHaveLength(1);
+    expect(result.sources[0].estimatedTokens).toBeGreaterThan(0);
+    expect(result.sources[0].content).toBeUndefined();
+    expect(result.instruction).toContain('recommended PDF page range');
+  });
+
   it('returns error for invalid/traversal path', async () => {
     const result = JSON.parse(await tool.execute({ path: '../../../etc/passwd' }));
     expect(result.error).toBeDefined();

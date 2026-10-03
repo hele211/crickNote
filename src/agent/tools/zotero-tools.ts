@@ -545,6 +545,17 @@ function zoteroFetchFallback(args: Record<string, unknown>, exportPath: string):
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
 
+/** Distinguish a missing slug from a malformed one so the error is actionable. */
+function validateSlugArg(value: unknown): { slug: string } | { error: string } {
+  if (typeof value !== 'string' || value.trim() === '') {
+    return { error: 'slug is required.' };
+  }
+  if (!SLUG_RE.test(value)) {
+    return { error: `Invalid slug format: "${value}" (expected lowercase kebab-case, e.g. "smith-2026-il42").` };
+  }
+  return { slug: value };
+}
+
 // ─── zotero_prepare_bundle ────────────────────────────────────────────────────
 
 function zoteroPrepareBundleTool(vaultPath: string, cfg: () => CrickNoteConfig): ToolHandler {
@@ -567,8 +578,9 @@ function zoteroPrepareBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
       const z = getZoteroConfig(config);
       if ('error' in z) return JSON.stringify(z);
 
-      const slug = args.slug;
-      if (typeof slug !== 'string' || !SLUG_RE.test(slug)) return JSON.stringify({ error: 'Invalid slug format.' });
+      const slugCheck = validateSlugArg(args.slug);
+      if ('error' in slugCheck) return JSON.stringify(slugCheck);
+      const slug = slugCheck.slug;
 
       const rawBundleDir = path.join(vaultPath, (z as ZoteroConfig).vault_pdf_dir, slug);
       if (fs.existsSync(rawBundleDir) && fs.lstatSync(rawBundleDir).isSymbolicLink()) {
@@ -604,18 +616,19 @@ function zoteroPrepareBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
         }
       }
 
+      const bundleRel = path.join((z as ZoteroConfig).vault_pdf_dir, slug);
       const dirExists = fs.existsSync(bundleDir);
       const hasMarker = dirExists && fs.existsSync(markerPath);
 
       if (dirExists && !hasMarker) {
-        return JSON.stringify({ error: `Pre-existing manual bundle at Reading/attachments/${slug}/ — remove or rename it before using Zotero ingestion.` });
+        return JSON.stringify({ error: `Pre-existing manual bundle at ${bundleRel}/ — remove or rename it before using Zotero ingestion.` });
       }
 
       let existingMarkerFiles: Record<string, string> = {};
       if (hasMarker) {
         const existingMarker = readMarker(markerPath);
         if (!existingMarker || existingMarker.created_by !== 'zotero_prepare_bundle') {
-          return JSON.stringify({ error: `Marker at Reading/attachments/${slug}/.zotero-bundle was not created by zotero_prepare_bundle. Refusing to operate.` });
+          return JSON.stringify({ error: `Marker at ${bundleRel}/.zotero-bundle was not created by zotero_prepare_bundle. Refusing to operate.` });
         }
         existingMarkerFiles = existingMarker.files;
       }
@@ -752,8 +765,9 @@ function zoteroCleanupBundleTool(vaultPath: string, cfg: () => CrickNoteConfig):
       const z = getZoteroConfig(config);
       if ('error' in z) return JSON.stringify(z);
 
-      const slug = args.slug;
-      if (typeof slug !== 'string' || !SLUG_RE.test(slug)) return JSON.stringify({ error: 'Invalid slug format.' });
+      const slugCheck = validateSlugArg(args.slug);
+      if ('error' in slugCheck) return JSON.stringify(slugCheck);
+      const slug = slugCheck.slug;
 
       const rawBundleDir = path.join(vaultPath, (z as ZoteroConfig).vault_pdf_dir, slug);
       if (fs.existsSync(rawBundleDir) && fs.lstatSync(rawBundleDir).isSymbolicLink()) {

@@ -103,11 +103,8 @@ export class Logger {
 
     if (this.format === 'json') {
       const line = JSON.stringify(entry);
-      if (level === 'error') {
-        process.stderr.write(line + '\n');
-      } else {
-        process.stdout.write(line + '\n');
-      }
+      // All diagnostics go to stderr; stdout is reserved for the CLI's JSON result.
+      process.stderr.write(line + '\n');
       if (this.logFile) fs.appendFileSync(this.logFile, line + '\n');
     } else {
       const color = LEVEL_COLORS[level];
@@ -117,11 +114,8 @@ export class Logger {
         ? ' ' + Object.entries(data).map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`).join(' ')
         : '';
       const line = `${color}${timestamp} ${level.toUpperCase().padEnd(5)}${RESET} ${tag}${msg}${extra}`;
-      if (level === 'error') {
-        process.stderr.write(line + '\n');
-      } else {
-        process.stdout.write(line + '\n');
-      }
+      // All diagnostics go to stderr; stdout is reserved for the CLI's JSON result.
+      process.stderr.write(line + '\n');
       // Always write JSON to file regardless of pretty console format
       if (this.logFile) fs.appendFileSync(this.logFile, JSON.stringify(entry) + '\n');
     }

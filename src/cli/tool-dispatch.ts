@@ -108,7 +108,32 @@ export async function runTool(name: string, argsJson: string, opts: RunToolOptio
   }
 
   const allApplied = applied.every(a => a.applied);
-  return { ok: allApplied, applied, result: parsed, error: allApplied ? undefined : 'one or more edits failed' };
+  // The written body is now on disk and summarized in `applied` (path, operation,
+  // bytesWritten). Drop the bulky newContent from the echoed result so applying a
+  // large note doesn't pay to send its full body back over the tool transport.
+  return { ok: allApplied, applied, result: stripNewContent(parsed), error: allApplied ? undefined : 'one or more edits failed' };
+}
+
+/** Strip the heavy `newContent` field(s) from an applied pending_edit / pending_edits result. */
+function stripNewContent(parsed: unknown): unknown {
+  if (!parsed || typeof parsed !== 'object') return parsed;
+  const obj = parsed as Record<string, unknown>;
+  if (obj.type === 'pending_edit') {
+    const rest = { ...obj };
+    delete rest.newContent;
+    return rest;
+  }
+  if (obj.type === 'pending_edits' && Array.isArray(obj.edits)) {
+    return {
+      ...obj,
+      edits: (obj.edits as Array<Record<string, unknown>>).map((edit) => {
+        const rest = { ...edit };
+        delete rest.newContent;
+        return rest;
+      }),
+    };
+  }
+  return obj;
 }
 
 /** Return the full tool catalog (name, description, JSON-schema parameters). */
