@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import crypto from 'node:crypto';
 import { setup } from './cli/setup.js';
 import { reindex } from './cli/reindex.js';
+import { installAssets } from './cli/install-assets.js';
 import { loadConfig } from './config/config.js';
 import { runTool, listToolCatalog } from './cli/tool-dispatch.js';
 
@@ -26,6 +27,15 @@ program
   .description('Force a full vault re-index')
   .action(async () => {
     await reindex();
+  });
+
+program
+  .command('install-assets')
+  .description('Refresh the agent skills and guides in your vault without touching config (safe to re-run, unlike "setup")')
+  .option('--dry-run', 'Report what would change without writing anything')
+  .action((options: { dryRun?: boolean }) => {
+    const report = installAssets({ dryRun: options.dryRun });
+    process.stdout.write(JSON.stringify(report, null, 2) + '\n');
   });
 
 

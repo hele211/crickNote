@@ -108,6 +108,31 @@ describe('compile_reading_note', () => {
     expect(result.instruction).toContain('vault_write_body');
   });
 
+  it('points the drafting instruction at the shared layout and the checker, without losing its original wording', async () => {
+    fs.writeFileSync(
+      path.join(vaultPath, 'Reading', 'attachments', 'smith-2026-il42', 'notes.md'),
+      'short notes'
+    );
+    fs.writeFileSync(
+      path.join(vaultPath, 'Reading', 'Papers', 'smith-2026-il42.md'),
+      '---\ntitle: IL-42\nsources:\n  - type: notes\n    path: notes.md\n---\n\n## Claims\n'
+    );
+
+    const result = JSON.parse(await tool.execute({ path: 'Reading/Papers/smith-2026-il42.md' }));
+
+    // Original contract (other tests and the skill depend on these phrases).
+    expect(result.instruction).toContain('Draft the CREATE sections');
+    expect(result.instruction).toContain('vault_write_body');
+    expect(result.instruction).toContain('Do NOT mark status: complete');
+    // Layout v2 digest and pointers.
+    expect(result.instruction).toContain('reading-note-layout.md');
+    expect(result.instruction).toContain('readable-output.md');
+    expect(result.instruction).toContain('lint_reading_note');
+    expect(result.instruction).toMatch(/TL;DR/);
+    expect(result.instruction).toMatch(/Figure Map.*after.*Evidence/s);
+    expect(result.instruction).toMatch(/Source:/);
+  });
+
   it('validates page range arguments', async () => {
     const result = JSON.parse(await tool.execute({
       path: 'Reading/Papers/smith-2026-il42.md',

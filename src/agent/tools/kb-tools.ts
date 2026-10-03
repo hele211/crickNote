@@ -171,7 +171,15 @@ export function createKbTools(
             page_end: pageEnd,
             max_tokens: maxTokens,
           },
-          instruction: `Draft the CREATE sections (Claims, Reasoning, Evidence, Assumptions, Takeaways, Extensions) and Figure Map based on the source content above. Then call vault_write_body with only the completed note body. Do NOT mark status: complete - the user will do that after reviewing.`,
+          instruction: [
+            'Draft the CREATE sections (Claims, Reasoning, Evidence, Assumptions, Takeaways, Extensions) and Figure Map based on the source content above.',
+            'Follow skills/_shared/reading-note-layout.md and skills/_shared/readable-output.md (installed under .claude/skills/_shared/ or .agents/skills/_shared/).',
+            'In short: open with a "> [!abstract] TL;DR" callout (Did, Found, Trust, Why it matters here, Source: <primary attachment filename>); write Claims as "- **C1** [measured|inferred|proposed] text (locator)";',
+            'order the sections Claims, Reasoning, Evidence, Figure Map (after Evidence; split long maps under ### Main figures / ### Supplementary, never truncate), Assumptions, Takeaways, Extensions;',
+            'keep every qualifier; use at most two Mermaid flowcharts (flowchart TB).',
+            'Then call vault_write_body with only the completed note body, run lint_reading_note on the note, make at most one corrective write for warn findings, and report what remains.',
+            'Do NOT mark status: complete - the user will do that after reviewing.',
+          ].join(' '),
         });
       },
     },

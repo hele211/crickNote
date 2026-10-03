@@ -28,4 +28,14 @@ Projects `Projects/P###-<slug>/`, experiments `<PREFIX>###`, series `<PREFIX>S##
 protocols `PR###`, reading `Reading/Papers|Threads/`, knowledge
 `Knowledge/Concepts|Entities|Methods/`, diary `Memory/Daily/<date>.md`.
 
+## Writing into the vault
+
+Humans review notes in Obsidian; agents read them later. Follow
+`.agents/skills/_shared/readable-output.md` (answer first, short sentences, keep
+qualifiers, text-native visuals only). Reading notes use the layout in
+`.agents/skills/_shared/reading-note-layout.md`; after writing one run
+`cricknote tool lint_reading_note '{"path":"Reading/Papers/<slug>.md"}'`, fix `warn`
+findings in at most one corrective write, and report what remains. Lint reading
+notes only.
+
 Skills live in `.agents/skills/cricknote-*`.

@@ -41,6 +41,19 @@ Projects are `P001`, `P002`… Each project reserves a 2–3 letter prefix; its
 experiments use that prefix (`IL001`), its series append S (`ILS001`). Protocols
 are `PR001`. Never invent or hand-edit a serial — the tools allocate them.
 
+## Writing into the vault
+
+A human reviews these notes in Obsidian and agents read them later. When you write
+prose into the vault, follow `.claude/skills/_shared/readable-output.md`: answer
+first, one idea per sentence, keep every qualifier, number what others will cite,
+and use text-native visuals only (tables, callouts, Mermaid flowcharts).
+
+Reading notes have a fixed layout, described in
+`.claude/skills/_shared/reading-note-layout.md`. After writing one, run
+`cricknote tool lint_reading_note '{"path":"Reading/Papers/<slug>.md"}'`, fix the
+`warn` findings in at most one corrective write, and report what remains. Only
+reading notes are linted.
+
 ## Common workflows
 
 See the skills in `.claude/skills/cricknote-*`. Summary:
