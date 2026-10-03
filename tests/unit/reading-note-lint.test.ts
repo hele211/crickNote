@@ -78,6 +78,39 @@ describe('lintReadingNote — robustness', () => {
     expect(performance.now() - started).toBeLessThan(500);
   });
 
+  it('never throws and always returns well-formed findings on random Markdown-like input (seeded fuzz)', () => {
+    const pool = [
+      '', '', '## Claims', '## Reasoning', '## Evidence', '## Figure Map', '## Takeaways', '### Sub', '# Title',
+      '> [!abstract] TL;DR', '> **Did:** x', '> **Source:** paper.md', '>', '```mermaid', '```', '~~~', '````',
+      'flowchart TB', '  A["a"] -->|"b (C1)"| B["c"]', '  A[[x]] --> B', '<!--', '-->', '<!-- one line -->',
+      '- **C1** [measured] Text. (Fig 1A)', '- **C2** [guess] Text.', '1. numbered', '  - nested **E1**', '+ plus',
+      '| a | b |', '|---|---|', '| 1 | ' + 'w '.repeat(35) + '|', 'It shows a thing. This pathway matters.',
+      'Result (C1, C9, X). See (E1; Fig 2). <br> and x<y and z>w and `<sub>`.', 'p. 7 and PDF p. 7', 'α-syntrophin et al. 2018, Fig. 2A vs. 3',
+      '\t- tab indented', 'ünïcödé 日本語 text. Another sentence here.', 'x'.repeat(2000), '(((((', ')))))', '[[wiki]]', '[x](y)',
+    ];
+    let seed = 12345;
+    const rand = (n: number): number => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed % n;
+    };
+    for (let doc = 0; doc < 400; doc++) {
+      const lines = Array.from({ length: 1 + rand(60) }, () => pool[rand(pool.length)]);
+      const text = lines.join(rand(4) === 0 ? '\r\n' : '\n');
+      const result = lintReadingNote(text, rand(2) === 0 ? { sources: ['paper.md'] } : {});
+      expect(typeof result.ok).toBe('boolean');
+      expect(result.ok).toBe(!result.findings.some((f) => f.severity === 'warn'));
+      for (const f of result.findings) {
+        expect(Number.isInteger(f.line) && f.line >= 1, `line ${f.line} in ${f.code}`).toBe(true);
+        expect(['warn', 'info']).toContain(f.severity);
+        expect(f.code.length).toBeGreaterThan(0);
+        expect(f.message.length).toBeGreaterThan(0);
+      }
+      expect(Number.isFinite(result.stats.meanWords)).toBe(true);
+      expect(result.stats.pctOver25).toBeGreaterThanOrEqual(0);
+      expect(result.stats.pctOver25).toBeLessThanOrEqual(100);
+    }
+  });
+
   it('lints a note with thousands of lines in well under a few seconds', () => {
     const filler = Array.from({ length: 4000 }, (_, i) => `Line ${i} states one plain fact about the sample. (Fig ${i % 9 + 1}A)`).join('\n');
     const body = mutate(golden.body, '## Extensions', `${filler}\n\n## Extensions`);
