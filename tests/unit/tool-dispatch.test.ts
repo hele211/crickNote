@@ -57,6 +57,7 @@ describe('runTool', () => {
     const out = await runTool('vault_read', JSON.stringify({ path: rel }), { vaultPath: vault, sessionId: 's', apply: true, db });
     expect(out.ok).toBe(true);
     expect(JSON.stringify(out.result)).toContain('hello');
+    expect((out.result as Record<string, unknown>).content_sha256).toMatch(/^[a-f0-9]{64}$/);
   });
 
   // Vault-boundary preflight coverage note:

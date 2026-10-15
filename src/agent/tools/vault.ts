@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import matter from 'gray-matter';
 import type { ToolHandler } from './registry.js';
 import { getDatabase } from '../../storage/database.js';
@@ -43,6 +44,7 @@ export function createVaultTools(
           path: args.path,
           frontmatter: parsed.data,
           content: parsed.content,
+          content_sha256: crypto.createHash('sha256').update(content, 'utf8').digest('hex'),
         });
       },
     },
