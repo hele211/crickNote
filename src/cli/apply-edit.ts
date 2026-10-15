@@ -1,4 +1,6 @@
 import path from 'node:path';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
 import type Database from 'better-sqlite3';
 import { SafeWriter } from '../editing/safe-writer.js';
 import { appendFolderChangelog } from '../editing/changelog.js';
@@ -16,6 +18,8 @@ export interface PendingEditPayload {
   reservation?: { project_id: string; prefix?: string };
   meta?: Record<string, unknown>;
   warnings?: string[];
+  /** Optional SHA-256 of the file content the tool read before proposing. */
+  expectedBeforeHash?: string;
 }
 
 export interface AppliedEdit {
@@ -60,7 +64,26 @@ export function applyPendingEdit(edit: PendingEditPayload, ctx: ApplyContext): A
   if (edit.reservation) Object.assign(meta, edit.reservation);
   if (edit.meta) Object.assign(meta, edit.meta);
 
-  const proposal = safeWriter.proposeEdit(absPath, edit.newContent, triggerQuery, sessionId, meta);
+  // A route (or future optimistic edit) may require that the file still be
+  // byte-for-byte what the tool reviewed. Check before creating a proposal so
+  // a stale preview cannot enter the SafeWriter/audit pipeline at all.
+  if (edit.expectedBeforeHash !== undefined) {
+    if (!/^[a-f0-9]{64}$/.test(edit.expectedBeforeHash)) {
+      return { path: edit.path, operation, applied: false, error: 'expectedBeforeHash must be a SHA-256 hex digest', warnings: edit.warnings };
+    }
+    let currentContent: string;
+    try {
+      currentContent = fs.readFileSync(absPath, 'utf8');
+    } catch {
+      return { path: edit.path, operation, applied: false, error: 'File no longer exists for expectedBeforeHash check', warnings: edit.warnings };
+    }
+    const currentHash = crypto.createHash('sha256').update(currentContent, 'utf8').digest('hex');
+    if (currentHash !== edit.expectedBeforeHash) {
+      return { path: edit.path, operation, applied: false, error: 'File was modified after the tool read it (expectedBeforeHash mismatch); re-read and re-propose.', warnings: edit.warnings };
+    }
+  }
+
+  const proposal = safeWriter.proposeEdit(absPath, edit.newContent, triggerQuery, sessionId, meta, edit.expectedBeforeHash);
   const result = safeWriter.confirmEdit(proposal.editId, 'apply');
 
   if (!result.success) {

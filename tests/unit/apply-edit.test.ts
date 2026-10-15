@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -46,6 +47,24 @@ describe('applyPendingEdit', () => {
     expect(res.applied).toBe(false);
     expect(res.error).toMatch(/escapes vault/i);
     expect(fs.existsSync('/etc/evil.md')).toBe(false);
+  });
+
+  it('rejects a stale expectedBeforeHash before proposing, writing, or auditing', () => {
+    const abs = path.join(vault, 'Projects/P001-il42/IL003-x.md');
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, 'current content\n');
+    const expectedBeforeHash = crypto.createHash('sha256').update('reviewed content\n', 'utf8').digest('hex');
+
+    const res = applyPendingEdit(
+      { path: abs, newContent: 'proposed content\n', operation: 'route_diary_excerpt', expectedBeforeHash },
+      ctx(),
+    );
+
+    expect(res.applied).toBe(false);
+    expect(res.error).toMatch(/expectedBeforeHash mismatch/i);
+    expect(fs.readFileSync(abs, 'utf8')).toBe('current content\n');
+    const audit = db.prepare('SELECT COUNT(*) AS n FROM edit_audit_log WHERE file_path = ?').get(abs) as { n: number };
+    expect(audit.n).toBe(0);
   });
 
   it('deletes the reservation when the write fails', () => {

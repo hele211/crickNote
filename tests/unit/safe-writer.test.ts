@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SafeWriter } from '../../src/editing/safe-writer.js';
 import { ConflictDetector } from '../../src/editing/conflict-detector.js';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -83,6 +84,19 @@ describe('SafeWriter', () => {
 
     // File should not exist
     expect(fs.existsSync(filePath)).toBe(false);
+  });
+
+  it('rejects a delayed apply or force when expectedBeforeHash no longer matches', () => {
+    const filePath = path.join(tmpDir, 'expected-before.md');
+    const original = '# Reviewed\n';
+    fs.writeFileSync(filePath, original, 'utf-8');
+    const expectedBeforeHash = crypto.createHash('sha256').update(original, 'utf8').digest('hex');
+    const proposal = writer.proposeEdit(filePath, '# Proposed\n', 'q', 'sess', {}, expectedBeforeHash);
+
+    fs.writeFileSync(filePath, '# Human changed\n', 'utf-8');
+    expect(writer.preflightEdit(proposal.editId, 'apply')).toMatchObject({ ok: false, error: expect.stringMatching(/expectedBeforeHash/i) });
+    expect(writer.confirmEdit(proposal.editId, 'force')).toMatchObject({ success: false, error: expect.stringMatching(/expectedBeforeHash/i) });
+    expect(fs.readFileSync(filePath, 'utf8')).toBe('# Human changed\n');
   });
 
   it('confirmEdit with unknown editId returns failure', () => {

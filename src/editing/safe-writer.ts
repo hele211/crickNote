@@ -47,7 +47,7 @@ export interface ConfirmResult {
  */
 export class SafeWriter {
   private conflictDetector: ConflictDetector;
-  private pendingEdits: Map<string, EditProposal & { triggerQuery: string; sessionId: string; createdAt: number; meta: Record<string, unknown> }> = new Map();
+  private pendingEdits: Map<string, EditProposal & { triggerQuery: string; sessionId: string; createdAt: number; meta: Record<string, unknown>; expectedBeforeHash?: string }> = new Map();
 
   constructor(conflictDetector?: ConflictDetector) {
     this.conflictDetector = conflictDetector ?? new ConflictDetector();
@@ -76,6 +76,7 @@ export class SafeWriter {
     triggerQuery: string,
     sessionId: string,
     meta: Record<string, unknown> = {},
+    expectedBeforeHash?: string,
   ): EditProposal {
     const editId = crypto.randomUUID();
 
@@ -115,7 +116,7 @@ export class SafeWriter {
     };
 
     // Store internally so confirmEdit can retrieve it.
-    this.pendingEdits.set(editId, { ...proposal, triggerQuery, sessionId, createdAt: Date.now(), meta });
+    this.pendingEdits.set(editId, { ...proposal, triggerQuery, sessionId, createdAt: Date.now(), meta, expectedBeforeHash });
 
     log.info('Edit proposed', { editId, filePath, hasConflict: conflictResult.hasConflict });
     return proposal;
@@ -147,6 +148,21 @@ export class SafeWriter {
     if (action === 'cancel') {
       this.pendingEdits.delete(editId);
       return { success: true, editId, action };
+    }
+
+    // Optimistic concurrency is stricter than a normal conflict snapshot: a
+    // caller supplied an exact reviewed hash, so neither apply nor force may
+    // write if the target has changed since that review.
+    if (pending.expectedBeforeHash !== undefined) {
+      const currentHash = this.computeHash(this.readFileOrEmpty(pending.filePath));
+      if (currentHash !== pending.expectedBeforeHash) {
+        return {
+          success: false,
+          editId,
+          action,
+          error: 'File was modified after the tool read it (expectedBeforeHash mismatch); re-read and re-propose.',
+        };
+      }
     }
 
     // --- Final hash check right before writing (race-condition guard) ------
@@ -224,6 +240,12 @@ export class SafeWriter {
     if (!pending) return { ok: false, error: 'Edit proposal not found or already resolved.' };
     if (Date.now() - pending.createdAt > EDIT_TTL_MS) return { ok: false, error: 'Edit expired.' };
     if (action === 'cancel') return { ok: true };
+    if (pending.expectedBeforeHash !== undefined) {
+      const currentHash = this.computeHash(this.readFileOrEmpty(pending.filePath));
+      if (currentHash !== pending.expectedBeforeHash) {
+        return { ok: false, error: 'File was modified after the tool read it (expectedBeforeHash mismatch); re-read and re-propose.' };
+      }
+    }
     const finalConflict = this.conflictDetector.checkConflict(pending.filePath, pending.newContent);
     if (finalConflict.hasConflict && action !== 'force') {
       return { ok: false, error: 'File was modified after the proposal was created — use force or re-propose.' };

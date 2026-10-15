@@ -45,6 +45,46 @@ npm test         # run the test suite
 npm run build    # compile TypeScript
 ```
 
+## Voice2note diary-first review (optional)
+
+Use diary-first capture to keep dictated material in the full daily diary
+before deciding whether an excerpt belongs in an experiment, project, or other
+existing note. **Verify the real vault has the desired daily folder first**;
+then configure the existing voice2note importer (not CrickNote) with:
+
+```bash
+VOICE2NOTE_CAPTURE_MODE=diary-first
+VOICE2NOTE_DAILY_DIR=<vault>/Memory/Daily
+```
+
+Do **not** migrate or reset the importer's processed-history state. The daily
+path may differ in an existing vault; this configuration does not change a
+global CrickNote default or create folders.
+
+At end of day, invoke review manually—there is no scheduler or automatic
+sorting. First request `diary_review_context`; it returns the full diary,
+voice2note blocks, source SHA-256, and indexed candidate paths/IDs. Use
+`vault_search`/`vault_read` to inspect a destination; `vault_read` returns its
+current `content_sha256` for `target_hash`. Before any write, preview the exact
+mapping and quote with `--no-apply`, show it to the user, and get approval:
+
+```bash
+cricknote tool route_diary_excerpt '{"date":"2026-10-15","source_block_id":"voice2note-0123456789abcdef","source_quote":"exact dictated text","target_path":"Projects/P001-example/EX001.md","source_hash":"<context SHA-256>","target_hash":"<vault_read SHA-256>"}' --no-apply
+```
+
+Only after approval, repeat the same command without `--no-apply`. The CLI
+otherwise applies pending edits immediately. Routing appends an exact quoted
+excerpt and backlink to an **existing non-diary** target via the standard
+SafeWriter/audit pipeline; it never edits/moves the diary or creates a target.
+An idempotency marker in the target is the filing audit record, so a retry does
+not need a premature diary marker.
+
+`setup` copies all bundled skills and agent guides and can overwrite customized
+vault copies. Existing users should back up any customization and refresh only
+`cricknote-daily-review/SKILL.md` in both
+`.claude/skills/` and `.agents/skills/`; run setup/install assets only when an
+intentional full overwrite is wanted.
+
 ## Project Map
 
 - `src/cli.ts`, `src/cli/`: the CLI — `tool`/`tools` dispatcher, `reindex`, `setup`, and the shared apply path
