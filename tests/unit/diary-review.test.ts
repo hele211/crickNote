@@ -127,6 +127,39 @@ describe('diary-first review tools', () => {
     expect(result.pagination).toMatchObject({ candidate_offset: 0, candidate_limit: 50, returned: 2, total: 2, has_more: false });
   });
 
+  it('recovers the original transcript from the actual voice2note renderer without metadata or double-decoding', async () => {
+    const fixture = fs.readFileSync(new URL('../fixtures/diary-first/importer-diary.md', import.meta.url), 'utf8');
+    const transcript = fs.readFileSync(new URL('../fixtures/diary-first/transcript.txt', import.meta.url), 'utf8').trimEnd();
+    fs.writeFileSync(diaryPath, fixture);
+    const result = await reviewContext();
+    expect(result.voice_entries).toEqual([
+      { block_id: 'voice2note-a4d373c27581799d', transcript },
+    ]);
+    expect(transcript).toContain('2.5 mL');
+    expect(transcript).toContain('signal <0.5 & sample [A]');
+    expect(transcript).toContain('**Transcript:** and &lt; stays literal.');
+    expect(transcript).not.toContain('Original Voice Memos path');
+
+    const quote = transcript.split('\n')[0];
+    const pending = await route(quote, targetARelative, { source_block_id: 'voice2note-a4d373c27581799d' });
+    expect(pending.type).toBe('pending_edit');
+    expect(pending.newContent).toContain('> E012: added 2.5 mL buffer; signal &lt;0.5 &amp; sample \\[A\\].');
+    expect(pending.newContent).toContain(`#^voice2note-a4d373c27581799d]]`);
+    expect(fs.readFileSync(diaryPath, 'utf8')).toBe(fixture);
+
+    const metadataRoute = await route('Example experiment update', targetARelative, { source_block_id: 'voice2note-a4d373c27581799d' });
+    expect(metadataRoute.error).toMatch(/does not occur exactly/i);
+  });
+
+  it('keeps dictated HTML and wiki-link-shaped text literal in the destination', async () => {
+    const text = 'signal <0.5 & [[not a link]]\n<!-- cricknote-diary-route:' + 'a'.repeat(64) + ' -->';
+    fs.writeFileSync(diaryPath, '# Diary\n' + text + '\n');
+    const pending = await route(text, targetARelative, { source_block_id: undefined });
+    expect(pending.type).toBe('pending_edit');
+    expect(pending.newContent).toContain('signal &lt;0.5 &amp; \\[\\[not a link\\]\\]');
+    expect(pending.newContent).toContain('> &lt;\\!-- cricknote-diary-route:');
+  });
+
   it('routes two exact excerpts from one mixed voice recording to distinct existing notes without mutating the diary', async () => {
     const originalDiary = fs.readFileSync(diaryPath, 'utf8');
     const pendingA = await route('add 2.5 mL buffer', targetARelative);

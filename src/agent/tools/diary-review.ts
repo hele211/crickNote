@@ -94,6 +94,13 @@ function resolveDate(value: unknown): string | undefined {
   return validDate(value) ? value : undefined;
 }
 
+/** Undo only the literal escaping used by voice2note, exactly once. */
+function decodeVoiceLiteral(value: string): string {
+  return value
+    .replace(/\\([\\`*_{}\[\]()#+\-.!|~])/g, '$1')
+    .replace(/&(amp|lt|gt);/g, entity => ({ '&amp;': '&', '&lt;': '<', '&gt;': '>' })[entity]!);
+}
+
 /**
  * Parse only complete importer blocks. Exclude malformed importer ranges from
  * manual routing so a damaged voice marker cannot be used to file fabricated
@@ -150,9 +157,16 @@ function parseDiary(content: string): DiaryParts {
 
     if (valid) {
       flushManual();
+      // Real importer entries have quoted metadata followed by this unescaped
+      // label. Dictated label-shaped text is escaped and cannot match it.
+      // Legacy minimal blocks lack the label and remain verbatim-compatible.
+      const transcriptStart = transcriptLines.indexOf('**Transcript:**');
+      const sourceLines = transcriptStart >= 0
+        ? transcriptLines.slice(transcriptStart + 1).map(decodeVoiceLiteral)
+        : transcriptLines;
       voiceEntries.push({
         block_id: `voice2note-${begin[1]}`,
-        transcript: transcriptLines.join('\n'),
+        transcript: sourceLines.join('\n'),
       });
       index = endIndex + 1;
       continue;
@@ -200,7 +214,14 @@ function toVaultRelative(vaultPath: string, absolutePath: string): string {
 }
 
 function blockquote(text: string): string {
-  return text.split(/\r?\n/).map(line => line ? `> ${line}` : '>').join('\n');
+  // Keep source text literal in the target, without interpreting dictated HTML,
+  // links or Markdown commands. Decimal points and hyphens remain readable.
+  return text.split(/\r?\n/).map(line => {
+    const literal = line
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/[\\`*_{}\[\]()#+!|~]/g, character => `\\${character}`);
+    return line ? `> ${literal}` : '>';
+  }).join('\n');
 }
 
 function isDiaryTarget(
